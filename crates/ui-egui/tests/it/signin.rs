@@ -176,3 +176,18 @@ fn native_menu_commands_wait_for_sign_in() {
     cadcraft_ui_egui::menus::activate_native(h.state_mut(), &ctx, "line");
     assert!(h.state().session.running.is_none(), "LINE started behind the card");
 }
+
+/// Keys typed while no field on the card has focus never reach the command line behind it.
+#[test]
+fn keys_on_the_card_stay_out_of_the_command_line() {
+    let mut h = harness(Some(Fake::default()));
+    settle(&mut h, form_shown);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    h.event(egui::Event::Text("line".into()));
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let app = h.state();
+    assert!(app.session.running.is_none(), "LINE started behind the card");
+    assert!(app.cmd.history.is_empty(), "command line ran {:?}", app.cmd.history);
+}
