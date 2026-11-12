@@ -17,6 +17,10 @@ impl Session {
     /// Append a loaded drawing, fit the view to its model extents (aspect-corrected, minimum height 1e-6) when non-empty, end a running command, make it active, bump the epoch and return its index.
     pub fn open_drawing(&mut self, d: Drawing, title: &str, path: Option<String>) -> usize {
         let mut st = DocState::new(d, title, path);
+        // Part of the file as opened, so neither dirty nor an undo step.
+        if cmd::csd::refresh_blocks(&mut st.doc, &self.csd_library) {
+            st.saved = st.doc.clone();
+        }
         // The view the file was saved at is the one every other reader opens on. Fitting the
         // extents instead showed a drawing whose extents are dominated by far-off geometry at a
         // view hundreds of times its content, with the drawing sub-pixel and no way to zoom in

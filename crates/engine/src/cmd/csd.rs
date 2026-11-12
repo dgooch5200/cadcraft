@@ -268,6 +268,84 @@ fn refresh(doc: &mut Arc<Drawing>) {
     }
 }
 
+/// The most `CSD_` blocks and attribute definitions [`refresh_blocks`] looks at, so a hostile drawing can't stall it.
+const MAX_REFRESH: usize = 10_000;
+
+/// Replaces the drawing's generated card and decoration blocks with the current design, so drawings
+/// saved earlier and library edits show. A device block whose product is not in `library` is left
+/// alone. Entity handles are ignored when comparing, so an up-to-date drawing is not touched.
+/// Returns whether the drawing changed.
+pub(crate) fn refresh_blocks(doc: &mut Arc<Drawing>, library: &[Product]) -> bool {
+    let product_of = |b: &cadcraft_doc::Block| {
+        b.entities.iter().take(MAX_REFRESH).find_map(|e| match &e.kind {
+            EntityKind::AttDef(a) if a.tag == "PRODUCT" => library.iter().find(|p| p.id == a.text.value),
+            _ => None,
+        })
+    };
+    let devices: Vec<&Product> =
+        doc.blocks.iter().filter(|(n, _)| n.starts_with("CSD_")).take(MAX_REFRESH).filter_map(|(_, b)| product_of(b)).collect();
+    let decos: Vec<(Protocol, Deco)> = Protocol::ALL
+        .iter()
+        .flat_map(|&p| [Deco::Start, Deco::Pill].map(|d| (p, d)))
+        .filter(|&(p, d)| doc.block(&deco_block_name(p, d)).is_some())
+        .collect();
+    if devices.is_empty() && decos.is_empty() {
+        return false;
+    }
+    let mut d = (**doc).clone();
+    let mut changed = false;
+    let mut put = |d: &mut Drawing, block: cadcraft_doc::Block| {
+        let same = d.block(&block.name).is_some_and(|o| {
+            o.base == block.base
+                && o.entities.len() == block.entities.len()
+                && o.entities.iter().zip(block.entities.iter()).all(|(a, b)| a.common == b.common && same_kind(&a.kind, &b.kind))
+        });
+        if !same {
+            d.blocks.insert(block.name.clone(), Arc::new(block));
+            changed = true;
+        }
+    };
+    for product in devices {
+        ensure_bold(&mut d);
+        let dash = if product.missing { dashed_scale(&mut d, BORDER_DASH) } else { 1.0 };
+        let block = device_block(product, || d.new_handle(), dash);
+        put(&mut d, block);
+    }
+    for (p, k) in decos {
+        let block = deco_block(p, k, || d.new_handle());
+        put(&mut d, block);
+    }
+    if changed {
+        *doc = Arc::new(d);
+    }
+    changed
+}
+
+/// Kinds equal as a saved drawing reads them back: a wipeout's boundary gains its closing point.
+fn same_kind(a: &EntityKind, b: &EntityKind) -> bool {
+    match (a, b) {
+        (EntityKind::Wipeout(a), EntityKind::Wipeout(b)) => {
+            let (a, b) = (a.closed_boundary(), b.closed_boundary());
+            a.len() == b.len() && a.iter().zip(b.iter()).all(|(p, q)| p.near(*q, 1e-9))
+        }
+        // An aligned text's insertion point is derived from its font on reading.
+        (EntityKind::Text(a), EntityKind::Text(b)) if a.align_pt.is_some() => cadcraft_doc::Text { insert: b.insert, ..a.clone() } == *b,
+        (EntityKind::AttDef(a), EntityKind::AttDef(b)) if a.text.align_pt.is_some() => {
+            let text = cadcraft_doc::Text { insert: b.text.insert, ..a.text.clone() };
+            cadcraft_doc::Attrib { text, ..a.clone() } == *b
+        }
+        _ => a == b,
+    }
+}
+
+/// Refreshes every open drawing after the library changed.
+fn refresh_open_drawings(s: &mut Session) {
+    let library = s.csd_library.clone();
+    for st in &mut s.docs {
+        refresh_blocks(&mut st.doc, &library);
+    }
+}
+
 fn run_place(s: &mut Session, p: &Value) -> Result<Value> {
     let id = str_param(p, "product").ok_or_else(|| bad("csd.place", "`product` is required"))?;
     let at = point_req("csd.place", p, "at")?;
@@ -394,6 +472,7 @@ fn run_library_load(s: &mut Session, p: &Value) -> Result<Value> {
     let text = String::from_utf8(bytes).map_err(|_| bad("csd.library.load", format!("{path}: not UTF-8 text")))?;
     let products = parse_library(&text).map_err(|e| bad("csd.library.load", format!("{path}: {e}")))?;
     s.csd_library = Arc::new(products);
+    refresh_open_drawings(s);
     Ok(json!({ "count": s.csd_library.len() }))
 }
 
@@ -430,6 +509,7 @@ fn run_library_set(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     s.csd_library = Arc::new(products);
+    refresh_open_drawings(s);
     Ok(json!({ "count": s.csd_library.len() }))
 }
 

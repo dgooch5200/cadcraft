@@ -457,3 +457,52 @@ fn clicking_empty_space_adds_nothing() {
     assert!(s.running.is_some());
     assert!(wire_links(&mut s).is_empty());
 }
+
+/// A drawing whose console card has a stale extra entity, round-tripped through DXF.
+fn stale_copy() -> (Drawing, String) {
+    let (s, ..) = setup();
+    let mut d = s.doc().unwrap().clone();
+    let name = cadcraft_csd::block_name(CONSOLE);
+    let mut block = (**d.blocks.get(&name).unwrap()).clone();
+    let h = d.new_handle();
+    block.entities.push(cadcraft_doc::Entity::new(h, EntityKind::Point(cadcraft_doc::Point { p: Default::default(), angle: 0.0 })));
+    d.blocks.insert(name.clone(), std::sync::Arc::new(block));
+    let text = cadcraft_io::write_dxf(&d);
+    (cadcraft_io::read_dxf(text.as_bytes()).unwrap(), name)
+}
+
+#[test]
+fn opening_a_drawing_brings_its_cards_up_to_date() {
+    let (d, name) = stale_copy();
+    let stale = d.block(&name).unwrap().entities.len();
+    let mut s = Session::new();
+    s.open_drawing(d, "Old", None);
+    assert_eq!(s.doc().unwrap().block(&name).unwrap().entities.len() + 1, stale);
+    assert!(!s.state().unwrap().is_dirty());
+    assert!(s.state().unwrap().undo.is_empty());
+}
+
+#[test]
+fn opening_an_up_to_date_drawing_changes_nothing() {
+    let (s, ..) = setup();
+    let imported = cadcraft_io::read_dxf(cadcraft_io::write_dxf(s.doc().unwrap()).as_bytes()).unwrap();
+    let before = imported.blocks.clone();
+    let mut t = Session::new();
+    t.open_drawing(imported, "Same", None);
+    assert!(t.doc().unwrap().blocks.iter().all(|(n, b)| std::sync::Arc::ptr_eq(b, &before[n])));
+}
+
+#[test]
+fn a_library_colour_change_recolours_the_placed_cards() {
+    let (mut s, ..) = setup();
+    let border = |s: &Session| {
+        let b = s.doc().unwrap().block(&cadcraft_csd::block_name(CONSOLE)).unwrap().clone();
+        b.entities.iter().find(|e| matches!(e.kind, EntityKind::LwPolyline(_))).unwrap().common.color
+    };
+    let old = border(&s);
+    let mut rec = cadcraft_csd::product_record(s.csd_library.iter().find(|p| p.id == CONSOLE).unwrap());
+    rec.insert("color".into(), json!("#123456"));
+    s.execute("csd.library.set", &json!({ "products": [rec] })).unwrap();
+    assert_ne!(border(&s), old);
+    assert_eq!(border(&s), Color::True(Rgb::from_u32(0x123456)));
+}
