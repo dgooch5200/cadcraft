@@ -57,8 +57,15 @@ impl ServerAccount {
 
     fn new(base: String, store: Box<dyn SessionStore>) -> Self {
         // 3xx and 4xx come back as responses: nginx answers a dead session with a redirect.
-        let agent: Agent =
-            Agent::config_builder().timeout_global(Some(Duration::from_secs(15))).max_redirects(0).http_status_as_error(false).build().into();
+        // Without root certificates ureq panics on the first https request.
+        let tls = ureq::tls::TlsConfig::builder().root_certs(ureq::tls::RootCerts::PlatformVerifier).build();
+        let agent: Agent = Agent::config_builder()
+            .tls_config(tls)
+            .timeout_global(Some(Duration::from_secs(15)))
+            .max_redirects(0)
+            .http_status_as_error(false)
+            .build()
+            .into();
         Self { base, agent, store }
     }
 
@@ -283,6 +290,15 @@ mod tests {
         assert!(matches!(account(&base, &store).sign_in("a@b.co", "pw"), Err(AccountError::Server(_))));
         h.join().unwrap();
         assert!(store.load().is_none());
+    }
+
+    #[test]
+    fn https_failure_is_an_error_not_a_panic() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("https://{}", listener.local_addr().unwrap());
+        let h = std::thread::spawn(move || drop(listener.accept()));
+        assert!(matches!(account(&base, &Memory::default()).sign_in("a@b.co", "pw"), Err(AccountError::Server(_))));
+        h.join().unwrap();
     }
 
     #[test]
