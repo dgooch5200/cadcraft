@@ -153,7 +153,20 @@ pub fn route(from: Vec2, from_side: Side, from_slot: Slot, to: Vec2, to_side: Si
     let corner = if d1.x == 0.0 { Vec2 { x: b.x, y: a.y } } else { Vec2 { x: a.x, y: b.y } };
     let mut pts = vec![from, a, corner, b, to];
     pts.dedup_by(|p, q| p.near(*q, 1e-9));
-    pts
+    // Facing stubs that overlap would run past a turn and double back; cut that spur.
+    let mut out: Vec<Vec2> = Vec::with_capacity(pts.len());
+    for p in pts {
+        while let [.., x, y] = out[..] {
+            let (u, v) = (y - x, p - y);
+            if (u.x * v.y - u.y * v.x).abs() < 1e-9 && u.dot(v) < 0.0 {
+                out.pop();
+            } else {
+                break;
+            }
+        }
+        out.push(p);
+    }
+    out
 }
 
 /// Block name for a product: `CSD_<id>` with anything unsafe in a block name replaced by `_`.

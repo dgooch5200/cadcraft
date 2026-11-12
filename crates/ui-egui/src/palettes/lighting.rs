@@ -8,8 +8,8 @@ use serde_json::json;
 use crate::CadApp;
 use crate::theme::Tokens;
 
-const ROW_H: f32 = 36.0;
-const LIST_H: f32 = 252.0;
+const ROW_H: f32 = 46.0;
+const LIST_H: f32 = 322.0;
 
 #[derive(Clone, Default)]
 struct Filter {
@@ -96,14 +96,14 @@ pub(super) fn body(app: &mut CadApp, ui: &mut egui::Ui) {
                 } else if resp.hovered() {
                     pt.rect_filled(r, 0.0, t.hover);
                 }
-                let sw = Rect::from_min_size(pos2(r.left() + 10.0, r.center().y - 9.0), vec2(26.0, 18.0));
+                let sw = Rect::from_min_size(pos2(r.left() + 10.0, r.center().y - 11.0), vec2(30.0, 22.0));
                 pt.rect_filled(sw, 2.0, rgb(p.color));
                 pt.rect_stroke(sw, 2.0, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
                 let x = sw.right() + 8.0;
-                pt.text(pos2(x, r.center().y - 7.0), egui::Align2::LEFT_CENTER, &p.code, egui::FontId::proportional(12.5), t.text);
-                let name = pt.layout_no_wrap(p.name.clone(), egui::FontId::proportional(11.0), t.text_dim);
+                pt.text(pos2(x, r.center().y - 8.0), egui::Align2::LEFT_CENTER, &p.code, egui::FontId::proportional(14.0), t.text);
+                let name = pt.layout_no_wrap(p.name.clone(), egui::FontId::proportional(12.5), t.text_dim);
                 let clip = Rect::from_min_max(pos2(x, r.top()), pos2(r.right() - 8.0, r.bottom()));
-                pt.with_clip_rect(clip).galley(pos2(x, r.center().y + 1.0), name, t.text_dim);
+                pt.with_clip_rect(clip).galley(pos2(x, r.center().y + 2.0), name, t.text_dim);
                 if resp.clicked() {
                     picked = Some(p.id.clone());
                 }

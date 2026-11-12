@@ -109,6 +109,21 @@ fn route_is_orthogonal_and_anchored() {
 }
 
 #[test]
+fn facing_stubs_never_double_back() {
+    // Bottom of one card to the top of one below and to the left, outer lane: the source stub
+    // reaches past the target's stub end.
+    let (a, b) = (Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: -150.0, y: -40.0 });
+    for (dx, lane) in [(-150.0, 2), (0.0, 0)] {
+        let r = route(a, Side::Bottom, Slot { index: 0, total: 3, lane }, Vec2 { x: dx, ..b }, Side::Top, Slot::SOLO);
+        for w in r.windows(3) {
+            let (u, v) = (w[1] - w[0], w[2] - w[1]);
+            assert!(u.dot(v) >= 0.0, "doubles back: {r:?}");
+        }
+        assert_eq!((r.first(), r.last()), (Some(&a), Some(&Vec2 { x: dx, ..b })));
+    }
+}
+
+#[test]
 fn device_block_has_both_attribute_definitions() {
     let mut n = 0;
     let b = device_block(
