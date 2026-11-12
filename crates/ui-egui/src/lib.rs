@@ -251,6 +251,41 @@ pub struct Services {
     pub no_file_system: bool,
     /// Pick a `.pgp` alias file, starting in the folder given (the last import's).
     pub pick_pgp: Option<Box<dyn Fn(Option<&str>) -> Option<String>>>,
+    /// The ChamSys Designer account. Where set, a sign-in card covers the app until it signs in.
+    pub account: Option<std::sync::Arc<dyn Account>>,
+}
+
+/// A ChamSys Designer server account. Every call blocks on the network, so the UI makes them
+/// off the UI thread.
+pub trait Account: Send + Sync {
+    /// Signs in with the stored session. `Ok(None)`: there is none, or the server refused it.
+    fn resume(&self) -> Result<Option<SignedIn>, AccountError>;
+    /// Signs in and stores the session.
+    fn sign_in(&self, email: &str, password: &str) -> Result<SignedIn, AccountError>;
+    /// Asks for an account; an admin approves it before it can sign in.
+    fn request_access(&self, email: &str, password: &str) -> Result<(), AccountError>;
+    /// Ends the session on the server (best effort) and forgets it.
+    fn sign_out(&self);
+}
+
+/// Who is signed in, and the server's product catalogue (records as `csd.library.set` takes them).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SignedIn {
+    pub email: String,
+    pub products: Vec<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AccountError {
+    /// Wrong email or password.
+    Invalid,
+    /// The account is waiting for an admin.
+    Pending,
+    Disabled,
+    /// `request_access` for an email that already has an account.
+    Exists,
+    /// The server could not be reached or answered something unexpected.
+    Server(String),
 }
 
 /// The file dialog to show: Open, Save with the suggested file name, APPLOAD's `.lsp` picker or

@@ -171,6 +171,7 @@ fn services() -> Services {
         pick_pgp: Some(Box::new(|dir: Option<&str>| {
             file_dialog(&Pick::Pgp(dir.unwrap_or_default().into())).pick_file().map(|p| p.to_string_lossy().to_string())
         })),
+        account: None,
     }
 }
 
