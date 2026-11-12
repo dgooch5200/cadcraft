@@ -18,7 +18,6 @@ const BORDER: f64 = 1.5;
 const RADIUS: f64 = 5.0;
 const PAPER: u32 = 0xf5f2ec;
 const INK: u32 = 0x1a1a1a;
-const ANCHOR: u32 = 0x6e7787;
 const STUB: f64 = 24.0;
 /// Extra stub length per lane, so wires sharing a side do not turn at the same distance.
 const LANE: f64 = 6.0;
@@ -340,7 +339,7 @@ impl<F: FnMut() -> Handle> Painter<'_, F> {
 }
 
 /// The device symbol: paper with a rounded border in the brand colour, the product code on the
-/// body (where a picture goes later), a bordered label strip, and a grey anchor on each edge.
+/// body (where a picture goes later), and a bordered label strip.
 /// The hidden `PRODUCT` and `NAME` and the visible `LABEL` attribute definitions carry the
 /// product id, the label and the label as the strip shows it. A product missing from the library
 /// gets a dashed border, drawn with linetype scale `dash_scale`.
@@ -369,12 +368,6 @@ pub fn device_block(product: &Product, mut new_handle: impl FnMut() -> Handle, d
     let first = body_mid + (lines.len() as f64 - 1.0) / 2.0 * (CODE_H + 3.0);
     for (i, line) in lines.iter().enumerate() {
         p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: first - i as f64 * (CODE_H + 3.0) }, CODE_H, line)), INK);
-    }
-    let (dot, edge) = (mix(ANCHOR, PAPER, 0.8), mix(0xffffff, mix(ANCHOR, PAPER, 0.8), 0.45));
-    // The anchors sit on the edge midpoints, where the wires' end dots land.
-    for c in [(0.0, CARD_H / 2.0), (0.0, -CARD_H / 2.0), (CARD_W / 2.0, 0.0), (-CARD_W / 2.0, 0.0)].map(|(x, y)| Vec2 { x, y }) {
-        p.add(fill(circle(c, 5.0)), dot);
-        p.add(outline(circle(c, 4.25), BORDER), edge);
     }
     let attdef = |tag: &str, prompt: &str, at: Vec2, value: &str, invisible: bool| {
         EntityKind::AttDef(Attrib {
@@ -424,7 +417,7 @@ pub fn deco_block(protocol: Protocol, deco: Deco, mut new_handle: impl FnMut() -
     p.block
 }
 
-/// Where a wire's decorations go: its end dots on the ports, over the card's grey anchor dot,
+/// Where a wire's decorations go: its end dots on the ports,
 /// and its pill on the middle of the longest segment (the first, when several tie).
 /// ponytail: no user-set pill position (the TS labelT) and no pill on the router's free segment.
 pub fn deco_points(path: &[Vec2]) -> Option<[(Deco, Vec2); 3]> {
