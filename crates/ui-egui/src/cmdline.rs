@@ -118,6 +118,11 @@ pub struct Suggestion {
     pub label: &'static str,
 }
 
+/// Dotted ids are internal sub-commands (`zoom.*`, `arc.*`), except the lighting commands.
+fn suggestible(id: &str) -> bool {
+    !id.contains('.') || id.starts_with("csd.")
+}
+
 /// Matching command names/aliases for AutoComplete.
 fn suggestions(prefix: &str) -> Vec<Suggestion> {
     if prefix.is_empty() || prefix.contains(' ') {
@@ -131,7 +136,7 @@ fn suggestions(prefix: &str) -> Vec<Suggestion> {
     // 1. Exact match: alias resolution or exact command name match.
     let resolved = cadcraft_engine::cmd::resolve_alias(&p);
     if let Some(spec) = cadcraft_engine::cmd::find_command(&resolved)
-        && !spec.id.contains('.')
+        && suggestible(spec.id)
     {
         let display =
             if spec.id == p { spec.id.to_ascii_uppercase() } else { format!("{} ({})", p.to_ascii_uppercase(), spec.id.to_ascii_uppercase()) };
@@ -141,7 +146,7 @@ fn suggestions(prefix: &str) -> Vec<Suggestion> {
 
     // 2. Command ID prefix matches (excluding already matched exact command).
     let mut id_matches: Vec<&'static cadcraft_engine::CommandSpec> =
-        cadcraft_engine::command_specs().iter().filter(|c| !c.id.contains('.') && !seen_ids.contains(c.id) && c.id.starts_with(&p)).collect();
+        cadcraft_engine::command_specs().iter().filter(|c| suggestible(c.id) && !seen_ids.contains(c.id) && c.id.starts_with(&p)).collect();
     id_matches.sort_by_key(|c| (c.id.len(), c.id));
     for c in id_matches {
         out.push(Suggestion { id: c.id.to_ascii_uppercase(), display: c.id.to_ascii_uppercase(), label: c.label });
@@ -151,7 +156,7 @@ fn suggestions(prefix: &str) -> Vec<Suggestion> {
     // 3. Command alias prefix matches (for commands not yet added).
     let mut alias_matches: Vec<(&'static str, &'static cadcraft_engine::CommandSpec)> = Vec::new();
     for c in cadcraft_engine::command_specs() {
-        if c.id.contains('.') || seen_ids.contains(c.id) {
+        if !suggestible(c.id) || seen_ids.contains(c.id) {
             continue;
         }
         let matching_alias = c.aliases.iter().copied().filter(|a| a.starts_with(&p)).min_by_key(|a| (a.len(), *a));
@@ -911,6 +916,13 @@ mod autocomplete_tests {
         let co = suggestions("co");
         assert_eq!(co[0].id, "COPY");
         assert_eq!(co[0].display, "CO (COPY)");
+    }
+
+    #[test]
+    fn lighting_commands_are_suggested_but_internal_ones_are_not() {
+        let cs: Vec<String> = suggestions("cs").into_iter().map(|s| s.id).collect();
+        assert!(cs.contains(&"CSD.PLACE".to_string()) && cs.contains(&"CSD.CONNECT".to_string()), "{cs:?}");
+        assert!(suggestions("zoom.").is_empty());
     }
 
     #[test]
