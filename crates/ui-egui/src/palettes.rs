@@ -13,6 +13,8 @@ use crate::theme::Tokens;
 mod layer_menu_tests;
 /// The hatch pattern picker.
 pub mod patterns;
+
+mod lighting;
 /// The QuickCalc palette.
 pub mod quickcalc;
 
@@ -184,24 +186,22 @@ pub fn toolsets(app: &mut CadApp, ui: &mut egui::Ui) {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
                 let groups: &[(&str, &[Tool], &[Tool])] = if app.ui.toolset_tab == "Drafting" { DRAFTING } else { MODELING };
+                if app.ui.toolset_tab == "Drafting" {
+                    let collapsed = app.ui.collapsed_groups.iter().any(|g| g == "Lighting");
+                    if group_title(ui, "Lighting", collapsed).1.clicked() {
+                        toggle_group = Some("Lighting".to_string());
+                    }
+                    if !collapsed {
+                        lighting::body(app, ui);
+                        ui.add_space(6.0);
+                    }
+                    let (sr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+                    ui.painter().hline(sr.x_range().shrink(6.0), sr.center().y, Stroke::new(1.0, t.border));
+                }
                 for (name, large, small) in groups {
                     let collapsed = app.ui.collapsed_groups.iter().any(|g| g == name);
-                    // Header.
-                    let (hr, hresp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
+                    let (hr, hresp) = group_title(ui, name, collapsed);
                     let pp = ui.painter();
-                    icons::paint(
-                        pp,
-                        Rect::from_center_size(pos2(hr.left() + 11.0, hr.center().y), vec2(11.0, 11.0)),
-                        if collapsed { Icon::ChevronRight } else { Icon::ChevronDown },
-                        false,
-                    );
-                    pp.text(
-                        pos2(hr.left() + 22.0, hr.center().y),
-                        egui::Align2::LEFT_CENTER,
-                        crate::i18n::t(name),
-                        egui::FontId::proportional(12.5),
-                        t.text,
-                    );
                     let gear = Rect::from_center_size(pos2(hr.right() - 12.0, hr.center().y), vec2(13.0, 13.0));
                     let gresp = ui.interact(gear, ui.scope_id().with(("ts_gear", name)), Sense::click());
                     icons::paint(pp, Rect::from_center_size(gear.center(), vec2(11.0, 11.0)), Icon::Gear, false);
@@ -288,6 +288,21 @@ pub fn toolsets(app: &mut CadApp, ui: &mut egui::Ui) {
             app.start(c);
         }
     });
+}
+
+/// A Tool Sets group header: chevron and title on a row that toggles the group.
+fn group_title(ui: &mut egui::Ui, name: &str, collapsed: bool) -> (Rect, egui::Response) {
+    let t = Tokens::get();
+    let (hr, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
+    let pp = ui.painter();
+    icons::paint(
+        pp,
+        Rect::from_center_size(pos2(hr.left() + 11.0, hr.center().y), vec2(11.0, 11.0)),
+        if collapsed { Icon::ChevronRight } else { Icon::ChevronDown },
+        false,
+    );
+    pp.text(pos2(hr.left() + 22.0, hr.center().y), egui::Align2::LEFT_CENTER, crate::i18n::t(name), egui::FontId::proportional(12.5), t.text);
+    (hr, resp)
 }
 
 pub const MODELING: &[(&str, &[Tool], &[Tool])] = &[
