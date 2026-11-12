@@ -419,6 +419,7 @@ impl Session {
         cmd::groups::after_command(self, before);
         cmd::constraints::after_command(self, before, ok);
         assoc::after_command(self, before, uid);
+        cmd::csd::after_command(self, before);
     }
 
     fn resume_suspended(&mut self) {

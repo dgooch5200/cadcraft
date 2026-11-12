@@ -8,6 +8,7 @@ mod audit;
 pub(crate) mod blocks;
 pub mod clipboard;
 pub mod constraints;
+pub(crate) mod csd;
 mod draw;
 mod draw2;
 mod draworder;
@@ -211,6 +212,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(tolerance::specs());
         v.extend(txt2mtxt::specs());
         v.extend(constraints::specs());
+        v.extend(csd::specs());
         v.extend(lisp::specs());
         v
     })

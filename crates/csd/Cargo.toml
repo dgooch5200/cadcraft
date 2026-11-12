@@ -1,0 +1,13 @@
+[package]
+name = "cadcraft-csd"
+description = "CADCraft lighting-control system designer: products, device blocks, wire links, port capacity rules"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cadcraft-geom = { workspace = true }
+cadcraft-doc = { workspace = true }
