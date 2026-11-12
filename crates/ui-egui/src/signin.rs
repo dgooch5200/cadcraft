@@ -159,8 +159,14 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         let mut enter = false;
         ui.add_enabled_ui(!busy, |ui| {
             label(ui, crate::tl!("EMAIL"));
-            let email =
-                ui.add(TextEdit::singleline(&mut st.email).desired_width(f32::INFINITY).margin(vec2(6.0, 5.0))).accessible_name(crate::tl!("EMAIL"));
+            let email = ui
+                .add(
+                    TextEdit::singleline(&mut st.email)
+                        .hint_text(crate::tl!("Leave empty for the shared password"))
+                        .desired_width(f32::INFINITY)
+                        .margin(vec2(6.0, 5.0)),
+                )
+                .accessible_name(crate::tl!("EMAIL"));
             if std::mem::take(&mut st.focus_email) {
                 email.request_focus();
             }

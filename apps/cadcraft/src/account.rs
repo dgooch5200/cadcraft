@@ -1,4 +1,5 @@
-//! ChamSys Designer account: sign in over HTTP, keep the session cookie in the OS keychain.
+//! ChamSys Designer account: sign in over HTTP, keep the session cookie in the OS keychain. An
+//! empty email signs in with a shared password, as the website does: its SHA-256 is the cookie.
 
 use cadcraft_csd::MAX_LIBRARY_BYTES;
 use cadcraft_ui_egui::{Account, AccountError, SignedIn};
@@ -9,6 +10,7 @@ use ureq::Agent;
 const DEFAULT_SERVER: &str = "https://csd.atlaspd.com";
 const KEYCHAIN_SERVICE: &str = "CADCraft ChamSys Designer";
 const COOKIE: &str = "csd_session";
+const GATE_COOKIE: &str = "csd_gate";
 
 /// Where the session lives: the OS keychain in the app, memory in tests.
 trait SessionStore: Send + Sync {
@@ -74,9 +76,9 @@ impl ServerAccount {
         self.agent.post(format!("{}{path}", self.base)).header("Content-Type", "application/json").send(body).map_err(unreachable)
     }
 
-    /// `Ok(None)`: the server does not accept this session.
-    fn products(&self, token: &str) -> Result<Option<Vec<Value>>, AccountError> {
-        let resp = self.agent.get(format!("{}/api/products", self.base)).header("Cookie", format!("{COOKIE}={token}")).call().map_err(unreachable)?;
+    /// `Ok(None)`: the server does not accept this cookie.
+    fn products(&self, cookie: &str) -> Result<Option<Vec<Value>>, AccountError> {
+        let resp = self.agent.get(format!("{}/api/products", self.base)).header("Cookie", cookie).call().map_err(unreachable)?;
         let status = resp.status().as_u16();
         if status == 401 || (300..400).contains(&status) {
             return Ok(None);
@@ -111,15 +113,26 @@ fn session_token(resp: &ureq::http::Response<ureq::Body>) -> Option<String> {
     })
 }
 
+/// The stored email and the cookie that signs it in.
 fn stored(store: &dyn SessionStore) -> Option<(String, String)> {
     let v: Value = serde_json::from_str(&store.load()?).ok()?;
-    Some((v.get("email")?.as_str()?.to_string(), v.get("token")?.as_str()?.to_string()))
+    let email = v.get("email")?.as_str()?.to_string();
+    match (v.get("token").and_then(Value::as_str), v.get("gate").and_then(Value::as_str)) {
+        (Some(token), _) => Some((email, format!("{COOKIE}={token}"))),
+        (None, Some(gate)) => Some((email, format!("{GATE_COOKIE}={gate}"))),
+        _ => None,
+    }
+}
+
+fn sha256_hex(text: &str) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
 impl Account for ServerAccount {
     fn resume(&self) -> Result<Option<SignedIn>, AccountError> {
-        let Some((email, token)) = stored(&*self.store) else { return Ok(None) };
-        match self.products(&token)? {
+        let Some((email, cookie)) = stored(&*self.store) else { return Ok(None) };
+        match self.products(&cookie)? {
             Some(products) => Ok(Some(SignedIn { email, products })),
             None => {
                 self.store.clear();
@@ -129,6 +142,13 @@ impl Account for ServerAccount {
     }
 
     fn sign_in(&self, email: &str, password: &str) -> Result<SignedIn, AccountError> {
+        if email.trim().is_empty() {
+            // nginx alone knows the shared passwords; a wrong one is answered like no cookie.
+            let gate = sha256_hex(password);
+            let products = self.products(&format!("{GATE_COOKIE}={gate}"))?.ok_or(AccountError::Invalid)?;
+            self.store.save(&json!({"email": "", "gate": gate}).to_string());
+            return Ok(SignedIn { email: String::new(), products });
+        }
         let resp = self.post("/api/account/login", email, password)?;
         match resp.status().as_u16() {
             204 => {}
@@ -146,7 +166,8 @@ impl Account for ServerAccount {
             s => return Err(AccountError::Server(format!("the server answered {s}"))),
         }
         let token = session_token(&resp).ok_or_else(|| AccountError::Server("the server sent no session".into()))?;
-        let products = self.products(&token)?.ok_or_else(|| AccountError::Server("the server did not accept the new session".into()))?;
+        let products =
+            self.products(&format!("{COOKIE}={token}"))?.ok_or_else(|| AccountError::Server("the server did not accept the new session".into()))?;
         self.store.save(&json!({"email": email, "token": token}).to_string());
         Ok(SignedIn { email: email.to_string(), products })
     }
@@ -164,8 +185,9 @@ impl Account for ServerAccount {
     fn sign_out(&self) {
         let session = stored(&*self.store);
         self.store.clear();
-        if let Some((_, token)) = session {
-            let _ = self.agent.post(format!("{}/api/account/logout", self.base)).header("Cookie", format!("{COOKIE}={token}")).send_empty();
+        // A shared password has no session on the server to end.
+        if let Some((_, cookie)) = session.filter(|(_, c)| c.starts_with(COOKIE)) {
+            let _ = self.agent.post(format!("{}/api/account/logout", self.base)).header("Cookie", cookie).send_empty();
         }
     }
 }
@@ -257,7 +279,7 @@ mod tests {
         h.join().unwrap();
         assert_eq!(got.email, "a@b.co");
         assert_eq!(got.products, vec![json!({"id": "a"}), json!({"x": 1})]);
-        assert_eq!(stored(&store), Some(("a@b.co".into(), "tok_1-A".into())));
+        assert_eq!(stored(&store), Some(("a@b.co".into(), "csd_session=tok_1-A".into())));
         let seen = seen.lock().unwrap();
         assert!(seen[0].starts_with("POST /api/account/login"));
         assert!(seen[1].contains("csd_session=tok_1-A"));
@@ -288,6 +310,33 @@ mod tests {
         let (base, _, h) = serve(vec!["HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".into()]);
         let store = Memory::default();
         assert!(matches!(account(&base, &store).sign_in("a@b.co", "pw"), Err(AccountError::Server(_))));
+        h.join().unwrap();
+        assert!(store.load().is_none());
+    }
+
+    #[test]
+    fn empty_email_signs_in_with_the_shared_password() {
+        // SHA-256 of "pw", as the website's login page sends it.
+        let gate = "csd_gate=30c952fab122c3f9759f02a6d95c3758b246b4fee239957b2d4fee46e26170c4";
+        let (base, seen, h) = serve(vec![products(), products()]);
+        let store = Memory::default();
+        let got = account(&base, &store).sign_in("", "pw").unwrap();
+        assert_eq!(got.products.len(), 2);
+        assert!(account(&base, &store).resume().unwrap().is_some(), "the shared password is remembered");
+        account(&base, &store).sign_out();
+        assert!(store.load().is_none());
+        assert!(account(&base, &store).resume().unwrap().is_none());
+        h.join().unwrap();
+        let seen = seen.lock().unwrap();
+        assert!(seen[0].contains(gate) && seen[1].contains(gate), "{seen:?}");
+        assert!(!seen.iter().any(|r| r.contains("/api/account/logout")), "nothing to end on the server");
+    }
+
+    #[test]
+    fn a_wrong_shared_password_is_invalid() {
+        let (base, _, h) = serve(vec![redirect()]);
+        let store = Memory::default();
+        assert_eq!(account(&base, &store).sign_in(" ", "nope").unwrap_err(), AccountError::Invalid);
         h.join().unwrap();
         assert!(store.load().is_none());
     }
