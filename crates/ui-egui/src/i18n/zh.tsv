@@ -1490,3 +1490,16 @@ menu	View	视图
 	Set Product Library	设置产品库
 	Category	类别
 	Search products	搜索产品
+	Sign in with your ChamSys Designer account	使用您的 ChamSys Designer 账户登录
+	Signing in…	正在登录…
+	EMAIL	电子邮件
+	PASSWORD	密码
+	Sign in	登录
+	Request access	申请访问
+	Email or password is incorrect.	电子邮件或密码不正确。
+	Your account is waiting for an admin to approve it.	您的账户正在等待管理员批准。
+	This account is disabled.	此账户已停用。
+	That email already has an account.	该电子邮件已有账户。
+	Request sent. An admin will approve it.	请求已发送，管理员将予以批准。
+	Couldn't reach the server: {m}	无法连接服务器：{m}
+	Sign Out	退出登录

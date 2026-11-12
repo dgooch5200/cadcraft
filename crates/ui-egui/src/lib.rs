@@ -34,6 +34,7 @@ pub mod csd_library;
 pub mod dialogs;
 pub mod docking;
 pub mod fault;
+pub mod signin;
 // The Find and Replace window behind the FIND command.
 pub mod finddlg;
 pub mod hatchdlg;
@@ -387,6 +388,7 @@ pub struct CadApp {
     pub quit_confirmed: bool,
     /// A close request waiting for "Save changes?" answers ([`closing`]).
     pub closing: Option<closing::Closing>,
+    pub signin: signin::State,
     /// A save waiting for an answer about the content the file can't keep ([`save_loss`]).
     pub save_loss: Option<save_loss::Pending>,
     /// The loss the user last agreed to, so saving again doesn't ask again ([`save_loss`]).
@@ -458,6 +460,7 @@ impl CadApp {
             quit_requested: false,
             quit_confirmed: false,
             closing: None,
+            signin: signin::State::default(),
             save_loss: None,
             save_loss_accepted: None,
             autosave: None,
@@ -922,6 +925,7 @@ impl CadApp {
         // reply arriving during a later pass is never starved until the next frame.
         self.drain_control(ctx);
         self.finish_pick(ctx);
+        signin::tick(self, ctx);
         self.finish_opening();
         // Finishing an open switches to the new drawing.
         capture::note_identity(self, ctx);
@@ -1111,6 +1115,10 @@ impl CadApp {
 
     /// Input-derived work, once per layout frame.
     fn ui_input(&mut self, ctx: &egui::Context) {
+        // Behind the sign-in card nothing takes keys or dropped files.
+        if signin::gated(self) {
+            return;
+        }
         menus::shortcuts(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -1129,6 +1137,15 @@ impl CadApp {
 
     /// Draw one UI pass: title/toolbar, optional menu/status bar/file tabs, the standalone tool-set strip when a drawing is shown but Tool Sets is not docked, docking or the start page, and the floating overlays; record `frame_ms`. Runs on every pass, including one egui later discards.
     fn draw(&mut self, ui: &mut egui::Ui) {
+        if signin::gated(self) {
+            ui.add_enabled_ui(false, |ui| self.draw_app(ui));
+            signin::show(self, ui.ctx());
+        } else {
+            self.draw_app(ui);
+        }
+    }
+
+    fn draw_app(&mut self, ui: &mut egui::Ui) {
         let t0 = now_ms();
         control::begin_frame(ui.ctx());
         let t = theme::Tokens::get();

@@ -141,6 +141,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.shortcuts", "Keyboard Shortcuts...", &["Tools", "Customize", "Keyboard Shortcuts..."], None),
     ("ui.language", "Language", &[], None),
     ("ui.noop", "", &[], None),
+    ("ui.signout", "Sign Out", &["File", "Sign Out"], None),
     ("ui.quit", "Quit CADCraft", &[], Some("Cmd+Q")),
 ];
 
@@ -562,6 +563,7 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             app.quit_requested = true;
             Ok(Value::Null)
         }
+        "ui.signout" => crate::signin::sign_out(app),
         "ui.noop" => Ok(Value::Null),
         // From a menu or typed, closing asks about unsaved changes; JSON calls close without asking.
         "layer" | "la" | "layers" if params.is_null() => {
@@ -706,7 +708,7 @@ pub fn tree(app: &CadApp) -> Vec<(String, Vec<Entry>)> {
     }
     for (id, label, menu, sc) in UI_COMMANDS {
         if !menu.is_empty() {
-            add(menu, label, id, *sc, true);
+            add(menu, label, id, *sc, *id != "ui.signout" || crate::signin::signed_in(app));
         }
     }
     if let Some((_, file)) = out.iter_mut().find(|(m, _)| m == "File") {
