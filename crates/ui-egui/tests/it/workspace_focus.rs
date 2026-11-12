@@ -8,6 +8,7 @@ use egui_kittest::kittest::Queryable;
 
 fn harness() -> Harness<'static, CadApp> {
     let mut app = CadApp::new(Session::default(), Services::default());
+    app.run("wscurrent", serde_json::json!({"name": "Advanced"})).unwrap();
     app.integrated_titlebar = true;
     app.ui.in_window_menu = false;
     let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).build_ui_state(
@@ -86,7 +87,7 @@ fn document_tabs_have_distinct_keyboard_identity_and_activation() {
     h.state_mut().run("new", serde_json::json!({})).unwrap();
     h.run_steps(3);
     let title = h.state().session.docs[0].title.clone();
-    tab_to(&mut h, "Start");
+    tab_to(&mut h, "Library");
     h.key_press(Key::Tab);
     h.run_steps(2);
     assert!(h.get_by_label(&title).is_focused());

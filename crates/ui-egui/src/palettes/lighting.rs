@@ -64,18 +64,24 @@ pub(super) fn body(app: &mut CadApp, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.add_space(8.0);
-        ui.add(egui::TextEdit::singleline(&mut f.query).hint_text(crate::tl!("Search products")).desired_width(ui.available_width() - 8.0));
+        ui.add(egui::TextEdit::singleline(&mut f.query).hint_text(crate::tl!("Search products")).desired_width(ui.available_width() - 8.0))
+            .accessible_name(crate::tl!("Search products"));
     });
     ui.add_space(3.0);
     ui.horizontal(|ui| {
         ui.add_space(8.0);
         let shown = if f.category.is_empty() { crate::tl!("All").to_string() } else { f.category.clone() };
-        craft_ui::ComboBox::from_id_salt(id.with("cat")).selected_text(shown).width(ui.available_width() - 8.0).show_ui(ui, |ui| {
-            ui.selectable_value(&mut f.category, String::new(), crate::tl!("All"));
-            for c in &cats {
-                ui.selectable_value(&mut f.category, c.to_string(), *c);
-            }
-        });
+        craft_ui::ComboBox::from_id_salt(id.with("cat"))
+            .selected_text(shown)
+            .width(ui.available_width() - 8.0)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut f.category, String::new(), crate::tl!("All"));
+                for c in &cats {
+                    ui.selectable_value(&mut f.category, c.to_string(), *c);
+                }
+            })
+            .response
+            .accessible_name(crate::tl!("Category"));
     });
     ui.add_space(4.0);
     let needle = f.query.trim().to_lowercase();

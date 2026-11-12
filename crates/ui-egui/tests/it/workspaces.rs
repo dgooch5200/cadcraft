@@ -92,3 +92,11 @@ fn prefs_round_trip_the_workspace_name() {
     b.load_prefs(&a.prefs_json());
     assert_eq!(b.ui.workspace, WorkspaceName::Simple);
 }
+
+#[test]
+fn reset_palettes_keeps_the_current_workspace() {
+    let mut app = advanced();
+    app.run("ui.resetpalettes", json!({})).unwrap();
+    assert_eq!(app.ui.workspace, WorkspaceName::Advanced);
+    assert!(app.ui.docking.layout.contains(&Panel::Properties) && app.ui.show_palettes);
+}

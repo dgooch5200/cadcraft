@@ -206,13 +206,17 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.add_space(6.0);
-        ui.add(egui::TextEdit::singleline(&mut st.query).hint_text("Filter products…").desired_width(200.0));
-        craft_ui::ComboBox::from_id_salt("csd_lib_cat").selected_text(if st.cat.is_empty() { "All categories" } else { &st.cat }).show_ui(ui, |ui| {
-            ui.selectable_value(&mut st.cat, String::new(), "All categories");
-            for c in &cats {
-                ui.selectable_value(&mut st.cat, c.clone(), c);
-            }
-        });
+        ui.add(egui::TextEdit::singleline(&mut st.query).hint_text("Filter products…").desired_width(200.0)).accessible_name("Filter products");
+        craft_ui::ComboBox::from_id_salt("csd_lib_cat")
+            .selected_text(if st.cat.is_empty() { "All categories" } else { &st.cat })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut st.cat, String::new(), "All categories");
+                for c in &cats {
+                    ui.selectable_value(&mut st.cat, c.clone(), c);
+                }
+            })
+            .response
+            .accessible_name("Category");
         if ui.button("Add product").clicked() {
             let p = new_product(&st.rows);
             st.rows.push(p);

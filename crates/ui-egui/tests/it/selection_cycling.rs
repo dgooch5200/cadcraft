@@ -20,6 +20,7 @@ fn harness(selectioncycling: i64) -> (Harness<'static, CadApp>, Vec<Handle>) {
     session.set_selection(Vec::new());
     let hs: Vec<Handle> = session.doc().unwrap().model.iter().map(|e| e.handle).collect();
     let mut app = CadApp::new(session, Services::default());
+    app.run("wscurrent", serde_json::json!({"name": "Advanced"})).unwrap();
     app.canvas.zoom_pending = true;
     let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).build_ui_state(
         |ui, app: &mut CadApp| {

@@ -416,6 +416,7 @@ fn the_command_line_says_or_before_keywords_as_the_prompt_does() {
 #[test]
 fn live_switch_translates_the_shell_without_mutating_drawing_or_automation() {
     let mut app = CadApp::new(Session::new(), Services::default());
+    app.run("wscurrent", serde_json::json!({"name": "Advanced"})).unwrap();
     app.ui.in_window_menu = true;
     app.session.state_mut().unwrap().title = "Open".into();
     let ctx = egui::Context::default();
