@@ -260,7 +260,7 @@ fn apply(doc: &mut Arc<Drawing>, space: &Space, plan: Plan) {
 /// Brings every linked wire and its decorations in line with the devices.
 /// ponytail: every wire is re-routed after every command; index by changed handles (as assoc.rs
 /// does) when drawings get large.
-fn refresh(doc: &mut Arc<Drawing>) {
+pub(crate) fn refresh(doc: &mut Arc<Drawing>) {
     let spaces: Vec<Space> = std::iter::once(Space::Model).chain(doc.layouts.iter().map(|l| Space::Paper(l.name.clone()))).collect();
     for space in spaces {
         let p = doc.space(&space).map(plan).unwrap_or_default();

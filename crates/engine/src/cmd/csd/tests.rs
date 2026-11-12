@@ -506,3 +506,20 @@ fn a_library_colour_change_recolours_the_placed_cards() {
     assert_ne!(border(&s), old);
     assert_eq!(border(&s), Color::True(Rgb::from_u32(0x123456)));
 }
+
+#[test]
+fn wires_saved_with_an_old_route_are_rerouted_on_open() {
+    let (mut s, _, b, w) = setup();
+    let want = verts(&s, w);
+    let _ = s.doc_mut().unwrap().modify_entity(w, |e| {
+        if let EntityKind::LwPolyline(p) = &mut e.kind {
+            p.vertices.truncate(2);
+        }
+    });
+    let imported = cadcraft_io::read_dxf(cadcraft_io::write_dxf(s.doc().unwrap()).as_bytes()).unwrap();
+    let mut t = Session::empty();
+    t.open_drawing(imported, "Old", None);
+    assert_eq!(verts(&t, w).len(), want.len());
+    assert!(verts(&t, w).last().unwrap().near(port(&t, b, Side::Left), 1e-9));
+    assert!(!t.state().unwrap().is_dirty());
+}

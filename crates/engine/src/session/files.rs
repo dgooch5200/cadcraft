@@ -18,7 +18,10 @@ impl Session {
     pub fn open_drawing(&mut self, d: Drawing, title: &str, path: Option<String>) -> usize {
         let mut st = DocState::new(d, title, path);
         // Part of the file as opened, so neither dirty nor an undo step.
-        if cmd::csd::refresh_blocks(&mut st.doc, &self.csd_library) {
+        let as_read = st.doc.clone();
+        cmd::csd::refresh_blocks(&mut st.doc, &self.csd_library);
+        cmd::csd::refresh(&mut st.doc);
+        if !std::sync::Arc::ptr_eq(&as_read, &st.doc) {
             st.saved = st.doc.clone();
         }
         // The view the file was saved at is the one every other reader opens on. Fitting the
