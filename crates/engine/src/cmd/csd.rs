@@ -6,8 +6,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use cadcraft_csd::{
-    Deco, Product, Protocol, Side, Slot, WIRE_W, WireLink, block_name, can_connect, deco_block, deco_block_name, deco_from_xdata, deco_points,
-    deco_xdata, device_block, edge_frame, fan_order, port_point, route, sample_products, truncate_label, world_side,
+    BOLD_STYLE, Deco, Product, Protocol, Side, Slot, WIRE_W, WireLink, block_name, bold_style, can_connect, deco_block, deco_block_name,
+    deco_from_xdata, deco_points, deco_xdata, device_block, edge_frame, fan_order, port_point, route, sample_products, truncate_label, world_side,
 };
 use cadcraft_doc::color::{Color, Rgb};
 use cadcraft_doc::{Common, Drawing, Entity, EntityKind, EntityStore, Handle, Insert, Layer, LwPolyline, Space};
@@ -219,6 +219,7 @@ fn apply(doc: &mut Arc<Drawing>, space: &Space, plan: Plan) {
         });
     }
     for w in plan.add {
+        ensure_bold(d);
         if d.block(&w.insert.block).is_none() {
             let block = deco_block(w.protocol, w.deco, || d.new_handle());
             d.blocks.insert(w.insert.block.clone(), Arc::new(block));
@@ -251,6 +252,7 @@ fn run_place(s: &mut Session, p: &Value) -> Result<Value> {
     let name = block_name(&product.id);
     if s.doc()?.block(&name).is_none() {
         let d = s.doc_mut()?;
+        ensure_bold(d);
         let dash = if product.missing { dashed_scale(d, BORDER_DASH) } else { 1.0 };
         let block = device_block(&product, || d.new_handle(), dash);
         d.blocks.insert(name.clone(), Arc::new(block));
@@ -263,6 +265,13 @@ fn run_place(s: &mut Session, p: &Value) -> Result<Value> {
     values.insert("LABEL".into(), json!(truncate_label(label)));
     let h = super::blocks::insert(s, &name, at, 1.0, 0.0, &values)?;
     Ok(json!({ "handle": h.hex() }))
+}
+
+/// Adds the text style the cards' text uses, once.
+fn ensure_bold(d: &mut Drawing) {
+    if d.text_style(BOLD_STYLE).is_none() {
+        d.text_styles.push(bold_style());
+    }
 }
 
 fn side_param(p: &Value, key: &str) -> Result<Side> {
