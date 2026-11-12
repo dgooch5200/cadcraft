@@ -157,6 +157,8 @@ pub struct Session {
     pub csd_library: Arc<Vec<cadcraft_csd::Product>>,
     /// The product the interactive `csd.place` puts down (`csd.arm`).
     pub csd_armed: Option<String>,
+    /// The protocol the interactive `csd.connect` wires with: the last one chosen.
+    pub csd_protocol: cadcraft_csd::Protocol,
 }
 
 impl Default for Session {
@@ -213,6 +215,7 @@ impl Session {
             pick_hint: None,
             csd_library: Arc::new(cadcraft_csd::sample_products()),
             csd_armed: None,
+            csd_protocol: cadcraft_csd::Protocol::Network,
         }
     }
 

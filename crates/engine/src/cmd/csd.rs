@@ -17,6 +17,7 @@ use serde_json::{Map, Value, json};
 
 use super::curves::handle_param;
 
+mod connect;
 mod place;
 use super::{CommandSpec, always, bad, point_req, str_param};
 use crate::{EngineError, Result, Session};
@@ -28,7 +29,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(place::PlaceM::start),
         CommandSpec::new("csd.arm", "Arm Product", place::run_arm).params("{product: id of a library product} → {product}").noundo(),
         CommandSpec::new("csd.connect", "Connect Devices", run_connect)
-            .params("{from: handle, fromSide: top|bot|lft|rgt, to: handle, toSide, protocol: network|netdata|10scene|dmx|0-10v|contact|power|midi|epix3p|epix4p} → {handle}"),
+            .params("{from: handle, fromSide: top|bot|lft|rgt, to: handle, toSide, protocol: network|netdata|10scene|dmx|0-10v|contact|power|midi|epix3p|epix4p} → {handle}; interactive: click a port on each of two devices")
+            .interactive(connect::ConnectM::start),
         CommandSpec::new("csd.netlist", "Device Netlist", run_netlist)
             .params("{} → {devices: [{handle, product, label, at}], wires: [{handle, from, fromSide, to, toSide, protocol}]}")
             .noundo(),

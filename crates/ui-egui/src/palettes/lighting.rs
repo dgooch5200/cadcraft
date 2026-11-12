@@ -56,6 +56,14 @@ pub(super) fn body(app: &mut CadApp, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.add_space(8.0);
+        if ui.button(crate::tl!("Connect")).clicked() {
+            app.cmd.buffer.clear();
+            app.start("csd.connect");
+        }
+    });
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
         ui.add(egui::TextEdit::singleline(&mut f.query).hint_text(crate::tl!("Search products")).desired_width(ui.available_width() - 8.0));
     });
     ui.add_space(3.0);

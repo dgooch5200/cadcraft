@@ -409,3 +409,51 @@ fn arming_needs_a_known_product() {
     assert!(s.execute("csd.arm", &json!({ "product": "no-such-product" })).is_err());
     assert!(s.start("csd.place").is_err(), "nothing armed");
 }
+
+/// A console at the origin and a node at (200, 60), both unwired, with `csd.connect` running.
+fn connecting() -> Session {
+    let mut s = Session::new();
+    s.execute("csd.place", &json!({ "product": CONSOLE, "at": [0, 0] })).unwrap();
+    s.execute("csd.place", &json!({ "product": NODE, "at": [200, 60] })).unwrap();
+    s.start("csd.connect").unwrap();
+    s
+}
+
+fn wire_links(s: &mut Session) -> Vec<Value> {
+    s.execute("csd.netlist", &json!({})).unwrap()["wires"].as_array().unwrap().clone()
+}
+
+#[test]
+fn clicking_two_ports_wires_them_with_the_chosen_protocol() {
+    let mut s = connecting();
+    s.input(Input::Keyword("netdata".into())).unwrap();
+    s.input(Input::Point(Vec2::new(30.0, 2.0))).unwrap();
+    s.input(Input::Point(Vec2::new(172.0, 58.0))).unwrap();
+    assert!(s.running.is_some(), "chaining: the command keeps running");
+    let w = wire_links(&mut s);
+    assert_eq!(w.len(), 1);
+    assert_eq!((w[0]["fromSide"].as_str(), w[0]["toSide"].as_str(), w[0]["protocol"].as_str()), (Some("rgt"), Some("lft"), Some("netdata")));
+    s.input(Input::Enter).unwrap();
+    assert!(s.running.is_none());
+    assert_eq!(s.csd_protocol, Protocol::NetData, "the next run starts with it");
+}
+
+#[test]
+fn a_refused_connection_keeps_the_command_running_and_adds_no_wire() {
+    let mut s = connecting();
+    s.input(Input::Keyword("midi".into())).unwrap();
+    s.input(Input::Point(Vec2::new(30.0, 2.0))).unwrap();
+    s.input(Input::Point(Vec2::new(172.0, 58.0))).unwrap();
+    assert!(s.running.is_some());
+    assert!(wire_links(&mut s).is_empty());
+    assert!(s.log.last().is_some_and(|m| m.contains("MIDI")), "{:?}", s.log.last());
+}
+
+#[test]
+fn clicking_empty_space_adds_nothing() {
+    let mut s = connecting();
+    s.input(Input::Point(Vec2::new(500.0, 500.0))).unwrap();
+    s.input(Input::Point(Vec2::new(1000.0, 500.0))).unwrap();
+    assert!(s.running.is_some());
+    assert!(wire_links(&mut s).is_empty());
+}
