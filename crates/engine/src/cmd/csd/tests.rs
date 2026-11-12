@@ -350,6 +350,28 @@ fn library_set_list_and_place() {
 }
 
 #[test]
+fn library_list_offers_only_general_and_own_series_accessories() {
+    let mut s = Session::new();
+    let rec = |id: &str, cat: &str| json!({ "id": id, "name": id, "cat": cat });
+    let products = [
+        rec("par", "Ovation — PAR"),
+        rec("rack", "GeNetix"),
+        rec("general", "General Accessory"),
+        rec("ovation", "Ovation Series Accessories"),
+        rec("genetix", "GeNetix Accessories"),
+    ];
+    s.execute("csd.library.set", &json!({ "products": products })).unwrap();
+    let ids = |s: &mut Session, f: Value| -> Vec<String> {
+        let r = s.execute("csd.library.list", &json!({ "accessoriesFor": f })).unwrap();
+        r["products"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap().to_string()).collect()
+    };
+    assert_eq!(ids(&mut s, json!(["par"])), ["general", "ovation"]);
+    assert_eq!(ids(&mut s, json!(["par", "rack"])), ["general", "ovation", "genetix"]);
+    assert_eq!(ids(&mut s, json!([])), ["general", "ovation", "genetix"]);
+    assert_eq!(ids(&mut s, json!(["nope", 7])), ["general", "ovation", "genetix"]);
+}
+
+#[test]
 fn library_save_then_load() {
     let mut s = Session::new();
     let path = std::env::temp_dir().join(format!("csd-lib-save-{}.json", std::process::id()));

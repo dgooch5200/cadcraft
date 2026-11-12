@@ -10,6 +10,24 @@ fn prod(ports: &[(Protocol, u32, u32)]) -> Product {
     Product { id: "X".into(), name: "X".into(), code: "X".into(), counts, ..Product::default() }
 }
 
+#[test]
+fn accessories_fit_the_fixture_family() {
+    let p = |id: &str, cat: &str| Product { id: id.into(), name: id.into(), cat: cat.into(), ..Product::default() };
+    let lib = [
+        p("par", "Ovation — PAR"),
+        p("rack", "GeNetix"),
+        p("general", "General Accessory"),
+        p("ovation", "Ovation Series Accessories"),
+        p("genetix", "GeNetix Accessories"),
+    ];
+    let ids = |f: &[&Product]| accessory_products(&lib, f).iter().map(|x| x.id.clone()).collect::<Vec<_>>();
+    assert_eq!(ids(&[&lib[0]]), ["general", "ovation"]);
+    assert_eq!(ids(&[&lib[0], &lib[1]]), ["general", "ovation", "genetix"]);
+    assert_eq!(ids(&[]), ["general", "ovation", "genetix"]);
+    assert_eq!(accessory_products(&lib[..2], &[]).len(), 2);
+    assert!(is_accessory(&p("b", "Barn Door")) && !is_accessory(&p("c", "Wash")));
+}
+
 fn link(a: u64, b: u64, protocol: Protocol) -> WireLink {
     WireLink { from: Handle(a), from_side: Side::Right, to: Handle(b), to_side: Side::Left, protocol }
 }

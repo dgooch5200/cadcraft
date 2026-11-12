@@ -137,3 +137,44 @@ pub fn product_record(p: &Product) -> Map<String, Value> {
 pub fn library_json(products: &[Product]) -> String {
     Value::Array(products.iter().filter(|p| !p.missing).map(|p| Value::Object(product_record(p))).collect()).to_string()
 }
+
+/// Category words that mark a product as an accessory (the web app's `ACCESSORY_CAT`).
+const ACCESSORY_WORDS: [&str; 11] = ["accessor", "cable", "lead", "clamp", "mount", "hardware", "barndoor", "lens", "yoke", "bracket", "filter"];
+
+pub fn is_accessory(p: &Product) -> bool {
+    let cat = p.cat.to_lowercase().replace("barn door", "barndoor");
+    ACCESSORY_WORDS.iter().any(|w| cat.contains(w))
+}
+
+/// The family of a category: the part before the first spaced dash ("Ovation" in "Ovation — PAR").
+fn family(cat: &str) -> String {
+    let chars: Vec<(usize, char)> = cat.char_indices().collect();
+    let end = chars
+        .windows(3)
+        .find(|w| matches!(w[1].1, '—' | '–' | '-') && w[0].1.is_whitespace() && w[2].1.is_whitespace())
+        .map_or(cat.len(), |w| w[0].0);
+    cat.get(..end).unwrap_or(cat).trim().to_lowercase()
+}
+
+/// The accessories to offer for `fitting` devices: those naming no fixture family (general) plus
+/// those naming a family one of the devices belongs to. With no `fitting`, every accessory; with no
+/// accessories in the library, the whole library.
+pub fn accessory_products<'a>(products: &'a [Product], fitting: &[&Product]) -> Vec<&'a Product> {
+    let accessories: Vec<&Product> = products.iter().filter(|p| is_accessory(p)).collect();
+    if accessories.is_empty() {
+        return products.iter().collect();
+    }
+    if fitting.is_empty() {
+        return accessories;
+    }
+    let families: HashSet<String> = products.iter().filter(|p| !is_accessory(p)).map(|p| family(&p.cat)).filter(|f| !f.is_empty()).collect();
+    let wanted: HashSet<String> = fitting.iter().map(|p| family(&p.cat)).collect();
+    accessories
+        .into_iter()
+        .filter(|a| {
+            let cat = a.cat.to_lowercase();
+            let mut owners = families.iter().filter(|f| cat.contains(f.as_str())).peekable();
+            owners.peek().is_none() || owners.any(|f| wanted.contains(f))
+        })
+        .collect()
+}

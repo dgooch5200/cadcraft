@@ -6,9 +6,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use cadcraft_csd::{
-    BOLD_STYLE, Deco, Product, Protocol, Side, Slot, WIRE_W, WireLink, block_name, bold_style, can_connect, deco_block, deco_block_name,
-    deco_from_xdata, deco_points, deco_xdata, device_block, edge_frame, fan_order, library_json, parse_library, parse_products, port_point,
-    product_record, route, truncate_label, world_side,
+    BOLD_STYLE, Deco, Product, Protocol, Side, Slot, WIRE_W, WireLink, accessory_products, block_name, bold_style, can_connect, deco_block,
+    deco_block_name, deco_from_xdata, deco_points, deco_xdata, device_block, edge_frame, fan_order, library_json, parse_library, parse_products,
+    port_point, product_record, route, truncate_label, world_side,
 };
 use cadcraft_doc::color::{Color, Rgb};
 use cadcraft_doc::{Common, Drawing, Entity, EntityKind, EntityStore, Handle, Insert, Layer, LwPolyline, Space};
@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo()
             .enabled(always),
         CommandSpec::new("csd.library.list", "List Products", run_library_list)
-            .params("{query? (id, name or code contains), category?} → {products: [records without img], categories: [cat, first-seen order]}")
+            .params("{query? (id, name or code contains), category?, accessoriesFor? (product ids: only accessories that are general or of those products' series)} → {products: [records without img], categories: [cat, first-seen order]}")
             .noundo()
             .enabled(always),
         CommandSpec::new("csd.library.set", "Set Product Library", run_library_set)
@@ -481,8 +481,13 @@ fn run_library_list(s: &mut Session, p: &Value) -> Result<Value> {
             categories.push(&x.cat);
         }
     }
+    let fits: Option<Vec<&str>> = p.get("accessoriesFor").and_then(Value::as_array).map(|a| {
+        let fitting: Vec<&Product> = a.iter().filter_map(Value::as_str).filter_map(|id| s.csd_library.iter().find(|x| x.id == id)).collect();
+        accessory_products(&s.csd_library, &fitting).iter().map(|x| x.id.as_str()).collect()
+    });
     let hit = |x: &Product| {
-        category.is_none_or(|c| x.cat == c)
+        fits.as_ref().is_none_or(|f| f.contains(&x.id.as_str()))
+            && category.is_none_or(|c| x.cat == c)
             && query.as_ref().is_none_or(|q| [&x.id, &x.name, &x.code].iter().any(|f| f.to_lowercase().contains(q.as_str())))
     };
     // Pictures and other long strings stay out so a list of hundreds stays small.
