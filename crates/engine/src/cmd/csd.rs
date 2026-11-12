@@ -6,9 +6,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use cadcraft_csd::{
-    BOLD_STYLE, Deco, Product, Protocol, Side, Slot, WIRE_W, WireLink, block_name, bold_style, can_connect, deco_block, deco_block_name,
-    deco_from_xdata, deco_points, deco_xdata, device_block, edge_frame, fan_order, library_json, parse_library, parse_products, port_point,
-    product_record, route, truncate_label, world_side,
+    BOLD_STYLE, CARD_H, CARD_W, Deco, Product, Protocol, Side, Slot, WIRE_W, WireLink, block_name, bold_style, can_connect, deco_block,
+    deco_block_name, deco_from_xdata, deco_points, deco_xdata, device_block, edge_frame, fan_order, library_json, parse_library, parse_products,
+    port_point, product_record, route, truncate_label, world_side,
 };
 use cadcraft_doc::color::{Color, Rgb};
 use cadcraft_doc::{Common, Drawing, Entity, EntityKind, EntityStore, Handle, Insert, Layer, LwPolyline, Space};
@@ -19,7 +19,7 @@ use super::curves::handle_param;
 
 mod connect;
 mod place;
-use super::{CommandSpec, always, bad, point_req, str_param};
+use super::{CommandSpec, always, bad, point_req, str_param, targets};
 use crate::{EngineError, Result, Session};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -27,6 +27,10 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("csd.place", "Place Device", run_place)
             .params("{product: id of a library product, at: [x,y], label? (default the product code)} → {handle}; interactive: places the armed product at each point")
             .interactive(place::PlaceM::start),
+        CommandSpec::new("csd.size", "Size Devices", run_size)
+            .params("{handles? (default the selection), w?, h?: card size in drawing units, 10..1000, null resets that axis} → {sized}"),
+        CommandSpec::new("csd.replace", "Replace Devices", run_replace)
+            .params("{product: id of a library product, handles? (default the selection)} → {replaced}; devices already that product are skipped"),
         CommandSpec::new("csd.arm", "Arm Product", place::run_arm).params("{product: id of a library product} → {product}").noundo(),
         CommandSpec::new("csd.connect", "Connect Devices", run_connect)
             .params("{from: handle, fromSide: top|bot|lft|rgt, to: handle, toSide, protocol: network|netdata|10scene|dmx|0-10v|contact|power|midi|epix3p|epix4p} → {handle}; interactive: click a port on each of two devices")
@@ -351,14 +355,7 @@ fn run_place(s: &mut Session, p: &Value) -> Result<Value> {
     let at = point_req("csd.place", p, "at")?;
     let library = s.csd_library.clone();
     let product = library.iter().find(|x| x.id == id).ok_or_else(|| bad("csd.place", format!("unknown product \"{id}\"")))?;
-    let name = block_name(&product.id);
-    if s.doc()?.block(&name).is_none() {
-        let d = s.doc_mut()?;
-        ensure_bold(d);
-        let dash = if product.missing { dashed_scale(d, BORDER_DASH) } else { 1.0 };
-        let block = device_block(product, || d.new_handle(), dash);
-        d.blocks.insert(name.clone(), Arc::new(block));
-    }
+    let name = ensure_device_block(s, product)?;
     // The strip shows the label, or the short code until there is one.
     let label = str_param(p, "label").filter(|l| !l.trim().is_empty()).unwrap_or(&product.code);
     let mut values = Map::new();
@@ -367,6 +364,84 @@ fn run_place(s: &mut Session, p: &Value) -> Result<Value> {
     values.insert("LABEL".into(), json!(truncate_label(label)));
     let h = super::blocks::insert(s, &name, at, 1.0, 0.0, &values)?;
     Ok(json!({ "handle": h.hex() }))
+}
+
+/// The name of `product`'s card block, defined in the drawing if it is not yet.
+fn ensure_device_block(s: &mut Session, product: &Product) -> Result<String> {
+    let name = block_name(&product.id);
+    if s.doc()?.block(&name).is_none() {
+        let d = s.doc_mut()?;
+        ensure_bold(d);
+        let dash = if product.missing { dashed_scale(d, BORDER_DASH) } else { 1.0 };
+        let block = device_block(product, || d.new_handle(), dash);
+        d.blocks.insert(name.clone(), Arc::new(block));
+    }
+    Ok(name)
+}
+
+const MIN_SIZE: f64 = 10.0;
+const MAX_SIZE: f64 = 1000.0;
+
+/// One axis of `csd.size`: absent keeps `was`, null resets to the card's own size, a number sets it.
+fn axis_scale(p: &Value, key: &str, card: f64, was: f64) -> Result<f64> {
+    match p.get(key) {
+        None => Ok(was),
+        Some(Value::Null) => Ok(was.signum()),
+        Some(v) => {
+            let n = v.as_f64().filter(|n| n.is_finite()).ok_or_else(|| bad("csd.size", format!("`{key}` must be a number or null")))?;
+            Ok(was.signum() * n.clamp(MIN_SIZE, MAX_SIZE) / card)
+        }
+    }
+}
+
+/// The device inserts among `hs`, each with its handle.
+fn device_handles(s: &Session, hs: &[Handle]) -> Result<Vec<Handle>> {
+    let d = s.doc()?;
+    Ok(hs.iter().copied().filter(|h| matches!(d.entity(*h).map(|e| &e.kind), Some(EntityKind::Insert(i)) if is_device_block(i))).collect())
+}
+
+fn run_size(s: &mut Session, p: &Value) -> Result<Value> {
+    let hs = device_handles(s, &targets(s, p)?)?;
+    // Validate against every device first so a bad value changes nothing.
+    let mut scales = Vec::new();
+    for h in &hs {
+        if let Some(EntityKind::Insert(i)) = s.doc()?.entity(*h).map(|e| &e.kind) {
+            let sign = |v: f64| if v == 0.0 { 1.0 } else { v };
+            scales.push((*h, axis_scale(p, "w", CARD_W, sign(i.scale.x))?, axis_scale(p, "h", CARD_H, sign(i.scale.y))?));
+        }
+    }
+    let d = s.doc_mut()?;
+    for (h, x, y) in &scales {
+        d.modify_entity(*h, |e| {
+            if let EntityKind::Insert(i) = &mut e.kind {
+                i.scale.x = *x;
+                i.scale.y = *y;
+            }
+        })?;
+    }
+    Ok(json!({ "sized": scales.len() }))
+}
+
+fn run_replace(s: &mut Session, p: &Value) -> Result<Value> {
+    let id = str_param(p, "product").ok_or_else(|| bad("csd.replace", "`product` is required"))?;
+    let library = s.csd_library.clone();
+    let product = library.iter().find(|x| x.id == id).ok_or_else(|| bad("csd.replace", format!("unknown product \"{id}\"")))?;
+    let hs = device_handles(s, &targets(s, p)?)?;
+    let name = ensure_device_block(s, product)?;
+    let d = s.doc_mut()?;
+    let mut replaced = 0;
+    for h in hs {
+        d.modify_entity(h, |e| {
+            let EntityKind::Insert(i) = &mut e.kind else { return };
+            let Some(a) = i.attribs.iter_mut().find(|a| a.tag == "PRODUCT") else { return };
+            if a.text.value != product.id {
+                a.text.value = product.id.clone();
+                i.block = name.clone();
+                replaced += 1;
+            }
+        })?;
+    }
+    Ok(json!({ "replaced": replaced }))
 }
 
 /// Adds the text style the cards' text uses, once.

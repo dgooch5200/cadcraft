@@ -534,3 +534,38 @@ fn wires_saved_with_an_old_route_are_rerouted_on_open() {
     assert!(verts(&t, w).last().unwrap().near(port(&t, b, Side::Left), 1e-9));
     assert!(!t.state().unwrap().is_dirty());
 }
+
+fn insert(s: &Session, h: Handle) -> cadcraft_doc::Insert {
+    let Some(EntityKind::Insert(i)) = s.doc().unwrap().entity(h).map(|e| e.kind.clone()) else { panic!("no insert") };
+    i
+}
+
+#[test]
+fn size_resizes_every_listed_device_and_the_wire_follows() {
+    let (mut s, a, b, w) = setup();
+    let before = verts(&s, w);
+    let r = s.execute("csd.size", &json!({ "handles": [a.hex(), b.hex()], "w": 140 })).unwrap();
+    assert_eq!(r["sized"], 2);
+    assert_eq!(insert(&s, a).scale.x, 2.0);
+    assert_eq!(insert(&s, b).scale.y, 1.0);
+    assert_ne!(before, verts(&s, w));
+    assert!(verts(&s, w)[0].near(port(&s, a, Side::Right), 1e-9));
+    // null resets the axis; hostile values are refused and change nothing.
+    s.execute("csd.size", &json!({ "handles": [a.hex()], "w": null })).unwrap();
+    assert_eq!(insert(&s, a).scale.x, 1.0);
+    assert!(s.execute("csd.size", &json!({ "handles": [a.hex()], "h": "big" })).is_err());
+    s.execute("csd.size", &json!({ "handles": [a.hex()], "h": 1e300 })).unwrap();
+    assert_eq!(insert(&s, a).scale.y, 1000.0 / cadcraft_csd::CARD_H);
+}
+
+#[test]
+fn replace_swaps_the_product_on_the_selection_and_skips_the_same_one() {
+    let (mut s, a, b, _) = setup();
+    s.set_selection(vec![a, b]);
+    let r = s.execute("csd.replace", &json!({ "product": NODE })).unwrap();
+    assert_eq!(r["replaced"], 1);
+    let i = insert(&s, a);
+    assert_eq!(i.block, cadcraft_csd::block_name(NODE));
+    assert!(i.attribs.iter().any(|t| t.tag == "PRODUCT" && t.text.value == NODE));
+    assert!(s.execute("csd.replace", &json!({ "product": "nope" })).is_err());
+}
