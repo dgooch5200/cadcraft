@@ -120,6 +120,9 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.hidepalettes", "Hide Palettes", &["Window", "Hide Palettes"], None),
     ("ui.resetpalettes", "Reset Palettes", &["Window", "Reset Palettes"], None),
     ("ui.csd.library", "Product Library", &[], None),
+    ("wscurrent", "Workspace", &[], None),
+    ("ui.workspace.simple", "Simple", &["Window", "Workspace", "Simple"], None),
+    ("ui.workspace.advanced", "Advanced", &["Window", "Workspace", "Advanced"], None),
     ("ui.start", "Start", &["Window", "Start"], None),
     ("ui.dialog.layers", "Layer Properties Manager", &["Window", "Layers"], None),
     ("ui.dialog.blocks", "Blocks", &["Window", "Blocks"], None),
@@ -165,6 +168,12 @@ fn route_ui_subsystems(app: &mut CadApp, id: &str, params: &Value) -> Option<Res
     }
     if let Some(r) = crate::managers::route(app, id, params) {
         return Some(r);
+    }
+    if let Some(name) = id.strip_prefix("ui.workspace.") {
+        return Some(crate::docking::wscurrent(app, &json!({"name": name})));
+    }
+    if id == "wscurrent" {
+        return Some(crate::docking::wscurrent(app, params).inspect_err(|e| app.session.echo(e.clone())));
     }
     if id == "ui.shortcuts" {
         return Some(crate::keys::command(app, params));

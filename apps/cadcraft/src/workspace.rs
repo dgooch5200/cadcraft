@@ -25,6 +25,9 @@ pub struct Workspace {
 
 fn snapshot(ui: &UiState) -> Result<Value, String> {
     cadcraft_ui_egui::docking::validate(&ui.docking)?;
+    for layout in ui.workspace_layouts.values() {
+        cadcraft_ui_egui::docking::validate(layout)?;
+    }
     if !matches!(ui.toolset_tab.as_str(), "Drafting" | "Modeling") {
         return Err("toolsetTab must be Drafting or Modeling".into());
     }
@@ -37,6 +40,8 @@ fn snapshot(ui: &UiState) -> Result<Value, String> {
     Ok(json!({
         "docking": ui.docking,
         "dockingVersion": cadcraft_ui_egui::docking::LAYOUT_VERSION,
+        "workspace": ui.workspace,
+        "workspaceLayouts": ui.workspace_layouts,
         "showToolsets": ui.show_toolsets,
         "showPalettes": ui.show_palettes,
         "showToolbar": ui.show_toolbar,
@@ -76,17 +81,40 @@ fn read(path: &Path) -> Result<Option<UiState>, String> {
     // A layout from before the current shape (split frames, saved without `dockingVersion`)
     // gives way to the default, its hidden panels with it.
     let mut fields = workspace.clone();
-    let (docking, version) = match fields.as_object_mut() {
-        Some(fields) => (fields.remove("docking"), fields.remove("dockingVersion")),
-        None => (None, None),
+    // The workspace name and the other workspaces' layouts recover the same way: anything
+    // unknown or invalid gives way to the default.
+    let (docking, version, name, others) = match fields.as_object_mut() {
+        Some(fields) => (fields.remove("docking"), fields.remove("dockingVersion"), fields.remove("workspace"), fields.remove("workspaceLayouts")),
+        None => (None, None, None, None),
     };
     let current = version.and_then(|version| version.as_u64()).is_some_and(|version| version >= u64::from(cadcraft_ui_egui::docking::LAYOUT_VERSION));
     let mut ui: UiState = serde_json::from_value(fields).map_err(|error| format!("{}: invalid workspace: {error}", path.display()))?;
-    if let Some(docking) = docking.filter(|_| current)
-        && let Ok(docking) = serde_json::from_value::<cadcraft_ui_egui::docking::Workspace>(docking)
-        && cadcraft_ui_egui::docking::validate(&docking).is_ok()
-    {
-        ui.docking = docking;
+    use cadcraft_ui_egui::docking::{Workspace as Layout, WorkspaceName, validate};
+    let valid = |value: Value| serde_json::from_value::<Layout>(value).ok().filter(|layout| validate(layout).is_ok());
+    // A file from before workspaces holds the full layout: it is Advanced.
+    ui.workspace = match name {
+        None => WorkspaceName::Advanced,
+        Some(name) => serde_json::from_value::<WorkspaceName>(name).unwrap_or_default(),
+    };
+    ui.workspace_layouts.clear();
+    match docking.filter(|_| current).and_then(valid) {
+        Some(docking) => ui.docking = docking,
+        None => {
+            ui.docking = ui.workspace.default_layout();
+            // Simple's default has no Layers or Properties for the saved switch to keep open.
+            if ui.workspace == WorkspaceName::Simple {
+                ui.show_palettes = false;
+            }
+        }
+    }
+    if current {
+        for (key, layout) in others.and_then(|others| others.as_object().cloned()).unwrap_or_default() {
+            if let Some(other) = WorkspaceName::parse(&key).filter(|other| *other != ui.workspace)
+                && let Some(layout) = valid(layout)
+            {
+                ui.workspace_layouts.insert(other, layout);
+            }
+        }
     }
     // Old or hand-edited files cannot reopen a dialog or replace the active drawing view.
     ui.dialog = None;
@@ -250,6 +278,7 @@ mod tests {
         let (mut store, _, _) = Workspace::at(Some(path.clone()));
         let mut ui = UiState::default();
         let mut app = cadcraft_ui_egui::CadApp::new(cadcraft_engine::Session::default(), Default::default());
+        app.run("wscurrent", json!({"name": "Advanced"})).unwrap();
         app.run("ui.dock", json!({"operation":"move", "panel":"layers", "target":"properties", "zone":"left"})).unwrap();
         app.run("ui.dock", json!({"operation":"float", "panel":"properties", "rect":[120,90,340,410]})).unwrap();
         ui.docking = app.ui.docking;
@@ -295,6 +324,7 @@ mod tests {
         assert_eq!(ui.history_lines, 4);
         assert!(!ui.show_toolsets && ui.show_palettes && !ui.show_toolbar);
         assert_eq!(ui.docking.layout, default_workspace().layout);
+        assert_eq!(ui.workspace, cadcraft_ui_egui::docking::WorkspaceName::Advanced, "a file from before workspaces is the full layout");
         assert!(ui.docking.hidden.is_empty(), "{:?}", ui.docking.hidden);
         fs::remove_dir_all(directory).unwrap();
     }
@@ -341,7 +371,59 @@ mod tests {
             assert_eq!(restored.toolset_tab, "Modeling");
             assert_eq!(restored.collapsed_groups, ["Draw"]);
             assert_eq!(restored.history_lines, 7);
-            assert_eq!(serde_json::to_value(restored.docking).unwrap(), serde_json::to_value(UiState::default().docking).unwrap());
+            assert_eq!(
+                serde_json::to_value(restored.docking).unwrap(),
+                serde_json::to_value(cadcraft_ui_egui::docking::default_workspace()).unwrap()
+            );
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn current_workspace_and_every_layout_survive_a_reload() {
+        use cadcraft_ui_egui::docking::{Panel, WorkspaceName, set_workspace};
+        let directory = temp_dir();
+        let path = directory.join("workspace.json");
+        let (mut store, _, _) = Workspace::at(Some(path.clone()));
+        let mut app = cadcraft_ui_egui::CadApp::new(cadcraft_engine::Session::default(), Default::default());
+        set_workspace(&mut app, WorkspaceName::Advanced);
+        app.run("ui.dock", json!({"operation":"float", "panel":"layers", "rect":[120,90,340,410]})).unwrap();
+        set_workspace(&mut app, WorkspaceName::Simple);
+        store.save_if_changed(&app.ui, Instant::now()).unwrap();
+        let (_, restored, error) = Workspace::at(Some(path));
+        assert!(error.is_none());
+        let mut restored = restored.unwrap();
+        assert_eq!(restored.workspace, WorkspaceName::Simple);
+        assert!(!restored.docking.layout.contains(&Panel::Layers) && !restored.show_palettes);
+        assert_eq!(restored.workspace_layouts.get(&WorkspaceName::Advanced), app.ui.workspace_layouts.get(&WorkspaceName::Advanced));
+        let mut back = cadcraft_ui_egui::CadApp::new(cadcraft_engine::Session::default(), Default::default());
+        std::mem::swap(&mut back.ui, &mut restored);
+        set_workspace(&mut back, WorkspaceName::Advanced);
+        assert_eq!(back.ui.docking.layout.floating[0].rect, [120.0, 90.0, 340.0, 410.0]);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn unknown_workspace_or_malformed_layouts_fall_back_to_defaults() {
+        use cadcraft_ui_egui::docking::{WorkspaceName, simple_workspace};
+        let directory = temp_dir();
+        let path = directory.join("workspace.json");
+        let version = cadcraft_ui_egui::docking::LAYOUT_VERSION;
+        let simple = serde_json::to_value(simple_workspace()).unwrap();
+        for (workspace, layouts) in [
+            (json!("Expert"), json!({})),
+            (json!(7), json!(null)),
+            (json!("Simple"), json!({"Advanced": {"layout": false}, "Bogus": simple.clone(), "Simple": simple.clone()})),
+        ] {
+            let body =
+                json!({"workspace": workspace, "workspaceLayouts": layouts, "dockingVersion": version, "docking": {"layout": false, "hidden": []}});
+            fs::write(&path, serde_json::to_vec(&json!({"version": 1, "workspace": body})).unwrap()).unwrap();
+            let (_, restored, error) = Workspace::at(Some(path.clone()));
+            assert!(error.is_none(), "{error:?}");
+            let ui = restored.unwrap();
+            assert_eq!(ui.docking, ui.workspace.default_layout());
+            assert!(ui.workspace_layouts.is_empty(), "{:?}", ui.workspace_layouts.keys());
+            assert_eq!(ui.workspace, if workspace == json!("Simple") { WorkspaceName::Simple } else { WorkspaceName::default() });
         }
         fs::remove_dir_all(directory).unwrap();
     }
@@ -376,7 +458,7 @@ mod tests {
         let directory = temp_dir();
         let path = directory.join("workspace.json");
         let (mut store, _, _) = Workspace::at(Some(path.clone()));
-        let mut ui = UiState { show_palettes: false, ..Default::default() };
+        let mut ui = UiState { history_lines: 7, ..Default::default() };
         store.save_if_changed(&ui, Instant::now()).unwrap();
         let good = fs::read(&path).unwrap();
         ui.collapsed_groups = vec!["x".repeat(257)];
@@ -392,13 +474,13 @@ mod tests {
         let (mut store, _, _) = Workspace::at(Some(path.clone()));
         // Simulate a destination becoming unavailable after startup.
         fs::create_dir(&path).unwrap();
-        let ui = UiState { show_palettes: false, ..Default::default() };
+        let ui = UiState { history_lines: 7, ..Default::default() };
         let first_error = store.save_if_changed(&ui, Instant::now()).unwrap_err();
         fs::remove_dir(&path).unwrap();
         assert_eq!(store.save_if_changed(&ui, Instant::now()).unwrap_err(), first_error);
         assert!(!path.exists(), "ordinary frames must not retry disk writes");
         store.save_on_exit(&ui).unwrap();
-        assert!(!read(&path).unwrap().unwrap().show_palettes);
+        assert_eq!(read(&path).unwrap().unwrap().history_lines, 7);
         fs::remove_dir_all(directory).unwrap();
     }
 }

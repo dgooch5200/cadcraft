@@ -30,6 +30,7 @@ fn copy_in_one_drawing_and_paste_in_another() {
         plot: None,
     });
     let mut app = CadApp::new(Session::new(), Services::default());
+    app.run("wscurrent", json!({"name": "Advanced"})).unwrap();
     app.run("line", json!({ "points": [[0, 0], [10, 0]] })).unwrap();
     app.run("circle", json!({ "center": [5, 5], "radius": 2 })).unwrap();
     app.run("block", json!({ "name": "DOT", "base": [5, 5], "handles": [app.session.doc().unwrap().model.iter().nth(1).unwrap().handle.hex()], "keep": "convert" }))

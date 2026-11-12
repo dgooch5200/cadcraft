@@ -328,6 +328,16 @@ fn draw_status_toggles(
             painter.hline(br.x_range().shrink(4.0), br.bottom() - 1.0, Stroke::new(1.5, t.toggle_on));
         }
         icons::describe_control(ui, &resp, tip, Some(on), false);
+        if icon == Icon::Workspace {
+            egui::Popup::menu(&resp).show(|ui| {
+                for name in crate::docking::WorkspaceName::ALL {
+                    let current = app.ui.workspace == name;
+                    if ui.add(egui::Button::selectable(current, crate::i18n::t(name.as_str()))).clicked() {
+                        let _ = app.run("wscurrent", json!({ "name": name.as_str() }));
+                    }
+                }
+            });
+        }
         if resp.on_hover_text(crate::i18n::t(tip)).clicked() {
             toggle_cmd = Some(cmd);
         }

@@ -141,41 +141,63 @@ fn command_known(id: &str) -> bool {
     cadcraft_engine::find_command(id).is_some() || crate::menus::is_ui_command(id)
 }
 
+/// The Simple workspace shows the Lighting group alone: no tabs, no other groups.
+fn simple(app: &CadApp) -> bool {
+    app.ui.workspace == crate::docking::WorkspaceName::Simple
+}
+
+fn shows_lighting(app: &CadApp) -> bool {
+    simple(app) || app.ui.toolset_tab == "Drafting"
+}
+
+/// The groups drawn after Lighting.
+fn shown_groups(app: &CadApp) -> &'static [(&'static str, &'static [Tool], &'static [Tool])] {
+    if simple(app) {
+        &[]
+    } else if app.ui.toolset_tab == "Drafting" {
+        DRAFTING
+    } else {
+        MODELING
+    }
+}
+
 /// Tool Sets strip with Drafting/Modeling tabs, their command buttons and the collapse control.
 pub fn toolsets(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
+    let tab_h = if simple(app) { 0.0 } else { 28.0 };
     egui::Frame::NONE.fill(t.panel).show(ui, |ui| {
         let r = ui.max_rect();
         let p = ui.painter().clone();
-        // Tabs.
-        let tab_h = 28.0;
-        let mut x = r.left();
-        for name in ["Drafting", "Modeling"] {
-            let w = 92.0;
-            let tr = Rect::from_min_size(pos2(x, r.top()), vec2(w, tab_h));
-            let active = app.ui.toolset_tab == name;
-            let resp = ui.interact(tr, ui.scope_id().with(("ts", name)), Sense::click());
-            p.rect_filled(tr, 0.0, if active { t.tab_active } else { t.chrome });
-            p.text(
-                tr.center(),
-                egui::Align2::CENTER_CENTER,
-                crate::i18n::t(name),
-                egui::FontId::proportional(13.5),
-                if active { t.text } else { t.text_dim },
-            );
-            icons::describe_control(ui, &resp, crate::i18n::t(name), Some(active), true);
-            if resp.clicked() {
-                app.ui.toolset_tab = name.into();
+        if tab_h > 0.0 {
+            // Tabs.
+            let mut x = r.left();
+            for name in ["Drafting", "Modeling"] {
+                let w = 92.0;
+                let tr = Rect::from_min_size(pos2(x, r.top()), vec2(w, tab_h));
+                let active = app.ui.toolset_tab == name;
+                let resp = ui.interact(tr, ui.scope_id().with(("ts", name)), Sense::click());
+                p.rect_filled(tr, 0.0, if active { t.tab_active } else { t.chrome });
+                p.text(
+                    tr.center(),
+                    egui::Align2::CENTER_CENTER,
+                    crate::i18n::t(name),
+                    egui::FontId::proportional(13.5),
+                    if active { t.text } else { t.text_dim },
+                );
+                icons::describe_control(ui, &resp, crate::i18n::t(name), Some(active), true);
+                if resp.clicked() {
+                    app.ui.toolset_tab = name.into();
+                }
+                x += w;
             }
-            x += w;
-        }
-        p.rect_filled(Rect::from_min_max(pos2(x, r.top()), pos2(r.right(), r.top() + tab_h)), 0.0, t.chrome);
-        let cr = Rect::from_center_size(pos2(r.right() - 14.0, r.top() + tab_h / 2.0), vec2(14.0, 14.0));
-        let cresp = ui.interact(cr, ui.scope_id().with("ts_collapse"), Sense::click());
-        icons::paint(&p, cr, Icon::ChevronLeft, false);
-        icons::describe_control(ui, &cresp, "Collapse Tool Sets", None, false);
-        if cresp.on_hover_text(crate::tl!("Collapse Tool Sets")).clicked() {
-            app.ui.show_toolsets = false;
+            p.rect_filled(Rect::from_min_max(pos2(x, r.top()), pos2(r.right(), r.top() + tab_h)), 0.0, t.chrome);
+            let cr = Rect::from_center_size(pos2(r.right() - 14.0, r.top() + tab_h / 2.0), vec2(14.0, 14.0));
+            let cresp = ui.interact(cr, ui.scope_id().with("ts_collapse"), Sense::click());
+            icons::paint(&p, cr, Icon::ChevronLeft, false);
+            icons::describe_control(ui, &cresp, "Collapse Tool Sets", None, false);
+            if cresp.on_hover_text(crate::tl!("Collapse Tool Sets")).clicked() {
+                app.ui.show_toolsets = false;
+            }
         }
         let body = Rect::from_min_max(pos2(r.left(), r.top() + tab_h), r.max);
         let mut clicked: Option<&'static str> = None;
@@ -185,8 +207,8 @@ pub fn toolsets(app: &mut CadApp, ui: &mut egui::Ui) {
         ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-                let groups: &[(&str, &[Tool], &[Tool])] = if app.ui.toolset_tab == "Drafting" { DRAFTING } else { MODELING };
-                if app.ui.toolset_tab == "Drafting" {
+                let groups = shown_groups(app);
+                if shows_lighting(app) {
                     let collapsed = app.ui.collapsed_groups.iter().any(|g| g == "Lighting");
                     if group_title(ui, "Lighting", collapsed).1.clicked() {
                         toggle_group = Some("Lighting".to_string());
@@ -1521,6 +1543,19 @@ mod tests {
     use cadcraft_engine::Session;
     use egui::{Color32, Shape};
     use egui_kittest::kittest::Queryable;
+
+    #[test]
+    fn simple_workspace_shows_only_the_lighting_group() {
+        let mut app = CadApp::new(Session::default(), Services::default());
+        app.run("wscurrent", json!({"name": "advanced"})).unwrap();
+        assert!(shows_lighting(&app) && !shown_groups(&app).is_empty());
+        app.ui.toolset_tab = "Modeling".into();
+        assert!(!shows_lighting(&app));
+        app.run("wscurrent", json!({"name": "simple"})).unwrap();
+        assert!(shows_lighting(&app) && shown_groups(&app).is_empty());
+        app.ui.toolset_tab = "Drafting".into();
+        assert!(shows_lighting(&app) && shown_groups(&app).is_empty());
+    }
 
     #[test]
     fn shown_part_takes_off_only_the_number_tag() {

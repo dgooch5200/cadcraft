@@ -92,8 +92,11 @@ pub const RECENT_FILES: usize = 9;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UiState {
+    /// The current workspace's panel layout.
     pub docking: docking::Workspace,
-
+    pub workspace: docking::WorkspaceName,
+    /// The layouts of the other workspaces, kept for when they come back.
+    pub workspace_layouts: std::collections::BTreeMap<docking::WorkspaceName, docking::Workspace>,
     pub interface_language: i18n::Preference,
     pub show_toolsets: bool,
     pub show_palettes: bool,
@@ -192,11 +195,13 @@ impl SaveFormat {
 impl Default for UiState {
     fn default() -> Self {
         UiState {
-            docking: docking::default_workspace(),
+            docking: docking::DEFAULT_WORKSPACE.default_layout(),
+            workspace: docking::DEFAULT_WORKSPACE,
+            workspace_layouts: Default::default(),
 
             interface_language: i18n::Preference::default(),
             show_toolsets: true,
-            show_palettes: true,
+            show_palettes: docking::DEFAULT_WORKSPACE == docking::WorkspaceName::Advanced,
             show_toolbar: true,
             show_file_tabs: true,
             show_status_bar: true,
@@ -628,7 +633,10 @@ impl CadApp {
             let first = text.split_whitespace().next().unwrap_or("");
             // `cmd {json}` is a programmatic call: the engine runs it with those parameters.
             let json_form = text.trim_start().get(first.len()..).is_some_and(|rest| rest.trim_start().starts_with('{'));
-            if !first.is_empty() && !json_form && menus::run_ui_command(self, &first.to_ascii_lowercase(), &Value::Null).is_some() {
+            // `wscurrent Simple`: the name is the rest of the line.
+            let rest = text.trim_start().get(first.len()..).unwrap_or("").trim();
+            let params = if first.eq_ignore_ascii_case("wscurrent") && !rest.is_empty() { json!({"name": rest}) } else { Value::Null };
+            if !first.is_empty() && !json_form && menus::run_ui_command(self, &first.to_ascii_lowercase(), &params).is_some() {
                 return None;
             }
         }
@@ -661,6 +669,7 @@ impl CadApp {
             "saveFormat": self.ui.save_format.as_str(),
             "saveVersion": self.ui.save_version,
             "quickcalc": self.quickcalc.prefs(),
+            "workspace": self.ui.workspace.as_str(),
         });
         if self.spacemouse.settings != spacemouse::Settings::default() {
             prefs["spacemouse"] = json!(self.spacemouse.settings);
@@ -683,6 +692,9 @@ impl CadApp {
     /// Restore preferences saved by [`Self::prefs_json`]; unknown or malformed values are ignored.
     pub fn load_prefs(&mut self, json: &str) {
         let Ok(v) = serde_json::from_str::<Value>(json) else { return };
+        if let Some(name) = v.get("workspace").and_then(Value::as_str).and_then(docking::WorkspaceName::parse) {
+            docking::set_workspace(self, name);
+        }
         if let Some(calculator) = v.get("quickcalc") {
             self.quickcalc.load_prefs(calculator);
         }
