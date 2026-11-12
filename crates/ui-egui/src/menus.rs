@@ -821,6 +821,12 @@ pub fn activate(app: &mut CadApp, id: &str) {
         return;
     }
     app.cmd.buffer.clear();
+    if id == "csd.place" && app.session.csd_armed.is_none() {
+        app.ui.toolset_tab = "Drafting".into();
+        app.ui.collapsed_groups.retain(|g| g != "Lighting");
+        app.session.echo("Pick a product in the Lighting palette to place it.");
+        return;
+    }
     app.start(id);
 }
 

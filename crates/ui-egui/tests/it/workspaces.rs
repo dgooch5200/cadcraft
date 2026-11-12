@@ -100,3 +100,14 @@ fn reset_palettes_keeps_the_current_workspace() {
     assert_eq!(app.ui.workspace, WorkspaceName::Advanced);
     assert!(app.ui.docking.layout.contains(&Panel::Properties) && app.ui.show_palettes);
 }
+
+#[test]
+fn place_from_the_menu_without_a_product_points_at_the_lighting_palette() {
+    let mut app = advanced();
+    app.ui.toolset_tab = "Modeling".into();
+    app.ui.collapsed_groups.push("Lighting".into());
+    cadcraft_ui_egui::menus::activate(&mut app, "csd.place");
+    assert!(app.session.running.is_none());
+    assert_eq!(app.ui.toolset_tab, "Drafting");
+    assert!(!app.ui.collapsed_groups.iter().any(|g| g == "Lighting"));
+}
