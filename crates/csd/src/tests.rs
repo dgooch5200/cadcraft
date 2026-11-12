@@ -228,3 +228,15 @@ fn hostile_library_input_is_an_error_or_defaults() {
     assert_eq!((p.name.as_str(), p.code.as_str(), p.cat.as_str(), p.color), ("First", "12", "Uncategorized", 0x555555));
     assert_eq!((p.ports(Protocol::Dmx), p.ports(Protocol::Network), p.poe_watts, p.channels), ((0, 1000), (7, 0), 0.0, 1));
 }
+
+#[test]
+fn legible_darkens_light_brand_colours_only() {
+    let luma = |c: u32| {
+        let cadcraft_doc::color::Rgb(r, g, b) = cadcraft_doc::color::Rgb::from_u32(c);
+        (0.2126 * f64::from(r) + 0.7152 * f64::from(g) + 0.0722 * f64::from(b)) / 255.0
+    };
+    assert_eq!(legible(0x1565c0), 0x1565c0);
+    for light in [0x65edfa, 0xf7ae41, 0xffffff] {
+        assert!((0.3..0.46).contains(&luma(legible(light))), "{light:x}");
+    }
+}

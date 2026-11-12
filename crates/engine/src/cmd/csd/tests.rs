@@ -228,9 +228,9 @@ fn connect_adds_two_dots_and_a_pill_on_the_wire() {
     assert_eq!(d.len(), 3);
     let path = verts(&s, w);
     let at = |role| d.iter().find(|x| x.2 == role).unwrap().3.insert.xy();
-    // The dots rest against the cards, 4.5 out along the first and last legs.
-    assert!(at(Deco::Start).near(path[0] + Vec2::new(4.5, 0.0), 1e-9));
-    assert!(at(Deco::End).near(path[path.len() - 1] - Vec2::new(4.5, 0.0), 1e-9));
+    // The dots sit on the ports, over the cards' anchor dots.
+    assert!(at(Deco::Start).near(path[0], 1e-9));
+    assert!(at(Deco::End).near(path[path.len() - 1], 1e-9));
     // The pill sits on the longest leg.
     let p = at(Deco::Pill);
     assert!(path.windows(2).any(|w| (w[0].x == w[1].x && p.x == w[0].x || w[0].y == w[1].y && p.y == w[0].y) && w[0].dist(w[1]) >= 40.0));

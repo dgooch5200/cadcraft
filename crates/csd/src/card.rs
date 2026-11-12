@@ -2,7 +2,9 @@
 //! fonts' relative sizes follow the web app's DeviceCard and Wires (dark theme).
 
 use cadcraft_doc::color::{Color, Rgb};
-use cadcraft_doc::{Attrib, AttribModes, AttribProps, Block, Entity, EntityKind, HAlign, Handle, Hatch, HatchLoop, LwPolyline, Text, VAlign};
+use cadcraft_doc::{
+    Attrib, AttribModes, AttribProps, Block, Entity, EntityKind, HAlign, Handle, Hatch, HatchLoop, LwPolyline, Text, TextStyle, VAlign, Wipeout,
+};
 use cadcraft_geom::{PolyVertex, Vec2};
 
 use crate::{Deco, Product, Protocol, Side};
@@ -31,6 +33,10 @@ const CODE_CHARS: usize = 9;
 const CODE_LINES: usize = 3;
 /// Width the strip text may use, in the estimate of `truncate_label`.
 const LABEL_W: f64 = 60.0;
+/// The text style of every card and badge text. The drawing needs it (see [`bold_style`]).
+pub const BOLD_STYLE: &str = "CSDBOLD";
+/// Darkest luma, 0 to 1, a text colour may have on the paper; see [`legible`].
+const MAX_TEXT_LUMA: f64 = 0.45;
 
 /// A wire's place on one side of a card: `index` of `total`, counted from the top or the left,
 /// and its `lane`, how many wires turn between it and the edge's own end of the fan.
@@ -207,6 +213,34 @@ fn mix(a: u32, b: u32, t: f64) -> u32 {
     ch(ar, br) << 16 | ch(ag, bg) << 8 | ch(ab, bb)
 }
 
+/// The bold face the web app sets its text in. Installed TrueType fonts are found by name at run
+/// time (never bundled); where this one is missing the text falls back to the thin stroke font.
+/// ponytail: only "Arial Bold" is named; add a family list when a platform lacks it.
+pub fn bold_style() -> TextStyle {
+    TextStyle { name: BOLD_STYLE.into(), font: "Arial Bold".into(), ..TextStyle::default() }
+}
+
+/// `rgb` darkened, keeping its hue, until its luma is at most [`MAX_TEXT_LUMA`]: brand colours
+/// like cyan and orange are unreadable as text on the paper. Dark colours are unchanged.
+/// ponytail: sRGB luma, not a contrast ratio against the paper.
+pub fn legible(rgb: u32) -> u32 {
+    let Rgb(r, g, b) = Rgb::from_u32(rgb);
+    let luma = (0.2126 * f64::from(r) + 0.7152 * f64::from(g) + 0.0722 * f64::from(b)) / 255.0;
+    if luma <= MAX_TEXT_LUMA {
+        return rgb;
+    }
+    // INK is grey, so its luma is its channel.
+    let ink = f64::from(INK & 0xff) / 255.0;
+    mix(INK, rgb, (luma - MAX_TEXT_LUMA) / (luma - ink))
+}
+
+/// A mask that hides what was drawn before it, so the fill after it sits over a wire (the GPU
+/// canvas draws every wide line after every fill; only a mask starts a new draw-order group).
+/// `shape` must lie inside that fill, as the mask is background-coloured.
+fn mask(boundary: Vec<Vec2>) -> EntityKind {
+    EntityKind::Wipeout(Wipeout { boundary })
+}
+
 fn vertex(x: f64, y: f64, bulge: f64) -> PolyVertex {
     PolyVertex { p: Vec2 { x, y }, bulge, start_width: 0.0, end_width: 0.0 }
 }
@@ -267,7 +301,7 @@ fn text(at: Vec2, height: f64, value: &str) -> Text {
         rotation: 0.0,
         width_factor: 1.0,
         oblique: 0.0,
-        style: "Standard".into(),
+        style: BOLD_STYLE.into(),
         halign: HAlign::Center,
         valign: VAlign::Middle,
     }
@@ -313,6 +347,9 @@ pub fn device_block(product: &Product, mut new_handle: impl FnMut() -> Handle, d
     let (sx, strip_top) = (hw - BORDER, -hh + STRIP_H);
     let r = RADIUS - BORDER - BORDER / 2.0 - 0.75;
     p.add(outline(round_rect(-sx, -hh, sx, strip_top, [r, r, 0.0, 0.0]), BORDER), product.color);
+    // The outline's mitred top corners leave a notch against the card's border; the rule fills it.
+    let (rx, ry) = (sx + BORDER / 2.0, BORDER / 2.0);
+    p.add(fill(round_rect(-rx, strip_top - ry, rx, strip_top + ry, [0.0; 4])), product.color);
 
     let lines = wrap_code(&product.code);
     let body_mid = (hh + strip_top) / 2.0;
@@ -321,8 +358,8 @@ pub fn device_block(product: &Product, mut new_handle: impl FnMut() -> Handle, d
         p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: first - i as f64 * (CODE_H + 3.0) }, CODE_H, line)), INK);
     }
     let (dot, edge) = (mix(ANCHOR, PAPER, 0.8), mix(0xffffff, mix(ANCHOR, PAPER, 0.8), 0.45));
-    for c in [(0.0, hh), (0.0, -hh), (hw, 0.0), (-hw, 0.0)].map(|(x, y)| Vec2 { x: x + x.signum() * BORDER / 2.0, y: y + y.signum() * BORDER / 2.0 })
-    {
+    // The anchors sit on the edge midpoints, where the wires' end dots land.
+    for c in [(0.0, CARD_H / 2.0), (0.0, -CARD_H / 2.0), (CARD_W / 2.0, 0.0), (-CARD_W / 2.0, 0.0)].map(|(x, y)| Vec2 { x, y }) {
         p.add(fill(circle(c, 5.0)), dot);
         p.add(outline(circle(c, 4.25), BORDER), edge);
     }
@@ -340,7 +377,7 @@ pub fn device_block(product: &Product, mut new_handle: impl FnMut() -> Handle, d
     };
     p.add(attdef("PRODUCT", "Product", Vec2::ZERO, &product.id, true), INK);
     p.add(attdef("NAME", "Name", Vec2::ZERO, "", true), INK);
-    p.add(attdef("LABEL", "Label", Vec2 { x: 0.0, y: (-hh + strip_top) / 2.0 }, "", false), product.color);
+    p.add(attdef("LABEL", "Label", Vec2 { x: 0.0, y: (-hh + strip_top) / 2.0 }, "", false), legible(product.color));
     p.block
 }
 
@@ -358,22 +395,28 @@ pub fn deco_block(protocol: Protocol, deco: Deco, mut new_handle: impl FnMut() -
         let label = protocol.label();
         let (hw, hh) = ((label.chars().count() as f64 * 5.4 + 10.0).max(26.0) / 2.0, PILL_H / 2.0);
         let shape = round_rect(-hw, -hh, hw, hh, [3.0; 4]);
+        // Inside the rounded corners, which a rectangle's own corners would leave.
+        let (mx, my) = (hw - 1.0, hh - 1.0);
+        p.add(mask([(-mx, -my), (mx, -my), (mx, my), (-mx, my)].map(|(x, y)| Vec2 { x, y }).to_vec()), color);
         p.add(fill(shape.clone()), PAPER);
         p.add(outline(shape, 1.0), mix(color, PAPER, 0.45));
-        p.add(EntityKind::Text(text(Vec2::ZERO, LABEL_H, label)), color);
+        p.add(EntityKind::Text(text(Vec2::ZERO, LABEL_H, label)), legible(color));
     } else {
+        // A 12-gon inscribed in the disc.
+        let ring = (0..12).map(|i| Vec2::from_angle(f64::from(i) * std::f64::consts::TAU / 12.0) * (TERM_R - 0.5)).collect();
+        p.add(mask(ring), color);
         p.add(fill(circle(Vec2::ZERO, TERM_R)), color);
         p.add(outline(circle(Vec2::ZERO, TERM_R), BORDER), PAPER);
     }
     p.block
 }
 
-/// Where a wire's decorations go: its end dots resting against the cards, and its pill on the
-/// middle of the longest segment (the first, when several tie).
+/// Where a wire's decorations go: its end dots on the ports, over the card's grey anchor dot,
+/// and its pill on the middle of the longest segment (the first, when several tie).
 /// ponytail: no user-set pill position (the TS labelT) and no pill on the router's free segment.
 pub fn deco_points(path: &[Vec2]) -> Option<[(Deco, Vec2); 3]> {
     let (a, b) = (*path.first()?, *path.get(1)?);
-    let (y, z) = (*path.get(path.len().checked_sub(2)?)?, *path.last()?);
+    let z = *path.last()?;
     let mut longest = (a, b);
     for w in path.windows(2) {
         if let [p, q] = w
@@ -382,9 +425,5 @@ pub fn deco_points(path: &[Vec2]) -> Option<[(Deco, Vec2); 3]> {
             longest = (*p, *q);
         }
     }
-    Some([
-        (Deco::Start, a + (b - a).normalized() * TERM_R),
-        (Deco::End, z + (y - z).normalized() * TERM_R),
-        (Deco::Pill, (longest.0 + longest.1) * 0.5),
-    ])
+    Some([(Deco::Start, a), (Deco::End, z), (Deco::Pill, (longest.0 + longest.1) * 0.5)])
 }
