@@ -830,7 +830,10 @@ pub fn activate(app: &mut CadApp, id: &str) {
 /// and the drawing command does not run.
 pub fn activate_native(app: &mut CadApp, ctx: &egui::Context, id: &str) {
     let (Some(window), Some(text)) = (text_field_window(ctx), text_command(id, ctx.os().is_mac())) else {
-        activate(app, id);
+        // Behind the sign-in card only its own text fields take menu commands.
+        if !crate::signin::gated(app) {
+            activate(app, id);
+        }
         return;
     };
     match text {

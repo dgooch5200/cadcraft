@@ -167,3 +167,12 @@ fn sign_out_is_refused_when_nobody_is_signed_in() {
     let mut h = harness(None);
     assert!(h.state_mut().run("ui.signout", json!(null)).is_err());
 }
+
+#[test]
+fn native_menu_commands_wait_for_sign_in() {
+    let mut h = harness(Some(Fake::default()));
+    settle(&mut h, form_shown);
+    let ctx = h.ctx.clone();
+    cadcraft_ui_egui::menus::activate_native(h.state_mut(), &ctx, "line");
+    assert!(h.state().session.running.is_none(), "LINE started behind the card");
+}

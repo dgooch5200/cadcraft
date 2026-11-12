@@ -146,7 +146,9 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
     crate::modal::instant(ctx, egui::Id::unique("signin_card")).frame(card).backdrop_color(Color32::from_black_alpha(150)).show(ctx, |ui| {
         ui.set_width(272.0);
         ui.spacing_mut().item_spacing.y = 4.0;
-        ui.label(RichText::new(crate::tl!("CADCraft")).size(15.0).strong());
+        // The light theme's fields are as pale as the card.
+        ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::new(1.0, t.border);
+        ui.label(RichText::new(crate::tl!("CADCraft")).size(18.0).strong());
         ui.label(RichText::new(crate::tl!("Sign in with your ChamSys Designer account")).size(12.0).color(t.text_dim));
         ui.add_space(16.0);
         if st.phase == Phase::Resuming {
