@@ -16,7 +16,7 @@ use cadcraft_geom::{PolyVertex, Vec2};
 use serde_json::{Map, Value, json};
 
 use super::curves::handle_param;
-use super::{CommandSpec, bad, point_req, str_param};
+use super::{CommandSpec, always, bad, point_req, str_param};
 use crate::{EngineError, Result, Session};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -30,16 +30,20 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("csd.library.load", "Load Product Library", run_library_load)
             .params("{path: JSON library file} → {count}")
-            .noundo(),
+            .noundo()
+            .enabled(always),
         CommandSpec::new("csd.library.list", "List Products", run_library_list)
             .params("{query? (id, name or code contains), category?} → {products: [records without img], categories: [cat, first-seen order]}")
-            .noundo(),
+            .noundo()
+            .enabled(always),
         CommandSpec::new("csd.library.set", "Set Product Library", run_library_set)
             .params("{products: [records]} → {count}; a record without `img` (or other extra keys) keeps the old product's")
-            .noundo(),
+            .noundo()
+            .enabled(always),
         CommandSpec::new("csd.library.save", "Save Product Library", run_library_save)
             .params("{path} → {path, count}")
-            .noundo(),
+            .noundo()
+            .enabled(always),
     ]
 }
 

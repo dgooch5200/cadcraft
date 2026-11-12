@@ -802,6 +802,7 @@ name = "cadcraft-ui-egui"
 version = "0.20.1"
 dependencies = [
  "cadcraft-color",
+ "cadcraft-csd",
  "cadcraft-doc",
  "cadcraft-engine",
  "cadcraft-fonts",

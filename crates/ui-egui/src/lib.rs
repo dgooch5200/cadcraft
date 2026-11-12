@@ -30,6 +30,7 @@ pub mod cmdline;
 pub mod context_menu;
 pub mod control;
 pub mod credits;
+pub mod csd_library;
 pub mod dialogs;
 pub mod docking;
 pub mod fault;
@@ -118,6 +119,8 @@ pub struct UiState {
     /// Show an in-window menu bar (platforms without a native menu bar, or on request).
     pub in_window_menu: bool,
     pub start_tab: bool,
+    #[serde(skip)]
+    pub csd_lib: csd_library::State,
     pub dialog: Option<String>,
     pub history_lines: usize,
     /// The user's keyboard shortcuts ([`keys`]).
@@ -208,6 +211,7 @@ impl Default for UiState {
             properties_all: true,
             in_window_menu: !cfg!(target_os = "macos"),
             start_tab: false,
+            csd_lib: Default::default(),
             dialog: None,
             history_lines: 3,
             shortcuts: keys::UserKeys::new(),
@@ -1091,12 +1095,15 @@ impl CadApp {
         if self.ui.show_file_tabs {
             chrome::file_tabs(self, ui);
         }
-        let has_doc = !self.session.docs.is_empty() && !self.ui.start_tab;
+        let library = csd_library::active(self);
+        let has_doc = !self.session.docs.is_empty() && !self.ui.start_tab && !library;
         if has_doc && !self.ui.show_toolsets {
             palettes::toolsets_strip(self, ui);
         }
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
-            if has_doc {
+            if library {
+                csd_library::show(self, ui);
+            } else if has_doc {
                 docking::show(self, ui);
             } else {
                 chrome::start_page(self, ui);

@@ -230,17 +230,30 @@ pub fn file_tabs(app: &mut CadApp, ui: &mut egui::Ui) {
                 x += w;
                 (resp.clicked(), close, resp)
             };
-        let (c, _, _) =
-            tab(ui, crate::tl!("Start"), false, app.ui.start_tab || app.session.docs.is_empty(), false, 110.0, ui.scope_id().with("tab_start"));
+        let (c, _, _) = tab(
+            ui,
+            crate::tl!("Start"),
+            false,
+            (app.ui.start_tab || app.session.docs.is_empty()) && !app.ui.csd_lib.open,
+            false,
+            110.0,
+            ui.scope_id().with("tab_start"),
+        );
         if c {
             app.ui.start_tab = true;
+            app.ui.csd_lib.open = false;
+        }
+        let (c, _, _) = tab(ui, "Library", false, app.ui.csd_lib.open, false, 110.0, ui.scope_id().with("tab_library"));
+        if c {
+            app.ui.csd_lib.open = true;
         }
         let mut switch_to = None;
         let mut close = None;
         let titles: Vec<(usize, String, bool, bool)> =
             app.session.docs.iter().enumerate().map(|(i, d)| (i, d.title.clone(), d.is_dirty(), i == app.session.active)).collect();
         for (i, title, dirty, active) in titles {
-            let (c, x, resp) = tab(ui, &title, dirty, active && !app.ui.start_tab, true, 170.0, ui.scope_id().with(("tab", i)));
+            let (c, x, resp) =
+                tab(ui, &title, dirty, active && !app.ui.start_tab && !app.ui.csd_lib.open, true, 170.0, ui.scope_id().with(("tab", i)));
             crate::shortcut_menus::attach(app, &resp, |app| crate::shortcut_menus::drawing_tab_entries(app, i));
             if c {
                 switch_to = Some(i);
@@ -252,6 +265,7 @@ pub fn file_tabs(app: &mut CadApp, ui: &mut egui::Ui) {
         if let Some(i) = switch_to {
             let _ = app.run("document.switch", json!({ "index": i }));
             app.ui.start_tab = false;
+            app.ui.csd_lib.open = false;
         }
         if let Some(i) = close {
             app.request_close(Some(i));
