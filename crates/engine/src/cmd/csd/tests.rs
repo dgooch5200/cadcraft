@@ -361,3 +361,14 @@ fn library_save_then_load() {
     assert!(s.execute("csd.library.load", &json!({ "path": "/nonexistent/lib.json" })).is_err());
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+fn the_library_loads_before_any_drawing_is_open() {
+    let mut s = Session::empty();
+    let path = std::env::temp_dir().join(format!("csd-lib-{}.json", std::process::id()));
+    std::fs::write(&path, r#"[{"id": "a", "name": "A"}]"#).unwrap();
+    let loaded = s.execute("csd.library.load", &json!({ "path": path.to_string_lossy() }));
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(loaded.unwrap(), json!({ "count": 1 }));
+    assert_eq!(s.execute("csd.library.list", &json!({})).unwrap()["products"].as_array().map(Vec::len), Some(1));
+}
