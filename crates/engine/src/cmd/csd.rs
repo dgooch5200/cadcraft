@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use cadcraft_csd::{
     Deco, Product, Protocol, Side, Slot, WIRE_W, WireLink, block_name, can_connect, deco_block, deco_block_name, deco_from_xdata, deco_points,
-    deco_xdata, device_block, edge_frame, fan_order, port_point, route, sample_products, truncate_label, world_side,
+    deco_xdata, device_block, edge_frame, fan_order, library_json, parse_library, parse_products, port_point, product_record, route, truncate_label,
+    world_side,
 };
 use cadcraft_doc::color::{Color, Rgb};
 use cadcraft_doc::{Common, Drawing, Entity, EntityKind, EntityStore, Handle, Insert, Layer, LwPolyline, Space};
@@ -21,11 +22,23 @@ use crate::{EngineError, Result, Session};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("csd.place", "Place Device", run_place)
-            .params("{product: id of a sample product, at: [x,y], label? (default the product code)} → {handle}"),
+            .params("{product: id of a library product, at: [x,y], label? (default the product code)} → {handle}"),
         CommandSpec::new("csd.connect", "Connect Devices", run_connect)
             .params("{from: handle, fromSide: top|bot|lft|rgt, to: handle, toSide, protocol: network|netdata|10scene|dmx|0-10v|contact|power|midi|epix3p|epix4p} → {handle}"),
         CommandSpec::new("csd.netlist", "Device Netlist", run_netlist)
             .params("{} → {devices: [{handle, product, label, at}], wires: [{handle, from, fromSide, to, toSide, protocol}]}")
+            .noundo(),
+        CommandSpec::new("csd.library.load", "Load Product Library", run_library_load)
+            .params("{path: JSON library file} → {count}")
+            .noundo(),
+        CommandSpec::new("csd.library.list", "List Products", run_library_list)
+            .params("{query? (id, name or code contains), category?} → {products: [records without img], categories: [cat, first-seen order]}")
+            .noundo(),
+        CommandSpec::new("csd.library.set", "Set Product Library", run_library_set)
+            .params("{products: [records]} → {count}; a record without `img` (or other extra keys) keeps the old product's")
+            .noundo(),
+        CommandSpec::new("csd.library.save", "Save Product Library", run_library_save)
+            .params("{path} → {path, count}")
             .noundo(),
     ]
 }
@@ -247,12 +260,13 @@ fn refresh(doc: &mut Arc<Drawing>) {
 fn run_place(s: &mut Session, p: &Value) -> Result<Value> {
     let id = str_param(p, "product").ok_or_else(|| bad("csd.place", "`product` is required"))?;
     let at = point_req("csd.place", p, "at")?;
-    let product = sample_products().into_iter().find(|x| x.id == id).ok_or_else(|| bad("csd.place", format!("unknown product \"{id}\"")))?;
+    let library = s.csd_library.clone();
+    let product = library.iter().find(|x| x.id == id).ok_or_else(|| bad("csd.place", format!("unknown product \"{id}\"")))?;
     let name = block_name(&product.id);
     if s.doc()?.block(&name).is_none() {
         let d = s.doc_mut()?;
         let dash = if product.missing { dashed_scale(d, BORDER_DASH) } else { 1.0 };
-        let block = device_block(&product, || d.new_handle(), dash);
+        let block = device_block(product, || d.new_handle(), dash);
         d.blocks.insert(name.clone(), Arc::new(block));
     }
     // The strip shows the label, or the short code until there is one.
@@ -278,7 +292,7 @@ fn run_connect(s: &mut Session, p: &Value) -> Result<Value> {
         to_side: side_param(p, "toSide")?,
         protocol: str_param(p, "protocol").and_then(Protocol::from_id).ok_or_else(|| bad("csd.connect", "`protocol` is not a known protocol id"))?,
     };
-    let products = sample_products();
+    let products = s.csd_library.clone();
     {
         let d = s.doc()?;
         let store = d.space(&s.space()).ok_or_else(|| EngineError::Other("no such space".into()))?;
@@ -334,7 +348,7 @@ fn wire_layer(d: &mut Drawing, protocol: Protocol) -> (String, f64) {
 }
 
 fn run_netlist(s: &mut Session, _p: &Value) -> Result<Value> {
-    let products = sample_products();
+    let products = s.csd_library.clone();
     let d = s.doc()?;
     let store = d.space(&s.space()).ok_or_else(|| EngineError::Other("no such space".into()))?;
     let devs: Vec<Value> = devices(store, &products)
@@ -349,6 +363,65 @@ fn run_netlist(s: &mut Session, _p: &Value) -> Result<Value> {
         .map(|(h, l)| json!({ "handle": h.hex(), "from": l.from.hex(), "fromSide": l.from_side.id(), "to": l.to.hex(), "toSide": l.to_side.id(), "protocol": l.protocol.id() }))
         .collect();
     Ok(json!({ "devices": devs, "wires": wires }))
+}
+
+fn run_library_load(s: &mut Session, p: &Value) -> Result<Value> {
+    let path = str_param(p, "path").ok_or_else(|| bad("csd.library.load", "`path` is required"))?;
+    #[cfg(not(target_arch = "wasm32"))]
+    let bytes = crate::capped_read::read_capped(std::path::Path::new(path), cadcraft_csd::MAX_LIBRARY_BYTES)
+        .map_err(|e| bad("csd.library.load", format!("{path}: {e}")))?;
+    #[cfg(target_arch = "wasm32")]
+    let bytes: Vec<u8> = return Err(bad("csd.library.load", "reading files is not available on the web"));
+    let text = String::from_utf8(bytes).map_err(|_| bad("csd.library.load", format!("{path}: not UTF-8 text")))?;
+    let products = parse_library(&text).map_err(|e| bad("csd.library.load", format!("{path}: {e}")))?;
+    s.csd_library = Arc::new(products);
+    Ok(json!({ "count": s.csd_library.len() }))
+}
+
+fn run_library_list(s: &mut Session, p: &Value) -> Result<Value> {
+    let query = str_param(p, "query").map(str::to_lowercase).filter(|q| !q.is_empty());
+    let category = str_param(p, "category").filter(|c| !c.is_empty());
+    let mut categories: Vec<&str> = Vec::new();
+    for x in s.csd_library.iter() {
+        if !categories.contains(&x.cat.as_str()) {
+            categories.push(&x.cat);
+        }
+    }
+    let hit = |x: &Product| {
+        category.is_none_or(|c| x.cat == c)
+            && query.as_ref().is_none_or(|q| [&x.id, &x.name, &x.code].iter().any(|f| f.to_lowercase().contains(q.as_str())))
+    };
+    // Pictures and other long strings stay out so a list of hundreds stays small.
+    let light = |mut r: Map<String, Value>| {
+        r.retain(|k, v| k != "img" && !matches!(v, Value::String(t) if t.len() > 1000));
+        Value::Object(r)
+    };
+    let products: Vec<Value> = s.csd_library.iter().filter(|x| hit(x)).map(|x| light(product_record(x))).collect();
+    Ok(json!({ "products": products, "categories": categories }))
+}
+
+fn run_library_set(s: &mut Session, p: &Value) -> Result<Value> {
+    let records = p.get("products").and_then(Value::as_array).ok_or_else(|| bad("csd.library.set", "`products` (array of records) is required"))?;
+    let mut products = parse_products(records).map_err(|e| bad("csd.library.set", e))?;
+    for x in &mut products {
+        if let Some(old) = s.csd_library.iter().find(|o| o.id == x.id) {
+            let mut extra = old.extra.clone();
+            extra.append(&mut x.extra);
+            x.extra = extra;
+        }
+    }
+    s.csd_library = Arc::new(products);
+    Ok(json!({ "count": s.csd_library.len() }))
+}
+
+fn run_library_save(s: &mut Session, p: &Value) -> Result<Value> {
+    let path = str_param(p, "path").ok_or_else(|| bad("csd.library.save", "`path` is required"))?;
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::atomic_write::write_atomic_making_folders(std::path::Path::new(path), library_json(&s.csd_library).as_bytes())
+        .map_err(|e| bad("csd.library.save", format!("{path}: {e}")))?;
+    #[cfg(target_arch = "wasm32")]
+    return Err(bad("csd.library.save", "writing files is not available on the web"));
+    Ok(json!({ "path": path, "count": s.csd_library.len() }))
 }
 
 pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {

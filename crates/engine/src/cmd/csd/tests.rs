@@ -326,3 +326,38 @@ fn decorations_stay_above_later_entities() {
     let order: Vec<bool> = s.doc().unwrap().model.iter().map(|e| deco_from_xdata(&e.common.xdata).is_some()).collect();
     assert_eq!(order, [vec![false; order.len() - 3], vec![true; 3]].concat());
 }
+
+#[test]
+fn library_set_list_and_place() {
+    let mut s = Session::new();
+    let rec = |id: &str, cat: &str| json!({ "id": id, "name": format!("Fixture {id}"), "code": id, "cat": cat, "dmxIn": 1, "img": "data:x" });
+    let r = s.execute("csd.library.set", &json!({ "products": [rec("A1", "Wash"), rec("B2", "Spot")] })).unwrap();
+    assert_eq!(r["count"], 2);
+    s.execute("csd.place", &json!({ "product": "B2", "at": [0, 0] })).unwrap();
+    assert!(s.execute("csd.place", &json!({ "product": CONSOLE, "at": [0, 0] })).is_err());
+
+    let r = s.execute("csd.library.list", &json!({ "query": "b2" })).unwrap();
+    assert_eq!(r["products"].as_array().unwrap().len(), 1);
+    assert_eq!(r["products"][0]["id"], "B2");
+    assert!(r["products"][0].get("img").is_none());
+    assert_eq!(r["categories"], json!(["Wash", "Spot"]));
+    assert_eq!(s.execute("csd.library.list", &json!({ "category": "Wash" })).unwrap()["products"].as_array().unwrap().len(), 1);
+
+    s.execute("csd.library.set", &json!({ "products": [{ "id": "A1", "name": "Renamed" }] })).unwrap();
+    let img = s.csd_library.first().and_then(|p| p.extra.get("img").cloned());
+    assert_eq!(img, Some(json!("data:x")));
+    assert_eq!(s.csd_library.first().map(|p| p.name.as_str()), Some("Renamed"));
+}
+
+#[test]
+fn library_save_then_load() {
+    let mut s = Session::new();
+    let path = std::env::temp_dir().join(format!("csd-lib-{}.json", std::process::id()));
+    let path = path.to_string_lossy().into_owned();
+    let n = s.csd_library.len() - 1;
+    assert_eq!(s.execute("csd.library.save", &json!({ "path": path })).unwrap()["count"], n + 1);
+    s.execute("csd.library.set", &json!({ "products": [] })).unwrap();
+    assert_eq!(s.execute("csd.library.load", &json!({ "path": path })).unwrap()["count"], n);
+    assert!(s.execute("csd.library.load", &json!({ "path": "/nonexistent/lib.json" })).is_err());
+    let _ = std::fs::remove_file(path);
+}

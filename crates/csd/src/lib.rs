@@ -9,8 +9,10 @@ use cadcraft_doc::{Handle, RawTag};
 use cadcraft_geom::Vec2;
 
 mod card;
+mod library;
 
 pub use card::*;
+pub use library::*;
 
 /// The xdata application name of wires.
 const XDATA_APP: &str = "CSD";
@@ -150,11 +152,18 @@ impl Side {
 
 /// A library product. `counts` holds (in, out) port counts per protocol, indexed by
 /// [`Protocol::ALL`] order; use [`Product::ports`].
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Product {
     pub id: String,
     pub name: String,
     pub code: String,
+    pub cat: String,
+    pub brand: String,
+    pub notes: String,
+    /// DMX personalities as the library writes them, e.g. `17ch:17, 34ch:34`.
+    pub modes: String,
+    pub channels: u32,
+    pub universes: u32,
     pub counts: [(u32, u32); 10],
     pub poe_port_watts: f64,
     pub poe_watts: f64,
@@ -162,6 +171,8 @@ pub struct Product {
     pub color: u32,
     /// Not in the library any more: drawn with a dashed border, as the web app does.
     pub missing: bool,
+    /// Record keys not modelled above (`img`, `deviceNotes`, `iconW`...), kept so a save loses nothing.
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Product {
@@ -317,7 +328,17 @@ pub fn sample_products() -> Vec<Product> {
                 *c = (*i, *o);
             }
         }
-        Product { id: id.into(), name: name.into(), code: code.into(), counts, poe_port_watts, poe_watts, color, missing: false }
+        Product {
+            id: id.into(),
+            name: name.into(),
+            code: code.into(),
+            cat: "Sample".into(),
+            counts,
+            poe_port_watts,
+            poe_watts,
+            color,
+            ..Product::default()
+        }
     };
     vec![
         p("CHAMMQ50", "MagicQ MagicQ50 Compact Console", "MQ50", &[(Protocol::Dmx, 0, 4), (Protocol::NetData, 0, 2)], 0.0, 0.0, 0x1565c0),

@@ -1,12 +1,13 @@
 use super::*;
 use cadcraft_doc::EntityKind;
+use std::collections::HashSet;
 
 fn prod(ports: &[(Protocol, u32, u32)]) -> Product {
     let mut counts = [(0, 0); 10];
     for (p, i, o) in ports {
         counts[p.index()] = (*i, *o);
     }
-    Product { id: "X".into(), name: "X".into(), code: "X".into(), counts, poe_port_watts: 0.0, poe_watts: 0.0, color: 0, missing: false }
+    Product { id: "X".into(), name: "X".into(), code: "X".into(), counts, ..Product::default() }
 }
 
 fn link(a: u64, b: u64, protocol: Protocol) -> WireLink {
@@ -198,4 +199,32 @@ fn only_a_missing_product_gets_a_dashed_border() {
     let all = sample_products();
     assert_eq!(all.iter().filter(|p| dashed(p) == 1).map(|p| p.id.as_str()).collect::<Vec<_>>(), ["OVCYC1FCV2"]);
     assert_eq!(all.iter().filter(|p| p.missing).count(), 1);
+}
+
+// Skipped when the copy of the web app's bundled library (428 records, 13 MB) is not on this machine.
+#[test]
+fn bundled_library_round_trips() {
+    let path = "/private/tmp/claude-503/-Users-davidgooch-orca-workspaces-cadcraft-csd/9495961c-914c-41f3-ad6b-5b52cd313405/scratchpad/library.json";
+    let Ok(text) = std::fs::read_to_string(path) else { return };
+    let products = parse_library(&text).unwrap();
+    assert_eq!(products.len(), 428);
+    assert_eq!(products.iter().map(|p| &p.id).collect::<HashSet<_>>().len(), 428);
+    assert!(products.iter().any(|p| p.extra.get("img").and_then(|v| v.as_str()).is_some_and(|i| !i.is_empty())));
+    assert_eq!(parse_library(&library_json(&products)).unwrap(), products);
+}
+
+#[test]
+fn hostile_library_input_is_an_error_or_defaults() {
+    assert!(parse_library("{}").is_err() && parse_library("nope").is_err() && parse_library("").is_err());
+    assert!(parse_library(&format!("[{}]", vec!["{}"; MAX_PRODUCTS + 1].join(","))).is_err());
+    let p = parse_library(
+        r##"[1, null, {"id": "", "name": "x"}, {"id": "a"}, {"id": "A", "name": "First", "dmxIn": -3, "dmxOut": 1e300, "netIn": "7", "netOut": [1],
+        "poeWatts": -5, "channels": 1.9, "color": "red", "code": 12},
+        {"id": "A", "name": "Second"}]"##,
+    )
+    .unwrap();
+    assert_eq!(p.len(), 1);
+    let p = &p[0];
+    assert_eq!((p.name.as_str(), p.code.as_str(), p.cat.as_str(), p.color), ("First", "12", "Uncategorized", 0x555555));
+    assert_eq!((p.ports(Protocol::Dmx), p.ports(Protocol::Network), p.poe_watts, p.channels), ((0, 1000), (7, 0), 0.0, 1));
 }

@@ -406,6 +406,12 @@ fn main() -> eframe::Result {
                 }
                 app.session.set_lisp_support_dir(Some(support));
             }
+            if let Some(path) = std::env::var_os("CSD_LIBRARY") {
+                let params = serde_json::json!({ "path": path.to_string_lossy() });
+                if let Err(e) = app.session.execute("csd.library.load", &params) {
+                    log::error!("CSD_LIBRARY: {e}");
+                }
+            }
             app.integrated_titlebar = cfg!(target_os = "macos");
             if surface.present_mode == eframe::wgpu::PresentMode::AutoNoVsync {
                 app.frame_cap = Some(cadcraft_ui_egui::gpu::FrameCap::new(240));

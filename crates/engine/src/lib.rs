@@ -153,6 +153,8 @@ pub struct Session {
     /// ([`Session::input_object`]): a pick at exactly that point picks that object
     /// ([`Session::pick_object`]).
     pick_hint: Option<(Handle, Vec2)>,
+    /// The product library CSD devices are placed from; the sample library until one is loaded.
+    pub csd_library: Arc<Vec<cadcraft_csd::Product>>,
 }
 
 impl Default for Session {
@@ -207,6 +209,7 @@ impl Session {
             lisp_last: None,
             hatch_picks: None,
             pick_hint: None,
+            csd_library: Arc::new(cadcraft_csd::sample_products()),
         }
     }
 

@@ -682,6 +682,7 @@ version = "0.20.1"
 dependencies = [
  "cadcraft-doc",
  "cadcraft-geom",
+ "serde_json",
 ]
 
 [[package]]
