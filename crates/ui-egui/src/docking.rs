@@ -109,6 +109,79 @@ pub fn default_workspace() -> Workspace {
     })
 }
 
+/// The drawing and Tool Sets (showing only the Lighting group, see `palettes::toolsets`).
+pub fn simple_workspace() -> Workspace {
+    Workspace::new(Layout {
+        root: Some(split(
+            SplitAxis::Horizontal,
+            SplitSize::FixedFirst(TOOL_SETS_WIDTH),
+            dock(Side::Start, TOOL_SETS_WIDTH, &[Panel::ToolSets]),
+            tabs(Panel::Canvas),
+        )),
+        floating: Vec::new(),
+    })
+}
+
+/// The workspace a fresh profile starts in.
+pub const DEFAULT_WORKSPACE: WorkspaceName = WorkspaceName::Simple;
+
+/// A named workspace: what the interface shows. Commands work the same in all of them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum WorkspaceName {
+    Simple,
+    Advanced,
+}
+
+impl Default for WorkspaceName {
+    fn default() -> Self {
+        DEFAULT_WORKSPACE
+    }
+}
+
+impl WorkspaceName {
+    pub const ALL: [Self; 2] = [Self::Simple, Self::Advanced];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Simple => "Simple",
+            Self::Advanced => "Advanced",
+        }
+    }
+    /// Case-insensitive.
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|w| w.as_str().eq_ignore_ascii_case(name.trim()))
+    }
+    pub fn default_layout(self) -> Workspace {
+        match self {
+            Self::Simple => simple_workspace(),
+            Self::Advanced => default_workspace(),
+        }
+    }
+}
+
+/// Make `name` the current workspace: the current layout is kept for when it returns, and
+/// `name` comes back in its own last layout (or its default, if none was kept or it no longer
+/// validates).
+pub fn set_workspace(app: &mut crate::CadApp, name: WorkspaceName) {
+    if app.ui.workspace == name {
+        return;
+    }
+    let next = app.ui.workspace_layouts.remove(&name).filter(|layout| validate(layout).is_ok()).unwrap_or_else(|| name.default_layout());
+    let previous = std::mem::replace(&mut app.ui.docking, next);
+    app.ui.workspace_layouts.insert(app.ui.workspace, previous);
+    app.ui.workspace = name;
+    let workspace = app.ui.docking.clone();
+    publish_visibility(app, &workspace);
+}
+
+/// WSCURRENT: `{name}` switches (case-insensitive); without one, reports the current workspace.
+pub fn wscurrent(app: &mut crate::CadApp, params: &Value) -> Result<Value, String> {
+    if let Some(name) = params.get("name").and_then(Value::as_str) {
+        let name = WorkspaceName::parse(name).ok_or_else(|| format!("unknown workspace \"{name}\" (Simple or Advanced)"))?;
+        set_workspace(app, name);
+    }
+    Ok(json!({"workspace": app.ui.workspace.as_str()}))
+}
+
 /// The dock a panel belongs in: Tool Sets on the left, the palettes on the right.
 fn home_side(panel: Panel) -> (Side, f32) {
     if panel == Panel::ToolSets { (Side::Start, TOOL_SETS_WIDTH) } else { (Side::End, PALETTES_WIDTH) }
@@ -296,7 +369,7 @@ fn publish_visibility(app: &mut crate::CadApp, workspace: &Workspace) {
 pub fn command(app: &mut crate::CadApp, reset: bool, params: &Value) -> Result<Value, String> {
     let mut workspace = app.ui.docking.clone();
     if reset {
-        workspace = default_workspace();
+        workspace = app.ui.workspace.default_layout();
     } else {
         sync(&mut workspace, app)?;
         apply_command(&mut workspace, params)?;
@@ -316,7 +389,7 @@ pub fn show(app: &mut crate::CadApp, ui: &mut egui::Ui) {
     let mut workspace = app.ui.docking.clone();
     if let Err(error) = validate(&workspace).and_then(|()| sync(&mut workspace, app)) {
         app.set_status(format!("Panel layout could not be restored: {error}"));
-        workspace = default_workspace();
+        workspace = app.ui.workspace.default_layout();
         let _ = sync(&mut workspace, app);
     }
     // Bodies can dispatch commands (including the drawing's typed command line).

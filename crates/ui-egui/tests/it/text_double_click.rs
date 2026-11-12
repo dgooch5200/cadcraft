@@ -10,6 +10,7 @@ use serde_json::json;
 
 fn harness() -> Harness<'static, CadApp> {
     let mut app = CadApp::new(Session::new(), Services::default());
+    app.run("wscurrent", json!({"name": "Advanced"})).unwrap();
     app.run("text", json!({ "at": [0, 0], "text": "HELLO", "height": 2.5 })).unwrap();
     app.run("mtext", json!({ "at": [0, 20], "text": "first\\Psecond", "height": 2.5, "width": 20 })).unwrap();
     app.run("line", json!({ "points": [[30, 0], [30, 20]] })).unwrap();

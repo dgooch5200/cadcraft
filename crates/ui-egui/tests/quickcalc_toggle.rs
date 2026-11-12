@@ -14,6 +14,7 @@ fn harness() -> Harness<'static, CadApp> {
 
 fn harness_from_prefs(prefs: &str, render: bool) -> Harness<'static, CadApp> {
     let mut app = CadApp::new(Session::default(), Services::default());
+    app.run("wscurrent", json!({"name": "Advanced"})).unwrap();
     app.load_prefs(prefs);
     app.ui.start_tab = false;
     app.ui.in_window_menu = false;
@@ -140,6 +141,7 @@ fn window_menu_toggle_preserves_calculator_history_and_command_line_input() {
 fn toggle_restores_floating_or_docked_location_without_hiding_other_panels() {
     for floating in [false, true] {
         let mut app = CadApp::new(Session::default(), Services::default());
+        app.run("wscurrent", json!({"name": "Advanced"})).unwrap();
         app.run("ui.panel.quickcalc", Value::Null).unwrap();
         let params = if floating {
             json!({"operation":"float", "panel":"quickCalc", "rect":[80,120,360,480]})
@@ -161,6 +163,7 @@ fn toggle_restores_floating_or_docked_location_without_hiding_other_panels() {
 #[test]
 fn explicit_opens_still_reveal_and_calculations_do_not_open_the_palette() {
     let mut app = CadApp::new(Session::default(), Services::default());
+    app.run("wscurrent", json!({"name": "Advanced"})).unwrap();
     let value = app.run("cal", json!({"expr":"2+3"})).unwrap();
     assert_eq!(value["value"], 5.0);
     assert!(app.cmdline(r#"quickcalc {"expr":"2+3"}"#).is_none());

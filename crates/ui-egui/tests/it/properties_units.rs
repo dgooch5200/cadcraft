@@ -13,6 +13,7 @@ use serde_json::json;
 /// A selected TEXT 2.5 high, with lengths in `lunits`.
 fn palettes(lunits: i64) -> Harness<'static, CadApp> {
     let mut app = CadApp::new(Session::default(), Services::default());
+    app.run("wscurrent", json!({"name": "Advanced"})).unwrap();
     app.run("setvar", json!({ "name": "LUNITS", "value": lunits })).unwrap();
     let h = app.run("text", json!({ "at": [0, 0], "text": "Note", "height": 2.5 })).unwrap();
     app.run("select", json!({ "handles": [h["handle"]] })).unwrap();

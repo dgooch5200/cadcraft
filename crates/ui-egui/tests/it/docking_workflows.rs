@@ -10,6 +10,7 @@ use serde_json::json;
 
 fn harness(state: Option<UiState>, width: f32, scale: f32) -> Harness<'static, CadApp> {
     let mut app = CadApp::new(Session::default(), Services::default());
+    app.run("wscurrent", json!({"name": "Advanced"})).unwrap();
     app.run("rectang", json!({"p1":[30,30],"p2":[170,110]})).unwrap();
     app.run("circle", json!({"center":[100,70],"radius":26})).unwrap();
     app.run("line", json!({"points":[[30,30],[170,110]]})).unwrap();
@@ -120,6 +121,7 @@ fn default_layout_is_tool_sets_left_and_the_palettes_right_in_dock_columns() {
 fn palette_icons_are_painted_in_code_and_shown_in_an_iconic_column() {
     use cadcraft_ui_egui::docking::Panels;
     let mut app = CadApp::new(Session::default(), Services::default());
+    app.run("wscurrent", json!({"name": "Advanced"})).unwrap();
     let ctx = egui::Context::default();
     let mut paint = |panel: Panel| {
         let mut painted = false;
