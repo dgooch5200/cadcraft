@@ -464,11 +464,7 @@ fn run_netlist(s: &mut Session, _p: &Value) -> Result<Value> {
 
 fn run_library_load(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad("csd.library.load", "`path` is required"))?;
-    #[cfg(not(target_arch = "wasm32"))]
-    let bytes = crate::capped_read::read_capped(std::path::Path::new(path), cadcraft_csd::MAX_LIBRARY_BYTES)
-        .map_err(|e| bad("csd.library.load", format!("{path}: {e}")))?;
-    #[cfg(target_arch = "wasm32")]
-    let bytes: Vec<u8> = return Err(bad("csd.library.load", "reading files is not available on the web"));
+    let bytes = read_library(path).map_err(|e| bad("csd.library.load", format!("{path}: {e}")))?;
     let text = String::from_utf8(bytes).map_err(|_| bad("csd.library.load", format!("{path}: not UTF-8 text")))?;
     let products = parse_library(&text).map_err(|e| bad("csd.library.load", format!("{path}: {e}")))?;
     s.csd_library = Arc::new(products);
@@ -515,12 +511,28 @@ fn run_library_set(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_library_save(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad("csd.library.save", "`path` is required"))?;
-    #[cfg(not(target_arch = "wasm32"))]
-    crate::atomic_write::write_atomic_making_folders(std::path::Path::new(path), library_json(&s.csd_library).as_bytes())
-        .map_err(|e| bad("csd.library.save", format!("{path}: {e}")))?;
-    #[cfg(target_arch = "wasm32")]
-    return Err(bad("csd.library.save", "writing files is not available on the web"));
+    write_library(path, library_json(&s.csd_library).as_bytes()).map_err(|e| bad("csd.library.save", format!("{path}: {e}")))?;
     Ok(json!({ "path": path, "count": s.csd_library.len() }))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_library(path: &str) -> std::io::Result<Vec<u8>> {
+    crate::capped_read::read_capped(std::path::Path::new(path), cadcraft_csd::MAX_LIBRARY_BYTES)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_library(path: &str, bytes: &[u8]) -> std::io::Result<()> {
+    crate::atomic_write::write_atomic_making_folders(std::path::Path::new(path), bytes)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn read_library(_: &str) -> std::io::Result<Vec<u8>> {
+    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "files are not available on the web"))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn write_library(_: &str, _: &[u8]) -> std::io::Result<()> {
+    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "files are not available on the web"))
 }
 
 pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {

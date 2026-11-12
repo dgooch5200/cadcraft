@@ -352,7 +352,7 @@ fn library_set_list_and_place() {
 #[test]
 fn library_save_then_load() {
     let mut s = Session::new();
-    let path = std::env::temp_dir().join(format!("csd-lib-{}.json", std::process::id()));
+    let path = std::env::temp_dir().join(format!("csd-lib-save-{}.json", std::process::id()));
     let path = path.to_string_lossy().into_owned();
     let n = s.csd_library.len() - 1;
     assert_eq!(s.execute("csd.library.save", &json!({ "path": path })).unwrap()["count"], n + 1);
@@ -365,7 +365,7 @@ fn library_save_then_load() {
 #[test]
 fn the_library_loads_before_any_drawing_is_open() {
     let mut s = Session::empty();
-    let path = std::env::temp_dir().join(format!("csd-lib-{}.json", std::process::id()));
+    let path = std::env::temp_dir().join(format!("csd-lib-early-{}.json", std::process::id()));
     std::fs::write(&path, r#"[{"id": "a", "name": "A"}]"#).unwrap();
     let loaded = s.execute("csd.library.load", &json!({ "path": path.to_string_lossy() }));
     let _ = std::fs::remove_file(&path);
@@ -407,7 +407,18 @@ fn escape_stops_placing_and_keeps_what_is_placed() {
 fn arming_needs_a_known_product() {
     let mut s = Session::new();
     assert!(s.execute("csd.arm", &json!({ "product": "no-such-product" })).is_err());
-    assert!(s.start("csd.place").is_err(), "nothing armed");
+}
+
+#[test]
+fn placing_with_nothing_armed_asks_for_the_product() {
+    let mut s = Session::new();
+    s.start("csd.place").unwrap();
+    s.input(Input::Text("no-such-product".into())).unwrap();
+    assert!(s.running.is_some(), "still asking");
+    s.input(Input::Text(NODE.into())).unwrap();
+    s.input(Input::Point(Vec2::new(0.0, 0.0))).unwrap();
+    s.input(Input::Enter).unwrap();
+    assert_eq!(device_count(&mut s), 1);
 }
 
 /// A console at the origin and a node at (200, 60), both unwired, with `csd.connect` running.

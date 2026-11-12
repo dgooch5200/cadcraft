@@ -52,6 +52,7 @@ mod tests {
     #[test]
     fn floating_and_hidden_panels_survive_storage_without_replacing_drawing_state() {
         let mut source = CadApp::new(Session::default(), Services::default());
+        source.run("wscurrent", json!({"name": "Advanced"})).unwrap();
         source.run("ui.dock", json!({"operation":"float","panel":"toolSets","rect":[120,90,340,410]})).unwrap();
         source.run("ui.dock", json!({"operation":"close","panel":"properties"})).unwrap();
         let saved = save(&source.ui).unwrap();
