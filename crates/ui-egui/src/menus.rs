@@ -119,6 +119,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.toggle.menubar", "In-window Menu Bar", &["Window", "In-window Menu Bar"], None),
     ("ui.hidepalettes", "Hide Palettes", &["Window", "Hide Palettes"], None),
     ("ui.resetpalettes", "Reset Palettes", &["Window", "Reset Palettes"], None),
+    ("ui.csd.library", "Product Library", &[], None),
     ("ui.start", "Start", &["Window", "Start"], None),
     ("ui.dialog.layers", "Layer Properties Manager", &["Window", "Layers"], None),
     ("ui.dialog.blocks", "Blocks", &["Window", "Blocks"], None),
@@ -152,6 +153,9 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
 fn route_ui_subsystems(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if let Some(result) = crate::spacemouse::route(app, id, params) {
         return Some(result);
+    }
+    if let Some(r) = crate::csd_library::route(app, id) {
+        return Some(r);
     }
     if let Some(r) = crate::xrefs::route(app, id, params) {
         return Some(r);
