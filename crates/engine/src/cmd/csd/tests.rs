@@ -4,7 +4,7 @@ use cadcraft_doc::{Drawing, EntityKind, Handle, LwPolyline, RawTag};
 use cadcraft_geom::Vec2;
 use serde_json::{Value, json};
 
-use crate::Session;
+use crate::{Input, Session};
 
 const CONSOLE: &str = "CHAMMQ50";
 const NODE: &str = "epix-flex-drive";
@@ -371,4 +371,41 @@ fn the_library_loads_before_any_drawing_is_open() {
     let _ = std::fs::remove_file(&path);
     assert_eq!(loaded.unwrap(), json!({ "count": 1 }));
     assert_eq!(s.execute("csd.library.list", &json!({})).unwrap()["products"].as_array().map(Vec::len), Some(1));
+}
+
+fn device_count(s: &mut Session) -> usize {
+    s.execute("csd.netlist", &json!({})).unwrap()["devices"].as_array().unwrap().len()
+}
+
+#[test]
+fn armed_product_is_placed_at_each_point_until_enter() {
+    let mut s = Session::new();
+    s.execute("csd.arm", &json!({ "product": NODE })).unwrap();
+    s.start("csd.place").unwrap();
+    s.input(Input::Point(Vec2::new(0.0, 0.0))).unwrap();
+    s.input(Input::Point(Vec2::new(200.0, 0.0))).unwrap();
+    assert!(s.running.is_some());
+    s.input(Input::Enter).unwrap();
+    assert!(s.running.is_none());
+    assert_eq!(device_count(&mut s), 2);
+    s.execute("undo", &json!({})).unwrap();
+    assert_eq!(device_count(&mut s), 0, "the run is one undo step");
+}
+
+#[test]
+fn escape_stops_placing_and_keeps_what_is_placed() {
+    let mut s = Session::new();
+    s.execute("csd.arm", &json!({ "product": NODE })).unwrap();
+    s.start("csd.place").unwrap();
+    s.input(Input::Point(Vec2::new(0.0, 0.0))).unwrap();
+    s.cancel();
+    assert!(s.running.is_none());
+    assert_eq!(device_count(&mut s), 1);
+}
+
+#[test]
+fn arming_needs_a_known_product() {
+    let mut s = Session::new();
+    assert!(s.execute("csd.arm", &json!({ "product": "no-such-product" })).is_err());
+    assert!(s.start("csd.place").is_err(), "nothing armed");
 }

@@ -16,13 +16,17 @@ use cadcraft_geom::{PolyVertex, Vec2};
 use serde_json::{Map, Value, json};
 
 use super::curves::handle_param;
+
+mod place;
 use super::{CommandSpec, always, bad, point_req, str_param};
 use crate::{EngineError, Result, Session};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("csd.place", "Place Device", run_place)
-            .params("{product: id of a library product, at: [x,y], label? (default the product code)} → {handle}"),
+            .params("{product: id of a library product, at: [x,y], label? (default the product code)} → {handle}; interactive: places the armed product at each point")
+            .interactive(place::PlaceM::start),
+        CommandSpec::new("csd.arm", "Arm Product", place::run_arm).params("{product: id of a library product} → {product}").noundo(),
         CommandSpec::new("csd.connect", "Connect Devices", run_connect)
             .params("{from: handle, fromSide: top|bot|lft|rgt, to: handle, toSide, protocol: network|netdata|10scene|dmx|0-10v|contact|power|midi|epix3p|epix4p} → {handle}"),
         CommandSpec::new("csd.netlist", "Device Netlist", run_netlist)

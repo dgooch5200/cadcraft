@@ -155,6 +155,8 @@ pub struct Session {
     pick_hint: Option<(Handle, Vec2)>,
     /// The product library CSD devices are placed from; the sample library until one is loaded.
     pub csd_library: Arc<Vec<cadcraft_csd::Product>>,
+    /// The product the interactive `csd.place` puts down (`csd.arm`).
+    pub csd_armed: Option<String>,
 }
 
 impl Default for Session {
@@ -210,6 +212,7 @@ impl Session {
             hatch_picks: None,
             pick_hint: None,
             csd_library: Arc::new(cadcraft_csd::sample_products()),
+            csd_armed: None,
         }
     }
 
