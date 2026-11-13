@@ -8,6 +8,7 @@ use cadcraft_csd::{LEGEND, MARGIN, Paper, TITLE_FIELDS, TITLE_H, TITLEBLOCK, leg
 
 use super::page;
 use crate::cmd::point_param;
+use cadcraft_doc::Space;
 
 pub(super) fn find(s: &Session, name: &str) -> Option<(Handle, Insert)> {
     let store = s.doc().ok()?.space(&s.space())?;
@@ -125,24 +126,77 @@ pub(super) fn run_project_set(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "handle": h.hex() }))
 }
 
-/// The protocols any wire in the drawing carries.
-fn used_protocols(doc: &Drawing) -> Vec<Protocol> {
-    let used: HashSet<Protocol> = spaces(doc).iter().filter_map(|sp| doc.space(sp)).flat_map(wires).map(|(_, l)| l.protocol).collect();
-    Protocol::ALL.into_iter().filter(|p| used.contains(p)).collect()
+/// The protocols the wires carry, one list per page (a wire is on the page its first vertex lies on);
+/// one list for the whole drawing when it has fewer than two pages.
+fn used_by_page(doc: &Drawing, pages: &[page::Page]) -> Vec<Vec<Protocol>> {
+    let mut used: Vec<HashSet<Protocol>> = vec![HashSet::new(); pages.len().max(1)];
+    if pages.len() < 2 {
+        used[0] = spaces(doc).iter().filter_map(|sp| doc.space(sp)).flat_map(wires).map(|(_, l)| l.protocol).collect();
+    } else if let Some(store) = doc.space(&Space::Model) {
+        for (h, l) in wires(store) {
+            let Some(EntityKind::LwPolyline(p)) = store.get(h).map(|e| &e.kind) else { continue };
+            let n = p.vertices.first().and_then(|v| page::page_of(doc, pages, v.p));
+            if let Some(set) = n.and_then(|n| used.get_mut(n)) {
+                set.insert(l.protocol);
+            }
+        }
+    }
+    used.iter().map(|u| Protocol::ALL.into_iter().filter(|p| u.contains(p)).collect()).collect()
 }
 
-/// Redefines the legend block when the protocols in use differ from the ones it lists.
+/// Page `i`'s legend block: the first page keeps the plain name.
+fn legend_name(i: usize) -> String {
+    if i == 0 { LEGEND.into() } else { format!("{LEGEND}_{}", i + 1) }
+}
+
+/// Redefines each page's legend block when the protocols on it differ from the ones it lists, and
+/// with several pages gives every sheet its own legend insert, placed on it as the first one is.
 fn sync_legend(doc: &mut Arc<Drawing>) {
-    let used = used_protocols(doc);
     let paper = paper_of(doc);
-    if doc.block(LEGEND).is_some_and(|b| legend_protocols(b) == used && Paper::of_block(b) == paper) {
+    let pages = doc.space(&Space::Model).map(page::pages_in).unwrap_or_default();
+    let sets = used_by_page(doc, &pages);
+    let names: Vec<String> = (0..sets.len()).map(legend_name).collect();
+    let stale = |n: &str| n.starts_with(LEGEND) && !names.iter().any(|w| w == n);
+    let outdated = sets.iter().zip(&names).any(|(u, n)| !doc.block(n).is_some_and(|b| legend_protocols(b) == *u && Paper::of_block(b) == paper));
+    let first = doc.space(&Space::Model).and_then(|st| {
+        st.iter().find_map(|e| match &e.kind {
+            EntityKind::Insert(i) if i.block == LEGEND => Some(i.insert.xy()),
+            _ => None,
+        })
+    });
+    let missing = |doc: &Drawing| {
+        let Some(st) = doc.space(&Space::Model) else { return Vec::new() };
+        let has = |n: &str| st.iter().any(|e| matches!(&e.kind, EntityKind::Insert(i) if i.block == n));
+        (1..pages.len()).filter(|&i| !has(&names[i])).collect::<Vec<_>>()
+    };
+    if !outdated && !doc.blocks.keys().any(|n| stale(n)) && (first.is_none() || missing(doc).is_empty()) {
         return;
     }
     let d = Arc::make_mut(doc);
     ensure_bold(d);
     let dash = dashed_scale(d, DASH_LEN);
-    let block = legend_block(paper, &used, dash, || d.new_handle());
-    d.blocks.insert(LEGEND.into(), Arc::new(block));
+    for (used, name) in sets.iter().zip(&names) {
+        let mut block = legend_block(paper, used, dash, || d.new_handle());
+        block.name = name.clone();
+        d.blocks.insert(name.clone(), Arc::new(block));
+    }
+    let gone: Vec<String> = d.blocks.keys().filter(|n| stale(n)).cloned().collect();
+    for n in &gone {
+        d.blocks.remove(n);
+    }
+    let strays: Vec<Handle> = d.space(&Space::Model).map_or(Vec::new(), |st| {
+        st.iter().filter(|e| matches!(&e.kind, EntityKind::Insert(i) if gone.contains(&i.block))).map(|e| e.handle).collect()
+    });
+    strays.into_iter().for_each(|h| {
+        d.remove_entity(h);
+    });
+    let Some(first) = first else { return };
+    let offset = page::page_of(d, &pages, first).map_or(Vec2::new(MARGIN, MARGIN + TITLE_H), |n| first - pages[n].at);
+    for i in missing(d) {
+        let at = pages[i].at + offset;
+        let ins = Insert { block: names[i].clone(), insert: cadcraft_geom::Vec3::new(at.x, at.y, 0.0), ..Insert::default() };
+        let _ = d.add(&Space::Model, Default::default(), EntityKind::Insert(ins));
+    }
 }
 
 /// Keeps an existing legend in step with the wires; does nothing (cheaply) on a drawing without one.

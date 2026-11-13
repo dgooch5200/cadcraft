@@ -1228,6 +1228,29 @@ fn legend_lists_only_used_protocols_follows_the_wires_and_adds_the_power_note() 
 }
 
 #[test]
+fn each_page_has_its_own_legend_listing_only_its_wires() {
+    let mut s = ortho_session();
+    s.execute("csd.legend", &json!({})).unwrap();
+    s.execute("csd.page.add", &json!({})).unwrap();
+    let place = |s: &mut Session, id: &str, at: [f64; 2]| handle(&s.execute("csd.place", &json!({ "product": id, "at": at })).unwrap());
+    let (a, b) = (place(&mut s, CONSOLE, [100.0, 500.0]), place(&mut s, NODE, [400.0, 500.0]));
+    let (c, d) = (place(&mut s, CONSOLE, [2100.0, 500.0]), place(&mut s, NODE, [2400.0, 500.0]));
+    connect(&mut s, a, b).unwrap();
+    let p = json!({ "from": c.hex(), "fromSide": "rgt", "to": d.hex(), "toSide": "lft", "protocol": "power" });
+    s.execute("csd.connect", &p).unwrap();
+    let listed = |s: &Session, name: &str| cadcraft_csd::legend_protocols(s.doc().unwrap().block(name).unwrap());
+    assert_eq!(listed(&s, "CSD_LEGEND"), vec![Protocol::NetData]);
+    assert_eq!(listed(&s, "CSD_LEGEND_2"), vec![Protocol::Power]);
+    let at = |name: &str| {
+        s.doc().unwrap().space(&s.space()).unwrap().iter().find_map(|e| match &e.kind {
+            EntityKind::Insert(i) if i.block == name => Some(i.insert.x),
+            _ => None,
+        })
+    };
+    assert_eq!(at("CSD_LEGEND_2").unwrap() - at("CSD_LEGEND").unwrap(), 1832.0);
+}
+
+#[test]
 fn wiring_alone_creates_no_legend() {
     let (s, ..) = setup();
     assert!(s.doc().unwrap().block("CSD_LEGEND").is_none());
