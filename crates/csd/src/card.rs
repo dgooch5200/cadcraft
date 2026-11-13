@@ -360,7 +360,7 @@ impl<F: FnMut() -> Handle> Painter<'_, F> {
 
 /// The device symbol: paper with a rounded border in the brand colour, the product code on the
 /// body (where a picture goes later), and a bordered label strip.
-/// The hidden `PRODUCT` and `NAME` and the visible `LABEL` attribute definitions carry the
+/// The hidden `PRODUCT`, `NAME` and `NOTES` and the visible `LABEL` attribute definitions carry the
 /// product id, the label and the label as the strip shows it. A product missing from the library
 /// gets a dashed border, drawn with linetype scale `dash_scale`.
 /// `new_handle` allocates drawing-unique handles for the block's entities (`Drawing::new_handle`).
@@ -403,6 +403,7 @@ pub fn device_block(product: &Product, mut new_handle: impl FnMut() -> Handle, d
     };
     p.add(attdef("PRODUCT", "Product", Vec2::ZERO, &product.id, true), INK);
     p.add(attdef("NAME", "Name", Vec2::ZERO, "", true), INK);
+    p.add(attdef("NOTES", "Notes", Vec2::ZERO, "", true), INK);
     p.add(attdef("LABEL", "Label", Vec2 { x: 0.0, y: (-hh + strip_top) / 2.0 }, "", false), legible(product.color));
     p.block
 }

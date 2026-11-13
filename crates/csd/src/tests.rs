@@ -174,7 +174,15 @@ fn device_block_has_both_attribute_definitions() {
             _ => None,
         })
         .collect();
-    assert_eq!(defs, [("PRODUCT".into(), true, "CHAMMQ50".into()), ("NAME".into(), true, String::new()), ("LABEL".into(), false, String::new())]);
+    assert_eq!(
+        defs,
+        [
+            ("PRODUCT".into(), true, "CHAMMQ50".into()),
+            ("NAME".into(), true, String::new()),
+            ("NOTES".into(), true, String::new()),
+            ("LABEL".into(), false, String::new())
+        ]
+    );
     assert_eq!(block_name("a b/c"), "CSD_a_b_c");
 }
 

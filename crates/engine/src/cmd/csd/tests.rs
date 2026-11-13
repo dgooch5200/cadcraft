@@ -679,3 +679,140 @@ fn smooth_wires_by_default_leave_the_ports_and_follow_the_ortho_toggle() {
     s.execute("ortho", &json!({ "on": false })).unwrap();
     assert_eq!(polyline(&s, w), smooth);
 }
+
+#[test]
+fn device_info_reports_ports_connections_and_size() {
+    let (mut s, a, b, w) = setup();
+    s.execute("csd.size", &json!({ "handles": [a.hex()], "w": 140 })).unwrap();
+    let r = s.execute("csd.device.info", &json!({ "handle": a.hex() })).unwrap();
+    assert_eq!(r["product"]["id"], CONSOLE);
+    assert_eq!(r["known"], true);
+    assert_eq!(r["sameProduct"], 1);
+    assert_eq!(r["size"][0], 140.0);
+    assert_eq!(r["libSize"][0], cadcraft_csd::CARD_W);
+    let net = r["ports"].as_array().unwrap().iter().find(|p| p["protocol"] == "netdata").unwrap();
+    assert_eq!((net["used"].as_u64(), net["capacity"].as_u64(), net["pooled"].as_bool()), (Some(1), Some(2), Some(true)));
+    assert!(r["ports"].as_array().unwrap().iter().all(|p| p["protocol"] != "midi"));
+    assert_eq!((r["connections"][0]["wire"].as_str(), r["connections"][0]["dir"].as_str()), (Some(w.hex().as_str()), Some("out")));
+    assert_eq!(r["connections"][0]["other"]["handle"], b.hex());
+    // The selection stands in for the handle; the far end sees the wire as incoming.
+    s.set_selection(vec![b]);
+    assert_eq!(s.execute("csd.device.info", &json!({})).unwrap()["connections"][0]["dir"], "in");
+    s.set_selection(vec![a, b]);
+    assert!(s.execute("csd.device.info", &json!({})).is_err());
+}
+
+#[test]
+fn device_set_writes_label_and_notes_in_one_undo_step_and_survives_a_library_refresh() {
+    let (mut s, a, _, _) = setup();
+    s.execute("csd.device.set", &json!({ "handle": a.hex(), "label": "Main desk", "notes": "FOH" })).unwrap();
+    let r = s.execute("csd.device.info", &json!({ "handle": a.hex() })).unwrap();
+    assert_eq!((r["label"].as_str(), r["notes"].as_str()), (Some("Main desk"), Some("FOH")));
+    let attr = |s: &Session, t: &str| insert(s, a).attribs.iter().find(|x| x.tag == t).map(|x| x.text.value.clone());
+    assert_eq!(attr(&s, "LABEL").as_deref(), Some("Main desk"));
+    let products = s.csd_library.to_vec();
+    s.execute("csd.library.set", &json!({ "products": products.iter().map(cadcraft_csd::product_record).collect::<Vec<_>>() })).unwrap();
+    assert_eq!(attr(&s, "NOTES").as_deref(), Some("FOH"));
+    // An empty label falls back to the product code.
+    s.execute("csd.device.set", &json!({ "handle": a.hex(), "label": " " })).unwrap();
+    assert_eq!(attr(&s, "NAME").as_deref(), Some("MQ50"));
+    assert!(s.execute("csd.device.set", &json!({ "handle": a.hex(), "notes": 3 })).is_err());
+    s.undo().unwrap();
+    assert_eq!(attr(&s, "NAME").as_deref(), Some("Main desk"));
+}
+
+#[test]
+fn device_set_adds_notes_to_a_device_that_lacks_them() {
+    let (mut s, a, _, _) = setup();
+    s.doc_mut()
+        .unwrap()
+        .modify_entity(a, |e| {
+            if let EntityKind::Insert(i) = &mut e.kind {
+                i.attribs.retain(|x| x.tag != "NOTES");
+            }
+        })
+        .unwrap();
+    s.execute("csd.device.set", &json!({ "handle": a.hex(), "notes": "late" })).unwrap();
+    let i = insert(&s, a);
+    assert!(i.attribs.iter().any(|x| x.tag == "NOTES" && x.text.value == "late" && x.invisible));
+}
+
+#[test]
+fn device_delete_removes_wires_and_their_decorations_in_one_undo_step() {
+    let (mut s, a, b, w) = setup();
+    let count = |s: &Session| s.doc().unwrap().space(&s.space()).unwrap().iter().count();
+    let before = count(&s);
+    assert!(before > 3, "wire decorations exist");
+    let r = s.execute("csd.device.delete", &json!({ "handles": [a.hex()] })).unwrap();
+    assert_eq!((r["deleted"].as_u64(), r["wires"].as_u64()), (Some(1), Some(1)));
+    assert!(s.doc().unwrap().entity(w).is_none());
+    assert_eq!(count(&s), 1, "only the other device is left");
+    assert!(s.doc().unwrap().entity(b).is_some());
+    s.undo().unwrap();
+    assert_eq!(count(&s), before);
+}
+
+#[test]
+fn replace_all_of_product_reaches_devices_outside_the_selection() {
+    let (mut s, a, b, _) = setup();
+    let c = handle(&s.execute("csd.place", &json!({ "product": CONSOLE, "at": [0, 200] })).unwrap());
+    s.set_selection(vec![a]);
+    assert_eq!(s.execute("csd.replace", &json!({ "product": NODE })).unwrap()["replaced"], 1);
+    s.set_selection(vec![b]);
+    let r = s.execute("csd.replace", &json!({ "product": CONSOLE, "allOfProduct": true })).unwrap();
+    assert_eq!(r["replaced"], 2);
+    assert_eq!(insert(&s, a).block, cadcraft_csd::block_name(CONSOLE));
+    assert_eq!(insert(&s, c).block, cadcraft_csd::block_name(CONSOLE));
+}
+
+fn product(id: &str, code: &str) -> cadcraft_csd::Product {
+    cadcraft_csd::Product { id: id.into(), name: id.into(), code: code.into(), ..Default::default() }
+}
+
+#[test]
+fn product_lookup_falls_back_to_a_unique_code() {
+    let lib = [product("OVATIONB565FC", "B-565FC"), product("OVATIONB565", "B-565"), product("OTHER1", "B 565fc")];
+    assert_eq!(find_product(&lib[..2], "b565fc").map(|p| p.id.as_str()), Some("OVATIONB565FC"));
+    // Two products share the code, so there is no match; an exact id still wins.
+    assert!(find_product(&lib, "b565fc").is_none());
+    assert_eq!(find_product(&lib, "OTHER1").map(|p| p.id.as_str()), Some("OTHER1"));
+}
+
+/// A card whose PRODUCT attribute names `id`, whatever the library holds.
+fn card_of(s: &mut Session, id: &str, at: [f64; 2]) -> Handle {
+    let h = handle(&s.execute("csd.place", &json!({ "product": CONSOLE, "at": at })).unwrap());
+    s.doc_mut()
+        .unwrap()
+        .modify_entity(h, |e| {
+            if let EntityKind::Insert(i) = &mut e.kind {
+                i.attribs.iter_mut().filter(|a| a.tag == "PRODUCT").for_each(|a| a.text.value = id.into());
+            }
+        })
+        .unwrap();
+    h
+}
+
+#[test]
+fn a_card_not_in_the_library_is_a_device_that_can_be_replaced_or_deleted() {
+    let mut s = ortho_session();
+    let ghost = card_of(&mut s, "OVCYC1FCV2", [0.0, 0.0]);
+    let node = handle(&s.execute("csd.place", &json!({ "product": NODE, "at": [200, 60] })).unwrap());
+    let info = s.execute("csd.device.info", &json!({ "handle": ghost.hex() })).unwrap();
+    assert_eq!(info["known"], false);
+    assert_eq!(info["product"]["id"], "OVCYC1FCV2");
+    assert_eq!(info["product"]["name"], "OVCYC1FCV2 (not in library)");
+    assert_eq!(info["product"]["code"], "OVCYC1FCV2");
+    assert_eq!(info["ports"], json!([]));
+    let netlist = s.execute("csd.netlist", &json!({})).unwrap();
+    assert_eq!(netlist["devices"].as_array().unwrap().len(), 2);
+    let err = connect(&mut s, ghost, node).unwrap_err().to_string();
+    assert!(err.contains("not in the library"), "{err}");
+    s.execute("csd.size", &json!({ "handles": [ghost.hex()], "w": 100 })).unwrap();
+    s.execute("csd.device.set", &json!({ "handle": ghost.hex(), "notes": "n" })).unwrap();
+    s.execute("csd.replace", &json!({ "product": CONSOLE, "handles": [ghost.hex()] })).unwrap();
+    let info = s.execute("csd.device.info", &json!({ "handle": ghost.hex() })).unwrap();
+    assert_eq!((info["known"].as_bool(), info["product"]["id"].as_str(), info["notes"].as_str()), (Some(true), Some(CONSOLE), Some("n")));
+    assert!(connect(&mut s, ghost, node).is_ok());
+    let gone = card_of(&mut s, "NOPE", [0.0, 300.0]);
+    assert_eq!(s.execute("csd.device.delete", &json!({ "handles": [gone.hex()] })).unwrap()["deleted"], 1);
+}

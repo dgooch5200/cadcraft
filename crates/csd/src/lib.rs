@@ -191,12 +191,13 @@ impl Product {
     }
 
     /// A PoE run counts against PoE ports alone; a data cable against every RJ45.
-    fn effective_capacity(&self, p: Protocol) -> u64 {
+    pub fn effective_capacity(&self, p: Protocol) -> u64 {
         if p == Protocol::NetData { self.capacity(Protocol::Network).saturating_add(self.capacity(Protocol::NetData)) } else { self.capacity(p) }
     }
 }
 
-fn used(links: &[WireLink], dev: Handle, p: Protocol) -> usize {
+/// Connections `dev` has of protocol `p` (a data cable also counts PoE runs, which share its RJ45s).
+pub fn used(links: &[WireLink], dev: Handle, p: Protocol) -> usize {
     let pooled = p == Protocol::NetData;
     links.iter().filter(|l| (l.from == dev || l.to == dev) && (l.protocol == p || (pooled && l.protocol == Protocol::Network))).count()
 }
@@ -300,6 +301,9 @@ pub fn can_connect(devices: &[(Handle, &Product)], links: &[WireLink], proposed:
     };
     let label = p.label();
     for prod in [from, to] {
+        if prod.missing {
+            return refuse("not-in-library", format!("{} is not in the library — replace it with a library product first", prod.code));
+        }
         if prod.effective_capacity(p) == 0 {
             return refuse("no-ports-of-type", format!("{} has no {label} ports — check the active wire type", prod.code));
         }

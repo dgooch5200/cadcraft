@@ -2,13 +2,14 @@
 //! polylines whose xdata ([`WireLink`]) names the two devices they join. The post-command pass
 //! keeps every wire on its devices' ports.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use cadcraft_csd::{
     BOLD_STYLE, CARD_H, CARD_W, Deco, Product, Protocol, Side, Slot, WIRE_W, WireLink, accessory_products, block_name, bold_style, can_connect,
     deco_block, deco_block_name, deco_from_xdata, deco_points, deco_xdata, device_block, edge_frame, fan_order, library_json, parse_library,
-    parse_products, port_point, product_record, route, truncate_label, world_side,
+    parse_products, port_point, product_record, route, truncate_label, used, world_side,
 };
 use cadcraft_doc::color::{Color, Rgb};
 use cadcraft_doc::{Common, Drawing, Entity, EntityKind, EntityStore, Handle, Insert, Layer, LwPolyline, Space};
@@ -30,7 +31,15 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("csd.size", "Size Devices", run_size)
             .params("{handles? (default the selection), w?, h?: card size in drawing units, 10..1000, null resets that axis} → {sized}"),
         CommandSpec::new("csd.replace", "Replace Devices", run_replace)
-            .params("{product: id of a library product, handles? (default the selection)} → {replaced}; devices already that product are skipped"),
+            .params("{product: id of a library product, handles? (default the selection), allOfProduct?: bool (default false: also every other device on the drawing with the same product as a target)} → {replaced}; devices already that product are skipped"),
+        CommandSpec::new("csd.device.info", "Device Info", run_device_info)
+            .params("{handle? (default the single selected device)} → {handle, product: {id, name, code, brand, cat, color: 0xRRGGBB number}, known, label, notes, ports: [{protocol, label, used, capacity, pooled}], connections: [{wire, protocol, dir: out|in, other: {handle, label}}], sameProduct, at: [x,y], size: [w,h], libSize: [w,h]}")
+            .noundo()
+            .enabled(always),
+        CommandSpec::new("csd.device.set", "Set Device Properties", run_device_set)
+            .params("{handle? (default the single selected device), label?: text (empty = the product code), notes?: text} → {handle}"),
+        CommandSpec::new("csd.device.delete", "Delete Devices", run_device_delete)
+            .params("{handles? (default the selection)} → {deleted, wires}; also removes every wire linked to them and the wires' decorations"),
         CommandSpec::new("csd.arm", "Arm Product", place::run_arm).params("{product: id of a library product} → {product}").noundo(),
         CommandSpec::new("csd.protocol", "Wire Protocol", run_protocol)
             .params("{protocol: network|netdata|10scene|dmx|0-10v|contact|power|midi|epix3p|epix4p} → {protocol}; the wire type csd.connect draws next")
@@ -67,10 +76,11 @@ fn run_protocol(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "protocol": id }))
 }
 
-/// A device on the drawing: a `CSD_` block reference whose `PRODUCT` attribute names a known product.
+/// A device on the drawing: a `CSD_` block reference with a `PRODUCT` attribute. A product the
+/// library lacks is a [`stand_in`].
 struct Device<'a> {
     handle: Handle,
-    product: &'a Product,
+    product: Cow<'a, Product>,
     insert: &'a Insert,
 }
 
@@ -79,10 +89,24 @@ fn is_device_block(i: &Insert) -> bool {
 }
 
 /// The product named `id`: exact, else ignoring case and punctuation, so a file saved with
-/// `logic-poex` finds `LOGICPOEX`.
+/// `logic-poex` finds `LOGICPOEX`; else the one product whose code matches the same way.
 fn find_product<'a>(products: &'a [Product], id: &str) -> Option<&'a Product> {
     let key = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect::<String>();
-    products.iter().find(|p| p.id == id).or_else(|| products.iter().find(|p| key(&p.id) == key(id)))
+    let k = key(id);
+    products.iter().find(|p| p.id == id).or_else(|| products.iter().find(|p| key(&p.id) == k)).or_else(|| {
+        let mut by_code = products.iter().filter(|p| key(&p.code) == k);
+        by_code.next().filter(|_| by_code.next().is_none())
+    })
+}
+
+/// What a card whose product the library lacks is backed by: no ports, like a library product
+/// flagged `missing`.
+fn stand_in(id: &str) -> Product {
+    Product { id: id.into(), name: format!("{id} (not in library)"), code: id.into(), color: 0x888888, missing: true, ..Product::default() }
+}
+
+fn resolve<'a>(products: &'a [Product], id: &str) -> Cow<'a, Product> {
+    find_product(products, id).map_or_else(|| Cow::Owned(stand_in(id)), Cow::Borrowed)
 }
 
 fn devices<'a>(store: &'a EntityStore, products: &'a [Product]) -> Vec<Device<'a>> {
@@ -94,7 +118,7 @@ fn devices<'a>(store: &'a EntityStore, products: &'a [Product]) -> Vec<Device<'a
                 return None;
             }
             let id = insert.attribs.iter().find(|a| a.tag == "PRODUCT")?.text.value.as_str();
-            Some(Device { handle: e.handle, product: find_product(products, id)?, insert })
+            Some(Device { handle: e.handle, product: resolve(products, id), insert })
         })
         .collect()
 }
@@ -469,7 +493,18 @@ fn run_replace(s: &mut Session, p: &Value) -> Result<Value> {
     let id = str_param(p, "product").ok_or_else(|| bad("csd.replace", "`product` is required"))?;
     let library = s.csd_library.clone();
     let product = library.iter().find(|x| x.id == id).ok_or_else(|| bad("csd.replace", format!("unknown product \"{id}\"")))?;
-    let hs = device_handles(s, &targets(s, p)?)?;
+    let mut hs = device_handles(s, &targets(s, p)?)?;
+    if p.get("allOfProduct").and_then(Value::as_bool).unwrap_or(false) {
+        let d = s.doc()?;
+        let of = |h: Handle| match d.entity(h).map(|e| &e.kind) {
+            Some(EntityKind::Insert(i)) => product_attr(i).map(str::to_string),
+            _ => None,
+        };
+        let ids: HashSet<String> = hs.iter().filter_map(|h| of(*h)).collect();
+        let all: Vec<Handle> = d.space(&s.space()).map(|st| st.iter().map(|e| e.handle).collect()).unwrap_or_default();
+        let more: Vec<Handle> = all.into_iter().filter(|h| !hs.contains(h) && of(*h).is_some_and(|id| ids.contains(&id))).collect();
+        hs.extend(more);
+    }
     let name = ensure_device_block(s, product)?;
     let d = s.doc_mut()?;
     let mut replaced = 0;
@@ -498,6 +533,121 @@ fn side_param(p: &Value, key: &str) -> Result<Side> {
     str_param(p, key).and_then(Side::from_id).ok_or_else(|| bad("csd.connect", format!("`{key}` must be top, bot, lft or rgt")))
 }
 
+fn product_attr(i: &Insert) -> Option<&str> {
+    if !is_device_block(i) {
+        return None;
+    }
+    i.attribs.iter().find(|a| a.tag == "PRODUCT").map(|a| a.text.value.as_str())
+}
+
+fn attr<'a>(i: &'a Insert, tag: &str) -> &'a str {
+    i.attribs.iter().find(|a| a.tag == tag).map(|a| a.text.value.as_str()).unwrap_or_default()
+}
+
+/// The one device `handle` (default: the selection) names.
+fn one_device(s: &Session, cmd: &str, p: &Value) -> Result<Handle> {
+    match device_handles(s, &targets(s, p)?)?.as_slice() {
+        [h] => Ok(*h),
+        _ => Err(bad(cmd, "`handle` (or a selection of exactly one device) is required")),
+    }
+}
+
+fn run_device_info(s: &mut Session, p: &Value) -> Result<Value> {
+    let h = one_device(s, "csd.device.info", p)?;
+    let products = s.csd_library.clone();
+    let d = s.doc()?;
+    let store = d.space(&s.space()).ok_or_else(|| EngineError::Other("no such space".into()))?;
+    let Some(EntityKind::Insert(i)) = store.get(h).map(|e| &e.kind) else { return Err(bad("csd.device.info", "no such device")) };
+    let id = product_attr(i).unwrap_or_default();
+    let product = resolve(&products, id);
+    let links = wires(store);
+    let only: Vec<WireLink> = links.iter().map(|(_, l)| l.clone()).collect();
+    let ports: Vec<Value> = Protocol::ALL
+        .iter()
+        .filter_map(|&pr| {
+            let (used, cap) = (used(&only, h, pr), product.effective_capacity(pr));
+            (!product.missing && (used > 0 || cap > 0))
+                .then(|| json!({ "protocol": pr.id(), "label": pr.label(), "used": used, "capacity": cap, "pooled": pr == Protocol::NetData }))
+        })
+        .collect();
+    let name_of = |o: Handle| match store.get(o).map(|e| &e.kind) {
+        Some(EntityKind::Insert(oi)) => attr(oi, "NAME").to_string(),
+        _ => String::new(),
+    };
+    let connections: Vec<Value> = links
+        .iter()
+        .filter(|(_, l)| l.from == h || l.to == h)
+        .map(|(w, l)| {
+            let out = l.from == h;
+            let other = if out { l.to } else { l.from };
+            json!({ "wire": w.hex(), "protocol": l.protocol.id(), "dir": if out { "out" } else { "in" }, "other": { "handle": other.hex(), "label": name_of(other) } })
+        })
+        .collect();
+    let same = store.iter().filter(|e| matches!(&e.kind, EntityKind::Insert(o) if product_attr(o) == Some(id))).count();
+    Ok(json!({
+        "handle": h.hex(),
+        "product": { "id": product.id, "name": product.name, "code": product.code, "brand": product.brand, "cat": product.cat, "color": product.color },
+        "known": !product.missing,
+        "label": attr(i, "NAME"),
+        "notes": attr(i, "NOTES"),
+        "ports": ports,
+        "connections": connections,
+        "sameProduct": same,
+        "at": [i.insert.x, i.insert.y],
+        "size": [CARD_W * i.scale.x.abs(), CARD_H * i.scale.y.abs()],
+        "libSize": [CARD_W, CARD_H],
+    }))
+}
+
+fn run_device_set(s: &mut Session, p: &Value) -> Result<Value> {
+    let h = one_device(s, "csd.device.set", p)?;
+    let text = |key: &str| match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(t)) => Ok(Some(t.clone())),
+        Some(_) => Err(bad("csd.device.set", format!("`{key}` must be text"))),
+    };
+    let (label, notes) = (text("label")?, text("notes")?);
+    let products = s.csd_library.clone();
+    s.doc_mut()?.modify_entity(h, |e| {
+        let EntityKind::Insert(i) = &mut e.kind else { return };
+        let code = product_attr(i).map(|id| resolve(&products, id).code.clone()).unwrap_or_default();
+        let mut put = |tag: &str, value: String| {
+            if let Some(a) = i.attribs.iter_mut().find(|a| a.tag == tag) {
+                a.text.value = value;
+            } else if let Some(mut a) = i.attribs.iter().find(|a| a.tag == "NAME" || a.tag == "PRODUCT").cloned() {
+                a.tag = tag.into();
+                a.invisible = true;
+                a.text.value = value;
+                i.attribs.push(a);
+            }
+        };
+        if let Some(l) = label {
+            let l = if l.trim().is_empty() { code } else { l };
+            put("LABEL", truncate_label(&l));
+            put("NAME", l);
+        }
+        if let Some(n) = notes {
+            put("NOTES", n);
+        }
+    })?;
+    Ok(json!({ "handle": h.hex() }))
+}
+
+fn run_device_delete(s: &mut Session, p: &Value) -> Result<Value> {
+    let devs: HashSet<Handle> = device_handles(s, &targets(s, p)?)?.into_iter().collect();
+    let d = s.doc()?;
+    let store = d.space(&s.space()).ok_or_else(|| EngineError::Other("no such space".into()))?;
+    let linked: HashSet<Handle> = wires(store).into_iter().filter(|(_, l)| devs.contains(&l.from) || devs.contains(&l.to)).map(|(h, _)| h).collect();
+    let decos = store.iter().filter(|e| deco_from_xdata(&e.common.xdata).is_some_and(|(w, _)| linked.contains(&w))).map(|e| e.handle);
+    let doomed: Vec<Handle> = devs.iter().copied().chain(linked.iter().copied()).chain(decos).collect();
+    let d = s.doc_mut()?;
+    doomed.into_iter().for_each(|h| {
+        d.remove_entity(h);
+    });
+    s.set_selection(Vec::new());
+    Ok(json!({ "deleted": devs.len(), "wires": linked.len() }))
+}
+
 fn run_connect(s: &mut Session, p: &Value) -> Result<Value> {
     let handle = |key| handle_param(p, key).ok_or_else(|| bad("csd.connect", format!("`{key}` (object handle) is required")));
     let link = WireLink {
@@ -511,7 +661,8 @@ fn run_connect(s: &mut Session, p: &Value) -> Result<Value> {
     {
         let d = s.doc()?;
         let store = d.space(&s.space()).ok_or_else(|| EngineError::Other("no such space".into()))?;
-        let list: Vec<(Handle, &Product)> = devices(store, &products).iter().map(|x| (x.handle, x.product)).collect();
+        let devs = devices(store, &products);
+        let list: Vec<(Handle, &Product)> = devs.iter().map(|x| (x.handle, &*x.product)).collect();
         let existing: Vec<WireLink> = wires(store).into_iter().map(|(_, l)| l).collect();
         can_connect(&list, &existing, &link).map_err(|r| EngineError::Other(r.message))?;
     }
