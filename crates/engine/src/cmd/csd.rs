@@ -1181,11 +1181,16 @@ fn add_wire(s: &mut Session, link: &WireLink) -> Result<Handle> {
 /// The entity linetype scale that makes the first dash of `DASH` `len` long, whatever units the
 /// library was loaded in; loads the linetype if the drawing lacks it.
 fn dashed_scale(d: &mut Drawing, len: f64) -> f64 {
-    if d.linetype(DASH).is_none() {
-        let lt = cadcraft_doc::library::standard_linetypes_for(d).into_iter().find(|l| l.name == DASH);
+    linetype_scale(d, DASH, len)
+}
+
+/// Like [`dashed_scale`] for the standard linetype `name`, sized by its first non-zero element.
+fn linetype_scale(d: &mut Drawing, name: &str, len: f64) -> f64 {
+    if d.linetype(name).is_none() {
+        let lt = cadcraft_doc::library::standard_linetypes_for(d).into_iter().find(|l| l.name == name);
         d.linetypes.extend(lt);
     }
-    d.linetype(DASH).and_then(|lt| lt.pattern.first()).map(|e| e.length.abs()).filter(|l| *l > 0.0).map_or(1.0, |l| len / l)
+    d.linetype(name).and_then(|lt| lt.pattern.iter().map(|e| e.length.abs()).find(|l| *l > 0.0)).map_or(1.0, |l| len / l)
 }
 
 /// The layer for `protocol`'s wires, created on first use in the protocol's colour (true
