@@ -70,6 +70,8 @@ struct Info {
     accessories: Vec<Accessory>,
     #[serde(rename = "supplyByOthers")]
     supply_by_others: bool,
+    #[serde(rename = "twoLine")]
+    two_line: bool,
     known: bool,
     product: Product,
     label: String,
@@ -298,6 +300,15 @@ pub(super) fn show(app: &mut CadApp, ui: &mut egui::Ui, sel: &[Handle]) {
                 cmd = Some(("csd.device.set", json!({ "handle": hex, "supplyByOthers": supply })));
             }
         });
+        if !cadcraft_csd::is_builtin(&p.id) {
+            let mut two = i.two_line;
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                if ui.checkbox(&mut two, crate::tl!("Two label lines")).changed() {
+                    cmd = Some(("csd.device.set", json!({ "handle": hex, "twoLine": two })));
+                }
+            });
+        }
         let all_id = sid.with("all");
         let mut all = ui.data(|d| d.get_temp::<bool>(all_id)).unwrap_or(false);
         prop_row(ui, "Replace with", |ui| {

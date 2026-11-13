@@ -20,7 +20,7 @@ impl Session {
         // Part of the file as opened, so neither dirty nor an undo step.
         let as_read = st.doc.clone();
         cmd::csd::refresh_blocks(&mut st.doc, &self.csd_library);
-        cmd::csd::refresh(&mut st.doc, self.settings.orthomode);
+        cmd::csd::refresh(&mut st.doc, &self.csd_library, self.settings.orthomode);
         if !std::sync::Arc::ptr_eq(&as_read, &st.doc) {
             st.saved = st.doc.clone();
         }

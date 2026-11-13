@@ -1,10 +1,10 @@
 //! Selecting and arranging devices by their card edges.
 
-use cadcraft_csd::{CARD_H, CARD_W};
 use cadcraft_doc::{EntityKind, Handle, Insert};
+use cadcraft_geom::Vec2;
 use serde_json::{Value, json};
 
-use super::{device_handles, devices, handle_param, point_req, str_param, targets};
+use super::{card_of, device_handles, devices, handle_param, point_req, str_param, targets};
 use crate::cmd::bad;
 use crate::{Result, Session};
 
@@ -17,8 +17,8 @@ struct Card {
     hh: f64,
 }
 
-fn card(handle: Handle, i: &Insert) -> Card {
-    let (w, t) = (CARD_W / 2.0 * i.scale.x.abs(), CARD_H / 2.0 * i.scale.y.abs());
+fn card(handle: Handle, i: &Insert, size: Vec2) -> Card {
+    let (w, t) = (size.x / 2.0 * i.scale.x.abs(), size.y / 2.0 * i.scale.y.abs());
     let (c, n) = (i.rotation.cos().abs(), i.rotation.sin().abs());
     Card { handle, x: i.insert.x, y: i.insert.y, hw: c * w + n * t, hh: n * w + c * t }
 }
@@ -29,7 +29,7 @@ fn cards(s: &Session, p: &Value) -> Result<Vec<Card>> {
     Ok(hs
         .into_iter()
         .filter_map(|h| match &d.entity(h)?.kind {
-            EntityKind::Insert(i) => Some(card(h, i)),
+            EntityKind::Insert(i) => Some(card(h, i, card_of(i, &s.csd_library))),
             _ => None,
         })
         .collect())
@@ -126,7 +126,7 @@ pub(super) fn run_device_at(s: &mut Session, p: &Value) -> Result<Value> {
     let library = s.csd_library.clone();
     let hit = devices(&s.doc()?.model, &library)
         .iter()
-        .map(|d| card(d.handle, d.insert))
+        .map(|d| card(d.handle, d.insert, d.size()))
         .rfind(|c| (at.x - c.x).abs() <= c.hw && (at.y - c.y).abs() <= c.hh);
     Ok(json!({ "handle": hit.map(|c| c.handle.hex()) }))
 }

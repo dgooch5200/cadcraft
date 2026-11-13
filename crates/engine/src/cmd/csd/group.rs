@@ -1,10 +1,13 @@
 //! Commands over several devices at once: summary and batch labels.
 
-use cadcraft_csd::{CARD_H, CARD_W, is_builtin};
+use cadcraft_csd::{CARD_H, is_builtin};
 use cadcraft_doc::{EntityKind, Handle};
 use serde_json::{Value, json};
 
-use super::{MAX_ACCESSORY_LINES, accessories_of, apply_label, device_handles, find_product, product_attr, put_attr, resolve, str_param, targets};
+use super::{
+    MAX_ACCESSORY_LINES, accessories_of, apply_label, card_of, device_handles, find_product, product_attr, put_attr, resolve, str_param, targets,
+    two_line,
+};
 use crate::cmd::bad;
 use crate::{Result, Session};
 
@@ -38,12 +41,14 @@ pub(super) fn run_info(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let products: Vec<Value> =
         products.into_iter().map(|(id, name, code, count)| json!({ "id": id, "name": name, "code": code, "count": count })).collect();
+    let strips: Vec<bool> = inserts.iter().filter(|i| !product_attr(i).is_some_and(is_builtin)).map(|i| two_line(i)).collect();
     Ok(json!({
         "count": inserts.len(),
+        "twoLine": { "devices": strips.len(), "on": strips.iter().filter(|b| **b).count() },
         "products": products,
         "size": {
-            "w": common(inserts.iter().map(|i| CARD_W * i.scale.x.abs())),
-            "h": common(inserts.iter().map(|i| CARD_H * i.scale.y.abs())),
+            "w": common(inserts.iter().map(|i| card_of(i, &library).x * i.scale.x.abs())),
+            "h": common(inserts.iter().map(|i| card_of(i, &library).y * i.scale.y.abs())),
         },
     }))
 }
@@ -104,8 +109,7 @@ pub(super) fn run_label(s: &mut Session, p: &Value) -> Result<Value> {
     for (h, label) in &named {
         d.modify_entity(*h, |e| {
             let EntityKind::Insert(i) = &mut e.kind else { return };
-            let code = product_attr(i).map(|id| resolve(&library, id).code.clone()).unwrap_or_default();
-            apply_label(i, label.clone(), code);
+            apply_label(i, label.clone(), &resolve(&library, product_attr(i).unwrap_or_default()));
         })?;
     }
     let labels: Vec<Value> = named.iter().map(|(h, l)| json!({ "handle": h.hex(), "label": l })).collect();

@@ -49,7 +49,7 @@ fn store_link(s: &mut Session, h: Handle, link: &WireLink) -> Result<()> {
 /// The wire's routed path, ports included.
 fn path_of(s: &Session, h: Handle) -> Result<Vec<Vec2>> {
     let store = s.doc()?.space(&s.space()).ok_or_else(|| bad("csd.wire", "no such space"))?;
-    Ok(layout(store, s.settings.orthomode).into_iter().find(|l| l.wire == h).map(|l| l.path).unwrap_or_default())
+    Ok(layout(store, &s.csd_library, s.settings.orthomode).into_iter().find(|l| l.wire == h).map(|l| l.path).unwrap_or_default())
 }
 
 fn snapped(s: &Session, at: Vec2) -> Vec2 {
@@ -68,7 +68,7 @@ fn run_hit(s: &mut Session, p: &Value) -> Result<Value> {
     let tol = p.get("tolerance").and_then(Value::as_f64).filter(|t| t.is_finite() && *t >= 0.0).unwrap_or(PICK);
     let store = s.doc()?.space(&s.space()).ok_or_else(|| bad("csd.wire.hit", "no such space"))?;
     let (mut point, mut line): (Option<(f64, Handle, usize, usize)>, Option<(f64, Handle, usize)>) = (None, None);
-    for Laid { wire, link, path, .. } in layout(store, s.settings.orthomode) {
+    for Laid { wire, link, path, .. } in layout(store, &s.csd_library, s.settings.orthomode) {
         for (i, pt) in link.points.iter().enumerate() {
             let d = pt.dist(at);
             if d <= tol && point.is_none_or(|b| d < b.0) {
@@ -142,8 +142,11 @@ fn run_route(s: &mut Session, p: &Value) -> Result<Value> {
         *pt = to;
     }
     let store = s.doc()?.space(&s.space()).ok_or_else(|| bad("csd.wire.route", "no such space"))?;
-    let path =
-        layout_with(store, s.settings.orthomode, Some((h, &link.points))).into_iter().find(|l| l.wire == h).map(|l| l.path).unwrap_or_default();
+    let path = layout_with(store, &s.csd_library, s.settings.orthomode, Some((h, &link.points)))
+        .into_iter()
+        .find(|l| l.wire == h)
+        .map(|l| l.path)
+        .unwrap_or_default();
     Ok(json!({ "path": path.iter().map(|v| [v.x, v.y]).collect::<Vec<_>>(), "to": [to.x, to.y] }))
 }
 

@@ -41,7 +41,7 @@ fn text(v: Option<&Value>, default: &str) -> String {
 }
 
 /// A number or numeric string, clamped to `0..=max`; anything else is 0.
-fn num(v: Option<&Value>, max: f64) -> f64 {
+pub(crate) fn num(v: Option<&Value>, max: f64) -> f64 {
     let n = match v {
         Some(Value::Number(n)) => n.as_f64(),
         Some(Value::String(s)) => s.trim().parse().ok(),
@@ -183,6 +183,10 @@ pub fn accessory_products<'a>(products: &'a [Product], fitting: &[&Product]) -> 
 pub const BY_OTHERS_ID: &str = "__by-others";
 pub const OFF_PAGE_ID: &str = "__off-page";
 
+fn size_keys(w: u32, h: u32) -> Map<String, Value> {
+    [("iconW", w), ("iconH", h)].into_iter().map(|(k, v)| (k.to_string(), json!(v))).collect()
+}
+
 /// The two products the app supplies. They are in no library, so a library cannot shadow or drop
 /// them, and the schedule, BOM and patch skip them. Every port count is 99 (they are markers, not
 /// hardware) except 10Scene in, which is 0 so they end a bus rather than join two.
@@ -201,12 +205,15 @@ pub fn builtin_products() -> &'static [Product] {
             notes: "A labelled box for a source outside this drawing. Not counted on the schedule or the BOM.".into(),
             counts,
             color: 0x64748b,
+            // Wide and short, sized for a sentence rather than a model number.
+            extra: size_keys(216, 72),
             ..Product::default()
         };
         let off_page = Product {
             id: OFF_PAGE_ID.into(),
             name: "Off-page connector".into(),
             code: "OFF PAGE".into(),
+            extra: size_keys(200, 60),
             notes: "Marks a connection that continues on another drawing page. Not counted on the schedule or the BOM.".into(),
             ..by_others.clone()
         };

@@ -28,8 +28,17 @@ struct Size {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
+struct Strips {
+    devices: u32,
+    on: u32,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
 struct Info {
     count: u32,
+    #[serde(rename = "twoLine")]
+    two_line: Strips,
     products: Vec<Product>,
     size: Size,
 }
@@ -95,6 +104,18 @@ pub(super) fn show(app: &mut CadApp, ui: &mut egui::Ui, sel: &[Handle]) {
             d.insert_temp(number_id, numbered);
             d.insert_temp(start_id, start);
         });
+
+        let Strips { devices, on } = i.two_line;
+        if devices > 0 {
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                let mut all = on == devices;
+                let mixed = on > 0 && !all;
+                if ui.add(egui::Checkbox::new(&mut all, crate::tl!("Two label lines")).indeterminate(mixed)).changed() {
+                    cmd = Some(("csd.devices.set", json!({ "handles": hexes, "twoLine": all })));
+                }
+            });
+        }
 
         let (lu, lp) = app.session.doc().map(|d| (d.header.i64("LUNITS", 2), d.header.i64("LUPREC", 4))).unwrap_or((2, 4));
         let shown = |v: Option<f64>| v.map_or_else(String::new, |v| cadcraft_engine::units::format_distance(v, lu, lp));

@@ -7,10 +7,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use cadcraft_csd::{
-    BOLD_STYLE, CARD_H, CARD_W, Deco, OFF_PAGE_ID, Product, Protocol, Side, Slot, WIRE_W, WireLink, accessory_products, block_name, bold_style,
-    can_connect, deco_block, deco_block_name, deco_from_xdata, deco_points, deco_xdata, device_block, edge_frame, fan_order, is_builtin,
-    library_json, lookup, max_supply_watts, parse_library, parse_products, poe_verdict, port_point, product_record, route_via, truncate_label, used,
-    world_side,
+    BOLD_STYLE, CARD_H, CARD_W, Deco, OFF_PAGE_ID, Product, Protocol, Side, Slot, WIRE_W, WireLink, accessory_products, bold_style, can_connect,
+    card_block_name, card_size, deco_block, deco_block_name, deco_from_xdata, deco_points, deco_xdata, device_block, edge_frame, fan_order,
+    is_builtin, is_two_line_block, library_json, lookup, max_supply_watts, parse_library, parse_products, poe_verdict, port_point, product_record,
+    route_via, truncate_label, used, world_side,
 };
 use cadcraft_doc::color::{Color, Rgb};
 use cadcraft_doc::{Common, Drawing, Entity, EntityKind, EntityStore, Handle, Insert, Layer, LwPolyline, Space};
@@ -30,6 +30,7 @@ mod place;
 mod print;
 mod schedule;
 mod sheet;
+mod twoline;
 mod wire;
 use super::{CommandSpec, always, bad, point_req, str_param, targets};
 use crate::{EngineError, Result, Session};
@@ -66,13 +67,15 @@ fn own_specs() -> Vec<CommandSpec> {
             .noundo()
             .enabled(always),
         CommandSpec::new("csd.device.set", "Set Device Properties", run_device_set)
-            .params("{handle? (default the single selected device), label?: text (empty = the product code), notes?: text, mount?: handle of the device to mount in (\"\" = unmount; not itself or anything mounted in it), accessories?: [{product: id, qty}] (replaces the list; qty 0 drops a line), supplyByOthers?: bool (left off the bill of materials, accessories included), linkPage?: text, the page an off-page connector continues on (shown as \"See <text>\"; off-page connectors only)} → {handle}"),
+            .params("{handle? (default the single selected device), label?: text (empty = the product code), notes?: text, mount?: handle of the device to mount in (\"\" = unmount; not itself or anything mounted in it), accessories?: [{product: id, qty}] (replaces the list; qty 0 drops a line), supplyByOthers?: bool (left off the bill of materials, accessories included), twoLine?: bool (a second label strip: the product code above, the label below; the card grows by one strip and the bottom ports move down; not for built-ins), linkPage?: text, the page an off-page connector continues on (shown as \"See <text>\"; off-page connectors only)} → {handle}"),
         CommandSpec::new("csd.devices.info", "Devices Info", group::run_info)
-            .params("{handles? (default the selection)} → {count, products: [{id, name, code, count}], size: {w, h}: card size in drawing units, null where the devices differ}")
+            .params("{handles? (default the selection)} → {count, products: [{id, name, code, count}], size: {w, h}: card size in drawing units, null where the devices differ, twoLine: {devices: how many are not built-ins, on: how many of those have two strips}}")
             .noundo()
             .enabled(always),
         CommandSpec::new("csd.devices.accessory", "Add Accessory to Devices", group::run_accessory)
             .params("{product: id of a library product, handles? (default the selection), qty?: whole number (default 1)} → {changed}; sets that accessory line to `qty` on every device (the same as csd.device.set on each)"),
+        CommandSpec::new("csd.devices.set", "Set Devices Properties", twoline::run_set)
+            .params("{handles? (default the selection), twoLine: bool, as `csd.device.set`; built-ins are skipped} → {changed}"),
         CommandSpec::new("csd.devices.label", "Label Devices", group::run_label)
             .params("{handles? (default the selection), base: text (blank = each product code), start?: integer, pad?: digits to zero-pad the number to (default 0)} → {labels: [{handle, label}]}; without `start` every device gets `base`; with it, `base` plus a running number from `start` in reading order (top to bottom, left to right)"),
         CommandSpec::new("csd.device.delete", "Delete Devices", run_device_delete)
@@ -176,6 +179,23 @@ struct Device<'a> {
     insert: &'a Insert,
 }
 
+impl Device<'_> {
+    /// The card's size before the insert's scale.
+    fn size(&self) -> Vec2 {
+        card_size(&self.product, two_line(self.insert))
+    }
+}
+
+/// Whether the card shows a second strip: the `TWOLINE` attribute.
+fn two_line(i: &Insert) -> bool {
+    attr(i, "TWOLINE") == "1"
+}
+
+/// The size, before scale, of the card `i` is an insert of.
+fn card_of(i: &Insert, products: &[Product]) -> Vec2 {
+    card_size(&resolve(products, product_attr(i).unwrap_or_default()), two_line(i))
+}
+
 fn is_device_block(i: &Insert) -> bool {
     i.block.starts_with("CSD_")
 }
@@ -273,12 +293,12 @@ struct Laid {
 
 /// The path of every linked wire in `store` whose two devices exist. Each device edge's wires
 /// are dealt slots in fan order, so a wire's route depends on its neighbours on both edges.
-fn layout(store: &EntityStore, ortho: bool) -> Vec<Laid> {
-    layout_with(store, ortho, None)
+fn layout(store: &EntityStore, products: &[Product], ortho: bool) -> Vec<Laid> {
+    layout_with(store, products, ortho, None)
 }
 
 /// [`layout`] with one wire's waypoints replaced, to preview an edit.
-fn layout_with(store: &EntityStore, ortho: bool, over: Option<(Handle, &[Vec2])>) -> Vec<Laid> {
+fn layout_with(store: &EntityStore, products: &[Product], ortho: bool, over: Option<(Handle, &[Vec2])>) -> Vec<Laid> {
     let device = |h| match store.get(h).map(|x| &x.kind) {
         Some(EntityKind::Insert(i)) if is_device_block(i) => Some(i),
         _ => None,
@@ -297,6 +317,12 @@ fn layout_with(store: &EntityStore, ortho: bool, over: Option<(Handle, &[Vec2])>
             Some((e.handle, link, a, b, was))
         })
         .collect();
+    let mut sizes: HashMap<Handle, Vec2> = HashMap::new();
+    for (_, l, a, b, _) in &wires {
+        sizes.entry(l.from).or_insert_with(|| card_of(a, products));
+        sizes.entry(l.to).or_insert_with(|| card_of(b, products));
+    }
+    let size = |h: Handle| sizes.get(&h).copied().unwrap_or(Vec2::new(CARD_W, CARD_H));
     // Per device edge: each wire end with the far device's centre; `true` is the wire's `from` end.
     let mut edges: HashMap<(Handle, Side), Vec<((Handle, bool), Vec2)>> = HashMap::new();
     for (w, l, a, b, _) in &wires {
@@ -306,18 +332,18 @@ fn layout_with(store: &EntityStore, ortho: bool, over: Option<(Handle, &[Vec2])>
     let mut slots: HashMap<(Handle, bool), Slot> = HashMap::new();
     for ((dev, side), ends) in &edges {
         let Some(i) = device(*dev) else { continue };
-        let frame = edge_frame(i.insert.xy(), i.rotation, Vec2::new(i.scale.x, i.scale.y), *side);
+        let frame = edge_frame(i.insert.xy(), i.rotation, Vec2::new(i.scale.x, i.scale.y), size(*dev), *side);
         slots.extend(fan_order(&frame, ends));
     }
-    let end = |i: &Insert, side, slot| {
+    let end = |i: &Insert, h: Handle, side, slot| {
         let scale = Vec2::new(i.scale.x, i.scale.y);
-        (port_point(i.insert.xy(), i.rotation, scale, side, slot), world_side(side, i.rotation, scale))
+        (port_point(i.insert.xy(), i.rotation, scale, size(h), side, slot), world_side(side, i.rotation, scale))
     };
     wires
         .into_iter()
         .map(|(w, l, a, b, was)| {
             let (sa, sb) = (slots.get(&(w, true)).copied().unwrap_or(Slot::SOLO), slots.get(&(w, false)).copied().unwrap_or(Slot::SOLO));
-            let ((p, side_p), (q, side_q)) = (end(a, l.from_side, sa), end(b, l.to_side, sb));
+            let ((p, side_p), (q, side_q)) = (end(a, l.from, l.from_side, sa), end(b, l.to, l.to_side, sb));
             // Both ends shifted by one vector (the devices were moved together): the waypoints go along.
             let shift = was.map(|(f, t)| (p - f, q - t)).filter(|(d, e)| d.len() > 1e-9 && d.near(*e, 1e-6)).map(|(d, _)| d);
             let moved = shift.filter(|_| !l.points.is_empty()).map(|d| l.points.iter().map(|&pt| pt + d).collect::<Vec<_>>());
@@ -370,7 +396,7 @@ impl Plan {
 /// route with exactly its decorations, no decoration of a wire that is not there, and the
 /// decorations on top of everything else. A wire with a missing device keeps its geometry and
 /// its decorations, so undoing the erase finds it linked again.
-fn plan(store: &EntityStore, ortho: bool) -> Plan {
+fn plan(store: &EntityStore, products: &[Product], ortho: bool) -> Plan {
     let mut plan = Plan::default();
     let wire_set: HashSet<Handle> = wires(store).into_iter().map(|(h, _)| h).collect();
     // A decoration of a wire that is not one (a stale or hostile handle) or a second one for the
@@ -388,7 +414,7 @@ fn plan(store: &EntityStore, ortho: bool) -> Plan {
         }
     }
     plan.lift = decos.iter().filter(|(i, _)| last_other.is_some_and(|l| *i < l)).map(|(_, h)| *h).collect();
-    for Laid { wire, link, path, moved } in layout(store, ortho) {
+    for Laid { wire, link, path, moved } in layout(store, products, ortho) {
         let protocol = link.protocol;
         if let Some(points) = moved {
             plan.links.push((wire, WireLink { points, ..link.clone() }));
@@ -459,11 +485,11 @@ fn spaces(doc: &Drawing) -> Vec<Space> {
 /// Brings every linked wire and its decorations in line with the devices.
 /// ponytail: every wire is re-routed after every command; index by changed handles (as assoc.rs
 /// does) when drawings get large.
-pub(crate) fn refresh(doc: &mut Arc<Drawing>, ortho: bool) {
+pub(crate) fn refresh(doc: &mut Arc<Drawing>, products: &[Product], ortho: bool) {
     sheet::refresh_legend(doc);
     sync_display(doc);
     for space in spaces(doc) {
-        let p = doc.space(&space).map(|st| plan(st, ortho)).unwrap_or_default();
+        let p = doc.space(&space).map(|st| plan(st, products, ortho)).unwrap_or_default();
         apply(doc, &space, p);
     }
 }
@@ -482,8 +508,13 @@ pub(crate) fn refresh_blocks(doc: &mut Arc<Drawing>, library: &[Product]) -> boo
             _ => None,
         })
     };
-    let devices: Vec<&Product> =
-        doc.blocks.iter().filter(|(n, _)| n.starts_with("CSD_")).take(MAX_REFRESH).filter_map(|(_, b)| product_of(b)).collect();
+    let devices: Vec<(&Product, bool)> = doc
+        .blocks
+        .iter()
+        .filter(|(n, _)| n.starts_with("CSD_"))
+        .take(MAX_REFRESH)
+        .filter_map(|(n, b)| Some((product_of(b)?, is_two_line_block(n))))
+        .collect();
     let decos: Vec<(Protocol, Deco)> = Protocol::ALL
         .iter()
         .flat_map(|&p| [Deco::Start, Deco::Pill].map(|d| (p, d)))
@@ -505,10 +536,10 @@ pub(crate) fn refresh_blocks(doc: &mut Arc<Drawing>, library: &[Product]) -> boo
             changed = true;
         }
     };
-    for product in devices {
+    for (product, two_line) in devices {
         ensure_bold(&mut d);
         let dash = if product.missing || is_builtin(&product.id) { dashed_scale(&mut d, BORDER_DASH) } else { 1.0 };
-        let block = device_block(product, || d.new_handle(), dash);
+        let block = device_block(product, two_line, || d.new_handle(), dash);
         put(&mut d, block);
     }
     for (p, k) in decos {
@@ -559,24 +590,29 @@ fn run_place(s: &mut Session, p: &Value) -> Result<Value> {
 /// Inserts `product`'s card at `at`; the strip shows `label`, or the short code until there is one
 /// (a built-in has no code on its card, so its name).
 fn place_card(s: &mut Session, product: &Product, label: &str, at: Vec2) -> Result<Handle> {
-    let name = ensure_device_block(s, product)?;
+    let name = ensure_device_block(s, product, false)?;
     let default = if is_builtin(&product.id) { &product.name } else { &product.code };
     let label = if label.trim().is_empty() { default } else { label };
     let mut values = Map::new();
     values.insert("PRODUCT".into(), json!(product.id));
     values.insert("NAME".into(), json!(label));
-    values.insert("LABEL".into(), json!(truncate_label(label)));
+    values.insert("LABEL".into(), json!(strip_text(product, false, label)));
     super::blocks::insert(s, &name, at, 1.0, 0.0, &values)
 }
 
-/// The name of `product`'s card block, defined in the drawing if it is not yet.
-fn ensure_device_block(s: &mut Session, product: &Product) -> Result<String> {
-    let name = block_name(&product.id);
+/// `label` as the card's label shows it: cut to the strip, or whole where a built-in wraps it.
+fn strip_text(product: &Product, two_line: bool, label: &str) -> String {
+    if is_builtin(&product.id) { label.into() } else { truncate_label(label, card_size(product, two_line).x) }
+}
+
+/// The name of `product`'s card block (the two-strip variant for `two_line`), defined in the drawing if it is not yet.
+fn ensure_device_block(s: &mut Session, product: &Product, two_line: bool) -> Result<String> {
+    let name = card_block_name(&product.id, two_line && !is_builtin(&product.id));
     if s.doc()?.block(&name).is_none() {
         let d = s.doc_mut()?;
         ensure_bold(d);
         let dash = if product.missing || is_builtin(&product.id) { dashed_scale(d, BORDER_DASH) } else { 1.0 };
-        let block = device_block(product, || d.new_handle(), dash);
+        let block = device_block(product, two_line, || d.new_handle(), dash);
         d.blocks.insert(name.clone(), Arc::new(block));
     }
     Ok(name)
@@ -605,12 +641,14 @@ fn device_handles(s: &Session, hs: &[Handle]) -> Result<Vec<Handle>> {
 
 fn run_size(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = device_handles(s, &targets(s, p)?)?;
+    let library = s.csd_library.clone();
     // Validate against every device first so a bad value changes nothing.
     let mut scales = Vec::new();
     for h in &hs {
         if let Some(EntityKind::Insert(i)) = s.doc()?.entity(*h).map(|e| &e.kind) {
             let sign = |v: f64| if v == 0.0 { 1.0 } else { v };
-            scales.push((*h, axis_scale(p, "w", CARD_W, sign(i.scale.x))?, axis_scale(p, "h", CARD_H, sign(i.scale.y))?));
+            let card = card_of(i, &library);
+            scales.push((*h, axis_scale(p, "w", card.x, sign(i.scale.x))?, axis_scale(p, "h", card.y, sign(i.scale.y))?));
         }
     }
     let d = s.doc_mut()?;
@@ -641,7 +679,8 @@ fn run_replace(s: &mut Session, p: &Value) -> Result<Value> {
         let more: Vec<Handle> = all.into_iter().filter(|h| !hs.contains(h) && of(*h).is_some_and(|id| ids.contains(&id))).collect();
         hs.extend(more);
     }
-    let name = ensure_device_block(s, product)?;
+    let name = ensure_device_block(s, product, false)?;
+    let two_name = ensure_device_block(s, product, true)?;
     let d = s.doc_mut()?;
     let mut replaced = 0;
     for h in hs {
@@ -650,7 +689,11 @@ fn run_replace(s: &mut Session, p: &Value) -> Result<Value> {
             let Some(a) = i.attribs.iter_mut().find(|a| a.tag == "PRODUCT") else { return };
             if a.text.value != product.id {
                 a.text.value = product.id.clone();
-                i.block = name.clone();
+                let two = two_line(i) && two_name != name;
+                if !two && two_line(i) {
+                    put_attr(i, "TWOLINE", String::new());
+                }
+                i.block = if two { two_name.clone() } else { name.clone() };
                 replaced += 1;
             }
         })?;
@@ -804,6 +847,7 @@ fn run_device_info(s: &mut Session, p: &Value) -> Result<Value> {
     let Some(EntityKind::Insert(i)) = store.get(h).map(|e| &e.kind) else { return Err(bad("csd.device.info", "no such device")) };
     let id = product_attr(i).unwrap_or_default();
     let product = resolve(&products, id);
+    let card = card_size(&product, two_line(i));
     let links = wires(store);
     let only: Vec<WireLink> = links.iter().map(|(_, l)| l.clone()).collect();
     let ports: Vec<Value> = port_usage(&product, &only, h)
@@ -841,8 +885,9 @@ fn run_device_info(s: &mut Session, p: &Value) -> Result<Value> {
         "connections": connections,
         "sameProduct": same,
         "at": [i.insert.x, i.insert.y],
-        "size": [CARD_W * i.scale.x.abs(), CARD_H * i.scale.y.abs()],
-        "libSize": [CARD_W, CARD_H],
+        "size": [card.x * i.scale.x.abs(), card.y * i.scale.y.abs()],
+        "libSize": [card.x, card.y],
+        "twoLine": two_line(i),
     }))
 }
 
@@ -859,9 +904,9 @@ fn put_attr(i: &mut Insert, tag: &str, value: String) {
 }
 
 /// A device's label; blank falls back to the product `code`.
-fn apply_label(i: &mut Insert, label: String, code: String) {
-    let l = if label.trim().is_empty() { code } else { label };
-    put_attr(i, "LABEL", truncate_label(&l));
+fn apply_label(i: &mut Insert, label: String, product: &Product) {
+    let l = if label.trim().is_empty() { product.code.clone() } else { label };
+    put_attr(i, "LABEL", strip_text(product, two_line(i), &l));
     put_attr(i, "NAME", l);
 }
 
@@ -903,18 +948,28 @@ fn run_device_set(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::Bool(b)) => Some(*b),
         Some(_) => return Err(bad("csd.device.set", "`supplyByOthers` must be true or false")),
     };
+    let two = match p.get("twoLine") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(b)) => Some(*b),
+        Some(_) => return Err(bad("csd.device.set", "`twoLine` must be true or false")),
+    };
+    if two.is_some() && matches!(s.doc()?.entity(h).map(|e| &e.kind), Some(EntityKind::Insert(i)) if product_attr(i).is_some_and(is_builtin)) {
+        return Err(bad("csd.device.set", "`twoLine` does not apply to built-in devices"));
+    }
+    if let Some(on) = two {
+        twoline::set(s, &[h], on)?;
+    }
     let products = s.csd_library.clone();
     s.doc_mut()?.modify_entity(h, |e| {
         let EntityKind::Insert(i) = &mut e.kind else { return };
-        let code = product_attr(i).map(|id| resolve(&products, id).code.clone()).unwrap_or_default();
         if let Some(l) = label {
-            apply_label(i, l, code);
+            apply_label(i, l, &resolve(&products, product_attr(i).unwrap_or_default()));
         }
         if let Some(n) = notes {
             put_attr(i, "NOTES", n);
         }
         if let Some(l) = link_page {
-            put_attr(i, "LINKSEE", if l.is_empty() { String::new() } else { truncate_label(&format!("See {l}")) });
+            put_attr(i, "LINKSEE", if l.is_empty() { String::new() } else { truncate_label(&format!("See {l}"), card_of(i, &products).x) });
             put_attr(i, "LINKPAGE", l);
         }
         if let Some(m) = mount {
@@ -1033,7 +1088,8 @@ fn run_connect(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let h = add_wire(s, &link)?;
     let ortho = s.settings.orthomode;
-    refresh(&mut s.state_mut()?.doc, ortho);
+    let library = s.csd_library.clone();
+    refresh(&mut s.state_mut()?.doc, &library, ortho);
     Ok(match warning {
         Some(w) => json!({ "handle": h.hex(), "warning": w }),
         None => json!({ "handle": h.hex() }),
@@ -1188,13 +1244,14 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
     // Ortho is a session setting, so a toggle must re-route although no drawing changed.
     let ortho = s.settings.orthomode;
     let restyled = std::mem::replace(&mut s.csd_ortho, ortho) != ortho;
+    let library = s.csd_library.clone();
     if let Ok(st) = s.state_mut()
         && (restyled || before.is_some_and(|b| !Arc::ptr_eq(b, &st.doc)))
     {
         if let Some(b) = before {
             carry_mounted(b, &mut st.doc);
         }
-        refresh(&mut st.doc, ortho);
+        refresh(&mut st.doc, &library, ortho);
     }
 }
 

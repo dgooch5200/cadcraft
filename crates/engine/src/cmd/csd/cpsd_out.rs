@@ -3,14 +3,14 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use cadcraft_csd::{CARD_H, CARD_W, is_builtin, product_record};
+use cadcraft_csd::{is_builtin, product_record};
 use cadcraft_doc::Handle;
 use cadcraft_geom::Vec2;
 use serde_json::{Map, Value, json};
 
 use super::cpsd::{TITLE_MAP, from_drawing};
 use super::patch::MODE_TAG;
-use super::{accessories_of, attr, bad, devices, find_product, mount_of, schedule, sheet, str_param, wires, write_library};
+use super::{accessories_of, attr, bad, devices, find_product, mount_of, schedule, sheet, str_param, two_line, wires, write_library};
 use crate::{EngineError, Result, Session};
 
 const CMD: &str = "csd.export.cpsd";
@@ -38,7 +38,8 @@ pub(super) fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     let mut nodes: Vec<Value> = Vec::new();
     for (n, d) in devs.iter().enumerate() {
         let i = d.insert;
-        let (w, h) = (CARD_W * i.scale.x.abs(), CARD_H * i.scale.y.abs());
+        let card = d.size();
+        let (w, h) = (card.x * i.scale.x.abs(), card.y * i.scale.y.abs());
         // The insert point is the card's centre; ChamSys keeps the top-left.
         let (cx, cy) = from_drawing(Vec2::new(i.insert.x, i.insert.y));
         let name = attr(i, "NAME");
@@ -50,9 +51,12 @@ pub(super) fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
             "label": if name == d.product.code { "" } else { name },
             "notes": attr(i, "NOTES"),
         });
-        if (w - CARD_W).abs() > 1e-9 || (h - CARD_H).abs() > 1e-9 {
+        if (w - card.x).abs() > 1e-9 || (h - card.y).abs() > 1e-9 {
             node["w"] = json!(w);
             node["h"] = json!(h);
+        }
+        if two_line(i) {
+            node["twoLine"] = json!(true);
         }
         let accs = accessories_of(i);
         if !accs.is_empty() {
@@ -214,5 +218,22 @@ mod tests {
         assert_eq!(t.execute("csd.unplaced.list", &json!({})).unwrap()["items"][0]["product"], PRODUCT);
         let f = t.execute("csd.project", &json!({})).unwrap()["fields"].clone();
         assert_eq!((&f["project"], &f["drawnBy"], &f["title"]), (&json!("Show"), &json!("Dee"), &json!("Rig")));
+    }
+
+    #[test]
+    fn two_line_survives_the_round_trip() {
+        let mut s = Session::new();
+        let a = place(&mut s, PRODUCT, [0.0, 0.0]);
+        s.execute("csd.device.set", &json!({ "handle": a, "twoLine": true, "label": "Desk" })).unwrap();
+        let path = std::env::temp_dir().join(format!("cadcraft-cpsd-two-{}.cpsd", std::process::id()));
+        let path = path.to_str().unwrap();
+        s.execute("csd.export.cpsd", &json!({ "path": path })).unwrap();
+        let file: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(file["nodes"][0]["twoLine"], json!(true));
+        let mut t = Session::new();
+        let r = t.execute("csd.import.cpsd", &json!({ "path": path })).unwrap();
+        let _ = std::fs::remove_file(path);
+        assert_eq!(r["skipped"], json!([]), "{r}");
+        assert_eq!(device_info(&mut t, "Desk")["twoLine"], json!(true));
     }
 }

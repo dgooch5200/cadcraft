@@ -3,12 +3,12 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use cadcraft_csd::{CARD_H, CARD_W, MAX_WIRE_POINTS, Paper, Protocol, Side, WireLink};
+use cadcraft_csd::{MAX_WIRE_POINTS, Paper, Protocol, Side, WireLink, card_size, is_builtin};
 use cadcraft_geom::Vec2;
 use serde_json::{Value, json};
 
 use super::patch::MODE_TAG;
-use super::{MAX_SIZE, MIN_SIZE, accessory_param, add_wire, bad, mount_cycles, place_card, put_attr, resolve, schedule, sheet, str_param};
+use super::{MAX_SIZE, MIN_SIZE, accessory_param, add_wire, bad, mount_cycles, place_card, put_attr, resolve, schedule, sheet, str_param, twoline};
 use crate::{Result, Session};
 use cadcraft_doc::{EntityKind, Handle};
 
@@ -152,14 +152,20 @@ pub(super) fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
         let size = |k| number(d, k).filter(|n| *n > 0.0);
         let (w, h) = (size("w"), size("h"));
         let (x, y) = (number(d, "x").unwrap_or(100.0), number(d, "y").unwrap_or(100.0));
+        let product = resolve(&library, &pid).into_owned();
+        let two_line = !is_builtin(&product.id)
+            && (d.get("twoLine").and_then(Value::as_bool) == Some(true) || d.get("showNote").and_then(Value::as_bool) == Some(true));
+        let card = card_size(&product, two_line);
         // x, y is the card's top-left; cards are inserted at their centre.
-        let Some(at) = to_drawing(x + w.unwrap_or(CARD_W) / 2.0, y + h.unwrap_or(CARD_H) / 2.0) else {
+        let Some(at) = to_drawing(x + w.unwrap_or(card.x) / 2.0, y + h.unwrap_or(card.y) / 2.0) else {
             skips.add("device outside the drawing limits");
             continue;
         };
-        let product = resolve(&library, &pid).into_owned();
         stand_ins += usize::from(product.missing);
         let handle = place_card(s, &product, &text(d, "label"), at)?;
+        if two_line {
+            twoline::set(s, &[handle], true)?;
+        }
         let notes = text(d, "notes");
         let mount = text(d, "parentId");
         let accessories = accessories(d);
@@ -168,8 +174,8 @@ pub(super) fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
         s.doc_mut()?.modify_entity(handle, |e| {
             let EntityKind::Insert(i) = &mut e.kind else { return };
             if w.is_some() || h.is_some() {
-                i.scale.x = w.map_or(1.0, |w| w.clamp(MIN_SIZE, MAX_SIZE) / CARD_W);
-                i.scale.y = h.map_or(1.0, |h| h.clamp(MIN_SIZE, MAX_SIZE) / CARD_H);
+                i.scale.x = w.map_or(1.0, |w| w.clamp(MIN_SIZE, MAX_SIZE) / card.x);
+                i.scale.y = h.map_or(1.0, |h| h.clamp(MIN_SIZE, MAX_SIZE) / card.y);
             }
             if !notes.is_empty() {
                 put_attr(i, "NOTES", notes);
@@ -183,9 +189,6 @@ pub(super) fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
         })?;
         if !mount.is_empty() {
             mounts.push((handle, mount));
-        }
-        if d.get("twoLine").and_then(Value::as_bool) == Some(true) {
-            skips.add("two-line card (shown on one line)");
         }
         placed.insert(id, handle);
     }

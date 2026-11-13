@@ -2,7 +2,7 @@
 //! app. With nothing armed it first asks for a product id. Placing goes through the JSON form, so
 //! both make the same device.
 
-use cadcraft_csd::{CARD_H, CARD_W, lookup};
+use cadcraft_csd::{CARD_H, CARD_W, card_size, lookup};
 use cadcraft_geom::Vec2;
 use serde_json::{Value, json};
 
@@ -39,9 +39,10 @@ pub(super) fn run_grid(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => Ok(default),
         Some(v) => v.as_f64().filter(|v| v.is_finite()).ok_or_else(|| bad(cmd, format!("`{key}` must be a number"))),
     };
-    let (dx, dy) = (step("dx", CARD_W + GRID_GAP)?, step("dy", CARD_H + GRID_GAP)?);
-    let at = point_req(cmd, p, "at")?;
     let product = str_param(p, "product").ok_or_else(|| bad(cmd, "`product` is required"))?;
+    let card = lookup(&s.csd_library, product).map_or(Vec2::new(CARD_W, CARD_H), |x| card_size(x, false));
+    let (dx, dy) = (step("dx", card.x + GRID_GAP)?, step("dy", card.y + GRID_GAP)?);
+    let at = point_req(cmd, p, "at")?;
     let mut handles = Vec::new();
     for r in 0..rows {
         for c in 0..cols {
@@ -92,8 +93,9 @@ impl Interactive for PlaceM {
             _ => Ok(Step::Continue),
         }
     }
-    fn preview(&self, _s: &Session, c: Vec2) -> Vec<EntityKind> {
-        let h = Vec2::new(CARD_W / 2.0, CARD_H / 2.0);
+    fn preview(&self, s: &Session, c: Vec2) -> Vec<EntityKind> {
+        let size = self.product.as_deref().and_then(|id| lookup(&s.csd_library, id)).map_or(Vec2::new(CARD_W, CARD_H), |x| card_size(x, false));
+        let h = size * 0.5;
         vec![lwpoly(rect_vertices(c - h, c + h), true)]
     }
 }

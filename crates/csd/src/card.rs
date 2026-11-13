@@ -3,7 +3,8 @@
 
 use cadcraft_doc::color::{Color, Rgb};
 use cadcraft_doc::{
-    Attrib, AttribModes, AttribProps, Block, Entity, EntityKind, HAlign, Handle, Hatch, HatchLoop, LwPolyline, Text, TextStyle, VAlign, Wipeout,
+    Attrib, AttribModes, AttribProps, Block, Entity, EntityKind, HAlign, Handle, Hatch, HatchLoop, LwPolyline, MText, MultilineAttrib, Text,
+    TextStyle, VAlign, Wipeout,
 };
 use cadcraft_geom::{PolyVertex, Vec2};
 
@@ -13,11 +14,14 @@ use crate::{Deco, OFF_PAGE_ID, Product, Protocol, Side, is_builtin};
 mod sheet;
 pub use sheet::*;
 
-/// Card size in drawing units; the insertion point is the card centre. The body is the picture
-/// area (55 high) over the 18 high label strip.
+/// Default card size in drawing units; the insertion point is the card centre. The body is the
+/// picture area (55 high) over the 18 high label strip. A product's own size is [`card_size`].
 pub const CARD_W: f64 = 70.0;
 pub const CARD_H: f64 = 73.0;
+const BODY_H: f64 = 55.0;
 const STRIP_H: f64 = 18.0;
+const MIN_CARD: f64 = 20.0;
+const MAX_CARD: f64 = 1000.0;
 const BORDER: f64 = 1.5;
 const RADIUS: f64 = 5.0;
 const PAPER: u32 = 0xf5f2ec;
@@ -36,10 +40,30 @@ const CODE_CHARS: usize = 9;
 const CODE_LINES: usize = 3;
 /// Width the strip text may use, in the estimate of `truncate_label`.
 const LABEL_W: f64 = 60.0;
+/// Space kept clear inside a built-in box on each side of its wrapped label.
+const BOX_PAD: f64 = 8.0;
 /// The text style of every card and badge text. The drawing needs it (see [`bold_style`]).
 pub const BOLD_STYLE: &str = "CSDBOLD";
 /// Darkest luma, 0 to 1, a text colour may have on the paper; see [`legible`].
 const MAX_TEXT_LUMA: f64 = 0.45;
+
+/// The card's size before any insert scale. A product's `iconW` and `iconH` (the body, as in the
+/// web app) give the size, 70 by 55 where absent or zero; the label strip is added under the body,
+/// and a second strip for `two_line`. A built-in is one box of exactly that size, with no strip.
+pub fn card_size(product: &Product, two_line: bool) -> Vec2 {
+    let dim = |key: &str, default: f64| match crate::library::num(product.extra.get(key), MAX_CARD) {
+        n if n > 0.0 => n.max(MIN_CARD),
+        _ => default,
+    };
+    let strips = if is_builtin(&product.id) {
+        0.0
+    } else if two_line {
+        2.0
+    } else {
+        1.0
+    };
+    Vec2 { x: dim("iconW", CARD_W), y: dim("iconH", BODY_H) + strips * STRIP_H }
+}
 
 /// A wire's place on one side of a card: `index` of `total`, counted from the top or the left,
 /// and its `lane`, how many wires turn between it and the edge's own end of the fan.
@@ -71,12 +95,13 @@ fn scale_sign(v: f64) -> f64 {
 /// World position where slot `slot` of `side` meets a card inserted at `at`.
 /// ponytail: slots are spread evenly along the edge; no manual port order, and no lane
 /// assignment for legs that run collinear (the TS wireLanes).
-pub fn port_point(at: Vec2, rotation: f64, scale: Vec2, side: Side, slot: Slot) -> Vec2 {
+/// `size` is the card's own size, [`card_size`].
+pub fn port_point(at: Vec2, rotation: f64, scale: Vec2, size: Vec2, side: Side, slot: Slot) -> Vec2 {
     let d = side.dir();
     let t = slot.offset();
     // Slots run left to right along a top or bottom edge and top to bottom along a side edge.
-    let along = if d.x == 0.0 { Vec2 { x: t * CARD_W, y: 0.0 } } else { Vec2 { x: 0.0, y: -t * CARD_H } };
-    let local = Vec2 { x: d.x * CARD_W / 2.0 + along.x, y: d.y * CARD_H / 2.0 + along.y };
+    let along = if d.x == 0.0 { Vec2 { x: t * size.x, y: 0.0 } } else { Vec2 { x: 0.0, y: -t * size.y } };
+    let local = Vec2 { x: d.x * size.x / 2.0 + along.x, y: d.y * size.y / 2.0 + along.y };
     at + Vec2 { x: local.x * scale.x, y: local.y * scale.y }.rotate(rotation)
 }
 
@@ -89,12 +114,12 @@ pub struct EdgeFrame {
     half: f64,
 }
 
-pub fn edge_frame(at: Vec2, rotation: f64, scale: Vec2, side: Side) -> EdgeFrame {
+pub fn edge_frame(at: Vec2, rotation: f64, scale: Vec2, size: Vec2, side: Side) -> EdgeFrame {
     let d = side.dir();
     let signed = |v: Vec2| Vec2 { x: v.x * scale_sign(scale.x), y: v.y * scale_sign(scale.y) }.rotate(rotation);
     let (along, half) =
-        if d.x == 0.0 { (Vec2 { x: 1.0, y: 0.0 }, CARD_W / 2.0 * scale.x.abs()) } else { (Vec2 { x: 0.0, y: -1.0 }, CARD_H / 2.0 * scale.y.abs()) };
-    EdgeFrame { anchor: port_point(at, rotation, scale, side, Slot::SOLO), along: signed(along), out: signed(d), half }
+        if d.x == 0.0 { (Vec2 { x: 1.0, y: 0.0 }, size.x / 2.0 * scale.x.abs()) } else { (Vec2 { x: 0.0, y: -1.0 }, size.y / 2.0 * scale.y.abs()) };
+    EdgeFrame { anchor: port_point(at, rotation, scale, size, side, Slot::SOLO), along: signed(along), out: signed(d), half }
 }
 
 /// The wires on one edge in slot order, from where each one's far end is (the TS `portFan`):
@@ -237,6 +262,20 @@ pub fn block_name(product_id: &str) -> String {
     format!("CSD_{safe}")
 }
 
+/// Suffix of the two-strip variant's block name; no [`block_name`] contains a `.`, so no product id can collide with it.
+const TWO_LINE_SUFFIX: &str = ".2";
+
+/// The block a card of `product_id` is an insert of: [`block_name`], or its two-strip variant.
+pub fn card_block_name(product_id: &str, two_line: bool) -> String {
+    let name = block_name(product_id);
+    if two_line { name + TWO_LINE_SUFFIX } else { name }
+}
+
+/// Whether `block` (a name from [`card_block_name`]) is the two-strip variant.
+pub fn is_two_line_block(block: &str) -> bool {
+    block.ends_with(TWO_LINE_SUFFIX)
+}
+
 /// The code as the body shows it: wrapped at words, or inside a long word, to `CODE_CHARS` a line.
 pub fn wrap_code(code: &str) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
@@ -256,9 +295,10 @@ pub fn wrap_code(code: &str) -> Vec<String> {
     lines
 }
 
-/// `label` cut with "..." to fit the strip.
+/// `label` cut with "..." to fit the strip of a card `card_w` wide.
 /// ponytail: widths are per character class, in the web app's 9px bold type, not measured.
-pub fn truncate_label(label: &str) -> String {
+pub fn truncate_label(label: &str, card_w: f64) -> String {
+    let max = card_w - (CARD_W - LABEL_W);
     let width = |c: char| {
         if c.is_lowercase() {
             5.2
@@ -268,13 +308,13 @@ pub fn truncate_label(label: &str) -> String {
             6.6
         }
     };
-    if label.chars().map(width).sum::<f64>() <= LABEL_W {
+    if label.chars().map(width).sum::<f64>() <= max {
         return label.into();
     }
     let (mut used, mut out) = (8.0, String::new());
     for c in label.chars() {
         used += width(c);
-        if used > LABEL_W {
+        if used > max {
             break;
         }
         out.push(c);
@@ -401,19 +441,22 @@ impl<F: FnMut() -> Handle> Painter<'_, F> {
     }
 }
 
-/// The device symbol: paper with a rounded border in the brand colour, the product code on the
-/// body (where a picture goes later), and a bordered label strip.
+/// The device symbol at its real size ([`card_size`]): paper with a rounded border in the brand
+/// colour, the product code on the body (where a picture goes later), and a bordered label strip.
+/// With `two_line` there is a second strip: the code in the upper one, the label in the lower.
 /// The hidden `PRODUCT`, `NAME` and `NOTES` and the visible `LABEL` attribute definitions carry the
 /// product id, the label and the label as the strip shows it. A product missing from the library
 /// gets a dashed border, drawn with linetype scale `dash_scale`.
 /// `new_handle` allocates drawing-unique handles for the block's entities (`Drawing::new_handle`).
-pub fn device_block(product: &Product, mut new_handle: impl FnMut() -> Handle, dash_scale: f64) -> Block {
-    let mut p = Painter { block: Block::new(&block_name(&product.id)), new_handle: &mut new_handle };
-    let (hw, hh) = (CARD_W / 2.0 - BORDER / 2.0, CARD_H / 2.0 - BORDER / 2.0);
+pub fn device_block(product: &Product, two_line: bool, mut new_handle: impl FnMut() -> Handle, dash_scale: f64) -> Block {
+    let builtin = is_builtin(&product.id);
+    let two_line = two_line && !builtin;
+    let mut p = Painter { block: Block::new(&card_block_name(&product.id, two_line)), new_handle: &mut new_handle };
+    let size = card_size(product, two_line);
+    let (hw, hh) = (size.x / 2.0 - BORDER / 2.0, size.y / 2.0 - BORDER / 2.0);
     let card = round_rect(-hw, -hh, hw, hh, [RADIUS - BORDER / 2.0; 4]);
     p.add(fill(card.clone()), PAPER);
     let mut border = p.entity(outline(card, BORDER), product.color);
-    let builtin = is_builtin(&product.id);
     if product.missing || builtin {
         border.common.linetype = "DASHED2".into();
         border.common.ltscale = dash_scale;
@@ -426,23 +469,30 @@ pub fn device_block(product: &Product, mut new_handle: impl FnMut() -> Handle, d
             p.add(fill(vec![vertex(x - h, h, 0.0), vertex(x, 0.0, 0.0), vertex(x - h, -h, 0.0)]), product.color);
         }
         // The label sits above the middle, leaving the "See <page>" line under it.
-        if product.id == OFF_PAGE_ID { LABEL_H } else { 0.0 }
+        if product.id == OFF_PAGE_ID { 3.0 } else { 0.0 }
     } else {
         // The strip shares the card's border and bottom corners: its top edge is the rule.
-        let strip_top = -hh + STRIP_H;
+        let strips = if two_line { 2.0 } else { 1.0 };
+        let strip_top = -hh + strips * STRIP_H;
         let r = RADIUS - BORDER / 2.0;
         p.add(outline(round_rect(-hw, -hh, hw, strip_top, [r, r, 0.0, 0.0]), BORDER), product.color);
         // The outline's mitred top corners leave a notch against the card's border; the rule fills it.
         let (rx, ry) = (hw + BORDER / 2.0, BORDER / 2.0);
         p.add(fill(round_rect(-rx, strip_top - ry, rx, strip_top + ry, [0.0; 4])), product.color);
 
-        let lines = wrap_code(&product.code);
-        let body_mid = (hh + strip_top) / 2.0;
-        let first = body_mid + (lines.len() as f64 - 1.0) / 2.0 * (CODE_H + 3.0);
-        for (i, line) in lines.iter().enumerate() {
-            p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: first - i as f64 * (CODE_H + 3.0) }, CODE_H, line)), INK);
+        if two_line {
+            let rule = -hh + STRIP_H;
+            p.add(fill(round_rect(-rx, rule - ry, rx, rule + ry, [0.0; 4])), product.color);
+            p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: rule + STRIP_H / 2.0 }, LABEL_H, &truncate_label(&product.code, size.x))), INK);
+        } else {
+            let lines = wrap_code(&product.code);
+            let body_mid = (hh + strip_top) / 2.0;
+            let first = body_mid + (lines.len() as f64 - 1.0) / 2.0 * (CODE_H + 3.0);
+            for (i, line) in lines.iter().enumerate() {
+                p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: first - i as f64 * (CODE_H + 3.0) }, CODE_H, line)), INK);
+            }
         }
-        (-hh + strip_top) / 2.0
+        -hh + STRIP_H / 2.0
     };
     let attdef = |tag: &str, prompt: &str, at: Vec2, value: &str, invisible: bool| {
         EntityKind::AttDef(Attrib {
@@ -459,7 +509,25 @@ pub fn device_block(product: &Product, mut new_handle: impl FnMut() -> Handle, d
     p.add(attdef("PRODUCT", "Product", Vec2::ZERO, &product.id, true), INK);
     p.add(attdef("NAME", "Name", Vec2::ZERO, "", true), INK);
     p.add(attdef("NOTES", "Notes", Vec2::ZERO, "", true), INK);
-    p.add(attdef("LABEL", "Label", Vec2 { x: 0.0, y: label_y }, "", false), legible(product.color));
+    let mut label = attdef("LABEL", "Label", Vec2 { x: 0.0, y: label_y }, "", false);
+    if let (true, EntityKind::AttDef(a)) = (builtin, &mut label) {
+        // A built-in's sentence wraps inside the box where other cards cut it to their strip. The
+        // off-page connector's grows upward from just above its "See" line.
+        let mtext = MText {
+            insert: a.text.insert,
+            height: LABEL_H,
+            width: size.x - 2.0 * BOX_PAD,
+            attach: if product.id == OFF_PAGE_ID { 8 } else { 5 },
+            rotation: 0.0,
+            style: BOLD_STYLE.into(),
+            contents: String::new(),
+            line_spacing: 1.0,
+            line_spacing_exact: false,
+            columns: None,
+        };
+        a.multiline = Some(MultilineAttrib { mtext, read_as: String::new() });
+    }
+    p.add(label, legible(product.color));
     if product.id == OFF_PAGE_ID {
         p.add(attdef("LINKPAGE", "Page", Vec2::ZERO, "", true), INK);
         p.add(attdef("LINKSEE", "See", Vec2 { x: 0.0, y: -LABEL_H }, "", false), legible(product.color));

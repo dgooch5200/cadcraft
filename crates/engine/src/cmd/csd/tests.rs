@@ -76,7 +76,7 @@ fn wire_bends_are_rounded_arcs_on_the_route() {
 
 fn port(s: &Session, dev: Handle, side: Side) -> Vec2 {
     let Some(EntityKind::Insert(i)) = s.doc().unwrap().entity(dev).map(|e| e.kind.clone()) else { panic!("no insert") };
-    port_point(i.insert.xy(), i.rotation, Vec2::new(i.scale.x, i.scale.y), side, Slot::SOLO)
+    port_point(i.insert.xy(), i.rotation, Vec2::new(i.scale.x, i.scale.y), super::card_of(&i, &s.csd_library), side, Slot::SOLO)
 }
 
 fn assert_orthogonal(v: &[Vec2]) {
@@ -327,7 +327,8 @@ fn erasing_a_wire_removes_its_decorations_and_erasing_one_decoration_restores_it
 fn refreshing_twice_changes_nothing() {
     let (mut s, ..) = setup();
     let doc = s.state_mut().unwrap().doc.clone();
-    super::refresh(&mut s.state_mut().unwrap().doc, true);
+    let lib = s.csd_library.clone();
+    super::refresh(&mut s.state_mut().unwrap().doc, &lib, true);
     assert!(std::sync::Arc::ptr_eq(&doc, &s.state_mut().unwrap().doc));
 }
 
@@ -701,7 +702,10 @@ fn smooth_wires_by_default_leave_the_ports_and_follow_the_ortho_toggle() {
     let b = handle(&s.execute("csd.place", &json!({ "product": NODE, "at": [200, 60] })).unwrap());
     let w = connect(&mut s, a, b).unwrap();
     let smooth = polyline(&s, w);
-    let (p, q) = (port_point(Vec2::ZERO, 0.0, Vec2::new(1.0, 1.0), Side::Right, Slot::SOLO), smooth[smooth.len() - 1].0);
+    let (p, q) = (
+        port_point(Vec2::ZERO, 0.0, Vec2::new(1.0, 1.0), Vec2::new(cadcraft_csd::CARD_W, cadcraft_csd::CARD_H), Side::Right, Slot::SOLO),
+        smooth[smooth.len() - 1].0,
+    );
     assert_eq!(smooth[0].0, p);
     assert!(smooth.len() > 10 && smooth.iter().all(|v| v.1 == 0.0));
     assert!(smooth.windows(2).any(|v| v[0].0.x != v[1].0.x && v[0].0.y != v[1].0.y));
@@ -1353,4 +1357,58 @@ fn devices_accessory_adds_one_part_to_every_device_and_resets_a_held_line() {
     assert!(s.execute("csd.devices.accessory", &json!({ "handles": hs, "product": "nope" })).is_err());
     s.execute("undo", &json!({})).unwrap();
     assert_eq!((qty(&mut s, a), qty(&mut s, b)), (json!(4), Value::Null), "one undo step restores both");
+}
+
+#[test]
+fn two_line_grows_the_card_and_moves_the_bottom_ports_down() {
+    let (mut s, a, _, w) = setup();
+    let (before, route) = (port(&s, a, Side::Bottom), verts(&s, w));
+    let right = port(&s, a, Side::Right);
+    s.execute("csd.device.set", &json!({ "handle": a.hex(), "twoLine": true })).unwrap();
+    let Some(EntityKind::Insert(i)) = s.doc().unwrap().entity(a).map(|e| e.kind.clone()) else { panic!("no insert") };
+    assert_eq!((i.block.as_str(), i.scale.y), ("CSD_CHAMMQ50.2", 1.0));
+    assert!(s.doc().unwrap().block("CSD_CHAMMQ50.2").is_some());
+    // 18 taller about the same centre: the bottom edge drops 9, the side ports stay.
+    assert!(port(&s, a, Side::Bottom).near(before + Vec2::new(0.0, -9.0), 1e-9));
+    assert!(port(&s, a, Side::Right).near(right, 1e-9));
+    assert_eq!(s.execute("csd.device.info", &json!({ "handle": a.hex() })).unwrap()["libSize"], json!([70.0, 91.0]));
+    s.execute("csd.device.set", &json!({ "handle": a.hex(), "twoLine": false })).unwrap();
+    assert!(port(&s, a, Side::Bottom).near(before, 1e-9));
+    assert_eq!(verts(&s, w), route, "off again routes as before");
+}
+
+#[test]
+fn two_line_for_a_group_skips_built_ins_and_refuses_them_singly() {
+    let (mut s, a, b, _) = setup();
+    let o = handle(&s.execute("csd.place", &json!({ "product": "__off-page", "at": [400, 0] })).unwrap());
+    let r = s.execute("csd.devices.set", &json!({ "handles": [a.hex(), b.hex(), o.hex()], "twoLine": true })).unwrap();
+    assert_eq!(r["changed"], json!(2));
+    assert!(s.execute("csd.device.set", &json!({ "handle": o.hex(), "twoLine": true })).is_err());
+}
+
+#[test]
+fn built_in_cards_have_their_own_size_and_keep_the_whole_label() {
+    let mut s = Session::new();
+    let o = handle(
+        &s.execute("csd.place", &json!({ "product": "__by-others", "at": [0, 0], "label": "120/208V 3 Phase 100A Input from others" })).unwrap(),
+    );
+    let info = s.execute("csd.device.info", &json!({ "handle": o.hex() })).unwrap();
+    assert_eq!(info["libSize"], json!([216.0, 72.0]));
+    assert_eq!(info["label"], json!("120/208V 3 Phase 100A Input from others"));
+}
+
+#[test]
+fn a_products_icon_size_sets_its_card_and_a_resized_card_scales_from_it() {
+    let mut s = Session::new();
+    let mut lib = (*s.csd_library).clone();
+    if let Some(p) = lib.iter_mut().find(|p| p.id == CONSOLE) {
+        p.extra.insert("iconW".into(), json!(216));
+        p.extra.insert("iconH".into(), json!(72));
+    }
+    s.csd_library = std::sync::Arc::new(lib);
+    let a = handle(&s.execute("csd.place", &json!({ "product": CONSOLE, "at": [0, 0] })).unwrap());
+    assert_eq!(s.execute("csd.device.info", &json!({ "handle": a.hex() })).unwrap()["libSize"], json!([216.0, 90.0]));
+    assert!(port(&s, a, Side::Right).near(Vec2::new(108.0, 0.0), 1e-9));
+    s.execute("csd.size", &json!({ "handles": [a.hex()], "w": 432 })).unwrap();
+    assert_eq!(s.execute("csd.device.info", &json!({ "handle": a.hex() })).unwrap()["size"], json!([432.0, 90.0]));
 }

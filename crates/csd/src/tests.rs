@@ -106,11 +106,92 @@ fn xdata_round_trip_and_hostile() {
     }
 }
 
+const CARD: Vec2 = Vec2 { x: CARD_W, y: CARD_H };
+
+#[test]
+fn default_product_card_is_the_fixed_size_and_its_ports_did_not_move() {
+    let p = sample_products()[0].clone();
+    assert!(p.extra.get("iconW").is_none());
+    assert_eq!(card_size(&p, false), CARD);
+    let at = Vec2 { x: 10.0, y: 20.0 };
+    let one = Vec2 { x: 1.0, y: 1.0 };
+    let port = |side| port_point(at, 0.0, one, card_size(&p, false), side, Slot::SOLO);
+    assert!(port(Side::Bottom).near(Vec2 { x: 10.0, y: 20.0 - 36.5 }, 1e-9));
+    assert!(port(Side::Right).near(Vec2 { x: 45.0, y: 20.0 }, 1e-9));
+}
+
+fn wide() -> Product {
+    let mut p = sample_products()[0].clone();
+    p.extra.insert("iconW".into(), serde_json::json!(216));
+    p.extra.insert("iconH".into(), serde_json::json!("72"));
+    p
+}
+
+#[test]
+fn card_size_follows_the_product_and_grows_a_strip_for_two_line() {
+    let p = wide();
+    assert_eq!(card_size(&p, false), Vec2 { x: 216.0, y: 90.0 });
+    assert_eq!(card_size(&p, true), Vec2 { x: 216.0, y: 108.0 });
+    assert_eq!(card_size(&builtin_products()[0], true), Vec2 { x: 216.0, y: 72.0 });
+    assert_eq!(card_size(&builtin_products()[1], false), Vec2 { x: 200.0, y: 60.0 });
+}
+
+#[test]
+fn device_block_is_drawn_at_the_cards_size_with_a_second_strip_when_asked() {
+    let p = wide();
+    let top = |two: bool| {
+        let mut n = 0;
+        let b = device_block(
+            &p,
+            two,
+            || {
+                n += 1;
+                Handle(n)
+            },
+            1.0,
+        );
+        let ys: Vec<f64> = b
+            .entities
+            .iter()
+            .filter_map(|e| match &e.kind {
+                EntityKind::LwPolyline(l) => Some(l.vertices.iter().map(|v| v.p.y.abs()).fold(0.0, f64::max)),
+                _ => None,
+            })
+            .collect();
+        (b.name, ys.into_iter().fold(0.0, f64::max))
+    };
+    let (one, h1) = top(false);
+    let (two, h2) = top(true);
+    assert_eq!((one.as_str(), two.as_str()), ("CSD_CHAMMQ50", "CSD_CHAMMQ50.2"));
+    assert!((h1 - 45.0).abs() < 1.0 && (h2 - 54.0).abs() < 1.0, "{h1} {h2}");
+    assert!(is_two_line_block(&two) && !is_two_line_block(&one));
+}
+
+#[test]
+fn built_in_label_wraps_in_its_box() {
+    let mut n = 0;
+    let b = device_block(
+        &builtin_products()[0],
+        false,
+        || {
+            n += 1;
+            Handle(n)
+        },
+        1.0,
+    );
+    let label = b.entities.iter().find_map(|e| match &e.kind {
+        EntityKind::AttDef(a) if a.tag == "LABEL" => Some(a),
+        _ => None,
+    });
+    let ml = label.and_then(|a| a.multiline.as_ref()).map(|m| m.mtext.width);
+    assert_eq!(ml, Some(216.0 - 16.0));
+}
+
 #[test]
 fn port_point_honours_rotation_and_scale() {
     let at = Vec2 { x: 100.0, y: 50.0 };
     // Right side: (35, 0) scaled x2 = (70, 0), rotated 90 degrees = (0, 70).
-    let p = port_point(at, std::f64::consts::FRAC_PI_2, Vec2 { x: 2.0, y: 1.0 }, Side::Right, Slot::SOLO);
+    let p = port_point(at, std::f64::consts::FRAC_PI_2, Vec2 { x: 2.0, y: 1.0 }, CARD, Side::Right, Slot::SOLO);
     assert!(p.near(Vec2 { x: 100.0, y: 120.0 }, 1e-9), "{p:?}");
 }
 
@@ -159,6 +240,7 @@ fn device_block_has_both_attribute_definitions() {
     let mut n = 0;
     let b = device_block(
         &sample_products()[0],
+        false,
         || {
             n += 1;
             Handle(n)
@@ -199,12 +281,12 @@ fn world_side_turns_with_rotation() {
 #[test]
 fn three_wires_on_a_side_are_spread_and_ordered_by_far_end() {
     let (at, one) = (Vec2::ZERO, Vec2 { x: 1.0, y: 1.0 });
-    let frame = edge_frame(at, 0.0, one, Side::Bottom);
+    let frame = edge_frame(at, 0.0, one, CARD, Side::Bottom);
     // Far ends listed out of order: right, left, middle.
     let far = [(1, Vec2 { x: 150.0, y: -150.0 }), (2, Vec2 { x: -150.0, y: -150.0 }), (3, Vec2 { x: 0.0, y: -150.0 })];
     let order = fan_order(&frame, &far);
     assert_eq!(order.iter().map(|(k, _)| *k).collect::<Vec<_>>(), [2, 3, 1]);
-    let xs: Vec<f64> = order.iter().map(|(_, s)| port_point(at, 0.0, one, Side::Bottom, *s).x).collect();
+    let xs: Vec<f64> = order.iter().map(|(_, s)| port_point(at, 0.0, one, CARD, Side::Bottom, *s).x).collect();
     assert_eq!(xs, [-17.5, 0.0, 17.5]);
     // One per direction here, so all in lane 0; their first legs start at different points.
     let lanes: Vec<usize> = order.iter().map(|(_, s)| s.lane).collect();
@@ -212,7 +294,7 @@ fn three_wires_on_a_side_are_spread_and_ordered_by_far_end() {
     let first_legs: Vec<Vec2> = order
         .iter()
         .map(|(_, s)| {
-            route(port_point(at, 0.0, one, Side::Bottom, *s), Side::Bottom, *s, Vec2 { x: 500.0, y: -500.0 }, Side::Top, Slot::SOLO, true)[1]
+            route(port_point(at, 0.0, one, CARD, Side::Bottom, *s), Side::Bottom, *s, Vec2 { x: 500.0, y: -500.0 }, Side::Top, Slot::SOLO, true)[1]
         })
         .collect();
     assert!(first_legs.windows(2).all(|w| !w[0].near(w[1], 1e-9)));
@@ -225,9 +307,9 @@ fn code_wraps_and_labels_truncate_like_the_web_app() {
     for p in sample_products() {
         assert!(wrap_code(&p.code).iter().all(|l| l.chars().count() <= 9), "{}", p.code);
     }
-    assert_eq!(truncate_label("RR2XWASHNI"), "RR2XWAS...");
-    assert_eq!(truncate_label("Cyc Lights"), "Cyc Lights");
-    assert_eq!(truncate_label("FOH console"), "FOH console");
+    assert_eq!(truncate_label("RR2XWASHNI", CARD_W), "RR2XWAS...");
+    assert_eq!(truncate_label("Cyc Lights", CARD_W), "Cyc Lights");
+    assert_eq!(truncate_label("FOH console", CARD_W), "FOH console");
 }
 
 #[test]
@@ -244,6 +326,7 @@ fn only_a_missing_product_gets_a_dashed_border() {
         let mut n = 0;
         let b = device_block(
             p,
+            false,
             || {
                 n += 1;
                 Handle(n)
@@ -390,9 +473,9 @@ fn builtin_card_is_a_dashed_box_without_a_strip() {
         n += 1;
         Handle(n)
     };
-    let plain = device_block(&sample_products()[0], &mut h, 1.0).entities;
-    let by_others = device_block(&builtin_products()[0], &mut h, 1.0).entities;
-    let off_page = device_block(&builtin_products()[1], &mut h, 1.0).entities;
+    let plain = device_block(&sample_products()[0], false, &mut h, 1.0).entities;
+    let by_others = device_block(&builtin_products()[0], false, &mut h, 1.0).entities;
+    let off_page = device_block(&builtin_products()[1], false, &mut h, 1.0).entities;
     assert!(by_others.len() < plain.len());
     assert_eq!(off_page.len(), by_others.len() + 3, "the break arrow, the hidden page and the See line");
     assert!(by_others.iter().any(|e| e.common.linetype == "DASHED2"));

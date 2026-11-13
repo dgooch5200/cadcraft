@@ -1,7 +1,7 @@
 //! Click-to-connect: pick a port on one device, then a port on another, until Enter or Esc. A wire
 //! goes through the JSON form, so both make the same wire.
 
-use cadcraft_csd::{CARD_H, CARD_W, Protocol, Side, Slot, port_point};
+use cadcraft_csd::{Protocol, Side, Slot, port_point};
 use cadcraft_doc::{EntityKind, Handle};
 use cadcraft_geom::Vec2;
 use serde_json::json;
@@ -24,11 +24,12 @@ fn pick(s: &Session, p: Vec2) -> Option<Port> {
             let i = d.insert;
             let (at, scale) = (i.insert.xy(), Vec2::new(i.scale.x, i.scale.y));
             let local = (p - at).rotate(-i.rotation);
-            let inside = local.x.abs() <= CARD_W / 2.0 * scale.x.abs() + MARGIN && local.y.abs() <= CARD_H / 2.0 * scale.y.abs() + MARGIN;
+            let size = d.size();
+            let inside = local.x.abs() <= size.x / 2.0 * scale.x.abs() + MARGIN && local.y.abs() <= size.y / 2.0 * scale.y.abs() + MARGIN;
             let (side, port, dist) = [Side::Top, Side::Bottom, Side::Left, Side::Right]
                 .into_iter()
                 .map(|side| {
-                    let port = port_point(at, i.rotation, scale, side, Slot::SOLO);
+                    let port = port_point(at, i.rotation, scale, size, side, Slot::SOLO);
                     (side, port, (port - p).len())
                 })
                 .min_by(|a, b| a.2.total_cmp(&b.2))?;
