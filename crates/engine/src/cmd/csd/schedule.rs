@@ -354,8 +354,10 @@ pub(super) fn run_bom_export(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "csd.bom.export";
     let path = str_param(p, "path").ok_or_else(|| bad(cmd, "`path` is required"))?;
     let lines = bom(s)?;
-    let footer: Vec<String> =
-        p.get("footer").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect()).unwrap_or_default();
+    let footer: Vec<String> = match p.get("footer").and_then(Value::as_array) {
+        Some(a) => a.iter().filter_map(Value::as_str).map(String::from).collect(),
+        None => super::sheet::project_footer(s),
+    };
     let bytes = match str_param(p, "format") {
         Some("csv") => csv(&lines).into_bytes(),
         Some("pdf") => pdf(&lines, &footer)?,

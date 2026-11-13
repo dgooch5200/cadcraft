@@ -1096,3 +1096,11 @@ fn wiring_alone_creates_no_legend() {
     let (s, ..) = setup();
     assert!(s.doc().unwrap().block("CSD_LEGEND").is_none());
 }
+
+#[test]
+fn bom_footer_defaults_to_the_title_block_project_fields() {
+    let mut s = Session::new();
+    assert!(super::sheet::project_footer(&s).is_empty());
+    s.execute("csd.project.set", &json!({ "fields": { "project": "Demo", "rev": "B" } })).unwrap();
+    assert_eq!(super::sheet::project_footer(&s), vec!["Project: Demo   Rev: B".to_string()]);
+}

@@ -45,6 +45,16 @@ pub(super) fn run_project(s: &mut Session, _: &Value) -> Result<Value> {
     Ok(json!({ "fields": fields, "exists": found.is_some(), "handle": found.map(|(h, _)| h.hex()), "devices": devices }))
 }
 
+/// The bill of materials footer: the title block's filled-in project fields on one line.
+pub(super) fn project_footer(s: &Session) -> Vec<String> {
+    let Some((_, i)) = find(s, TITLEBLOCK) else { return Vec::new() };
+    let parts: Vec<String> = [("PROJECT", "Project"), ("VENUE", "Venue"), ("DRAWNBY", "Drawn by"), ("DATE", "Date"), ("REV", "Rev")]
+        .iter()
+        .filter_map(|(tag, caption)| Some(attr(&i, tag).trim()).filter(|v| !v.is_empty()).map(|v| format!("{caption}: {v}")))
+        .collect();
+    if parts.is_empty() { Vec::new() } else { vec![parts.join("   ")] }
+}
+
 pub(super) fn run_project_set(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "csd.project.set";
     let given = p.get("fields").and_then(Value::as_object).ok_or_else(|| bad(cmd, "`fields` (object) is required"))?;

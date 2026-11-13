@@ -78,7 +78,7 @@ fn own_specs() -> Vec<CommandSpec> {
             .params("{} → {rows: [{qty, product, code, category, name, labels, notes, brand}]}: placed and unplaced, by category (control gear first) then model id")
             .noundo(),
         CommandSpec::new("csd.bom.export", "Export Bill of Materials", schedule::run_bom_export)
-            .params("{path, format: csv|pdf, footer?: [lines printed under the PDF table]} → {path, rows}")
+            .params("{path, format: csv|pdf, footer?: [lines printed under the PDF table] (default the title block's project, venue, drawn by, date and rev)} → {path, rows}")
             .noundo(),
         CommandSpec::new("csd.arm", "Arm Product", place::run_arm).params("{product: id of a library product} → {product}").noundo(),
         CommandSpec::new("csd.protocol", "Wire Protocol", run_protocol)
