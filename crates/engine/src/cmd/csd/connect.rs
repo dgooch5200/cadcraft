@@ -70,8 +70,13 @@ impl Interactive for ConnectM {
                     return Ok(Step::Continue);
                 };
                 let wire = json!({ "from": from.hex(), "fromSide": from_side.id(), "to": hit.0.hex(), "toSide": hit.1.id(), "protocol": s.csd_protocol.id() });
-                if let Err(e) = run_connect(s, &wire) {
-                    s.echo(e.to_string());
+                match run_connect(s, &wire) {
+                    Ok(r) => {
+                        if let Some(w) = r["warning"].as_str() {
+                            s.echo(w);
+                        }
+                    }
+                    Err(e) => s.echo(e.to_string()),
                 }
             }
             Input::Keyword(t) | Input::Text(t) => match Protocol::from_id(&t.trim().to_lowercase()) {

@@ -53,6 +53,8 @@ struct Device {
     connections: u64,
     #[serde(rename = "poeLoad")]
     poe: f64,
+    #[serde(rename = "poeWarning", default)]
+    poe_warning: Option<String>,
     #[serde(rename = "controlGear")]
     control: bool,
     #[serde(rename = "mountedIn")]
@@ -287,9 +289,20 @@ fn placed_tab(ui: &mut egui::Ui, st: &mut State, l: &Lists, act: &mut Option<Act
                 let n = r.index() + 1;
                 cell(&mut r, &n.to_string());
                 let poe = if d.poe > 0.0 { format!("{:.0} W", d.poe) } else { String::new() };
-                for t in [&d.name, &d.category, &d.code, &d.label, &d.ports, &d.connections.to_string(), &poe, &d.notes] {
+                for t in [&d.name, &d.category, &d.code, &d.label, &d.ports, &d.connections.to_string()] {
                     cell(&mut r, t);
                 }
+                r.col(|ui| {
+                    let text = match &d.poe_warning {
+                        Some(_) => format!("\u{26a0} {poe}"),
+                        None => poe.clone(),
+                    };
+                    let l = ui.label(text);
+                    if let Some(w) = &d.poe_warning {
+                        l.on_hover_text(w);
+                    }
+                });
+                cell(&mut r, &d.notes);
                 cell(&mut r, &d.mounted_in);
                 cell(&mut r, if d.by_others { "✓" } else { "" });
                 r.col(|ui| {

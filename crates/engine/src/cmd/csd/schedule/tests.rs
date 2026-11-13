@@ -234,3 +234,21 @@ fn poe_over_the_port_budget_warns_on_connect_and_on_the_schedule() {
     assert!(x["poeWarning"].as_str().unwrap().contains("max 75W"));
     assert!(d["devices"].as_array().unwrap().iter().find(|x| x["handle"] == a.hex()).unwrap()["poeWarning"].is_null());
 }
+
+#[test]
+fn interactive_connect_echoes_the_poe_warning() {
+    let mut s = Session::new();
+    let sw = super::super::tests::poe_switch(&mut s);
+    let poe = place(&mut s, sw, [0.0, 0.0]);
+    let a = place(&mut s, "logic-ar111m", [200.0, 0.0]);
+    let b = place(&mut s, "logic-ar111m", [400.0, 0.0]);
+    let net = |f: Handle, t: Handle| json!({ "from": f.hex(), "fromSide": "rgt", "to": t.hex(), "toSide": "lft", "protocol": "network" });
+    s.execute("csd.connect", &net(poe, a)).unwrap();
+    s.start("csd.connect").unwrap();
+    s.input(crate::Input::Keyword("network".into())).unwrap();
+    let _ = (a, b);
+    let half = cadcraft_csd::CARD_W / 2.0;
+    s.input(crate::Input::Point(cadcraft_geom::Vec2::new(200.0 + half, 0.0))).unwrap();
+    s.input(crate::Input::Point(cadcraft_geom::Vec2::new(400.0 - half, 0.0))).unwrap();
+    assert!(s.log.last().is_some_and(|m| m.contains("90.0W")), "{:?}", s.log.last());
+}
