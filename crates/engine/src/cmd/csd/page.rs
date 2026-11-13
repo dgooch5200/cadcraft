@@ -62,7 +62,7 @@ pub(super) fn page_of(doc: &Drawing, pages: &[Page], p: Vec2) -> Option<usize> {
 }
 
 /// A page given as its 1-based number or its name.
-fn page_param(cmd: &str, p: &Value, pages: &[Page]) -> Result<usize> {
+pub(super) fn page_param(cmd: &str, p: &Value, pages: &[Page]) -> Result<usize> {
     let found = match p.get("page") {
         Some(Value::Number(n)) => n.as_u64().and_then(|n| usize::try_from(n).ok()).and_then(|n| n.checked_sub(1)).filter(|i| *i < pages.len()),
         Some(Value::String(t)) => pages.iter().enumerate().position(|(i, g)| g.name(i) == *t),
