@@ -396,15 +396,15 @@ fn library_set_list_and_place() {
 #[test]
 fn library_csv_round_trips_and_reads_old_headers() {
     let mut s = Session::new();
-    let csv = s.execute("csd.library.export_csv", &json!({})).unwrap();
+    let csv = s.execute("csd.library.export", &json!({})).unwrap();
     let before = csv["count"].clone();
     assert!(before.as_u64() > Some(1));
-    let r = s.execute("csd.library.import_csv", &json!({ "text": csv["csv"] })).unwrap();
+    let r = s.execute("csd.library.import", &json!({ "text": csv["csv"] })).unwrap();
     assert_eq!(r["count"], before);
-    assert_eq!(s.execute("csd.library.export_csv", &json!({})).unwrap()["csv"], csv["csv"]);
+    assert_eq!(s.execute("csd.library.export", &json!({})).unwrap()["csv"], csv["csv"]);
 
     let text = "\u{feff}Product Name,Model ID,DMX Ports,Network Ports,Notes\r\n\"Wash, big\",My Wash,2,1,\"say \"\"hi\"\"\"\r\n,No Name,1,1,\r\nSpot,My Wash,9,9,dup\r\n";
-    let r = s.execute("csd.library.import_csv", &json!({ "text": text })).unwrap();
+    let r = s.execute("csd.library.import", &json!({ "text": text })).unwrap();
     assert_eq!(r["count"], 1);
     let p = &s.csd_library[0];
     assert_eq!((p.id.as_str(), p.code.as_str(), p.name.as_str(), p.notes.as_str()), ("My_Wash", "My_Wash", "Wash, big", "say \"hi\""));
@@ -414,7 +414,7 @@ fn library_csv_round_trips_and_reads_old_headers() {
 #[test]
 fn library_csv_import_rejects_hostile_input() {
     let mut s = Session::new();
-    let import = |s: &mut Session, t: String| s.execute("csd.library.import_csv", &json!({ "text": t }));
+    let import = |s: &mut Session, t: String| s.execute("csd.library.import", &json!({ "text": t }));
     assert!(import(&mut s, String::new()).is_err());
     assert!(import(&mut s, "a,b\n1,2\n".into()).is_err());
     assert!(import(&mut s, "Model ID,Product Name\n\"open,x\n".into()).is_err());
@@ -422,7 +422,7 @@ fn library_csv_import_rejects_hostile_input() {
     assert!(import(&mut s, many).is_err());
     let wide = format!("Model ID,Product Name{}\nx,y{}\n", ",c".repeat(5000), ",1".repeat(5000));
     assert_eq!(import(&mut s, wide).unwrap()["count"], 1);
-    assert!(s.execute("csd.library.import_csv", &json!({})).is_err());
+    assert!(s.execute("csd.library.import", &json!({})).is_err());
 }
 
 #[test]

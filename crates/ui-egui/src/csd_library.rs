@@ -367,10 +367,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         pick(app, "csd.library.save", true, "library.json");
     }
     if do_import {
-        pick(app, "csd.library.import_csv", false, "");
+        pick(app, "csd.library.import", false, "");
     }
     if do_export {
-        pick(app, "csd.library.export_csv", true, "library.csv");
+        pick(app, "csd.library.export", true, "library.csv");
     }
 }
 
