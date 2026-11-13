@@ -1144,20 +1144,20 @@ fn glyph_or_fallback(face: &Face, c: char) -> Arc<GlyphOutline> {
 
 /// The [`crate::TextGlyph`] of a glyph placed like [`place_glyph`] does (its outline index is
 /// set when it is added). `None` for the missing-glyph shape.
-pub(crate) fn text_glyph(g: &GlyphOutline, c: char, x: f64, h: f64, wf: f64, shear: f64) -> Option<crate::TextGlyph> {
+pub(crate) fn text_glyph(g: &GlyphOutline, c: impl Into<String>, x: f64, h: f64, wf: f64, shear: f64) -> Option<crate::TextGlyph> {
     // Font units at 1000 per em scale by h / cap.
     text_glyph_at(g, c, Vec2::new(x, 0.0), h / g.cap, wf, shear)
 }
 
 /// [`text_glyph`] with the glyph's origin at `origin` and font units scaled by `scale`.
-pub(crate) fn text_glyph_at(g: &GlyphOutline, c: char, origin: Vec2, scale: f64, wf: f64, shear: f64) -> Option<crate::TextGlyph> {
+pub(crate) fn text_glyph_at(g: &GlyphOutline, text: impl Into<String>, origin: Vec2, scale: f64, wf: f64, shear: f64) -> Option<crate::TextGlyph> {
     let gid = u16::try_from(g.gid).ok().filter(|_| g.mapped)?;
     let face = g.face.clone()?;
     let em = 1000.0 * scale;
     (em.is_finite() && em > 0.0).then(|| crate::TextGlyph {
         face,
         gid,
-        ch: c,
+        text: text.into(),
         outline: 0,
         origin,
         x: Vec2::new(em * wf, 0.0),

@@ -392,8 +392,8 @@ pub struct TextGlyph {
     pub face: ttf::Face,
     /// Glyph id in the face.
     pub gid: u16,
-    /// The character it shows.
-    pub ch: char,
+    /// The characters it shows: several when the shaper ligated a cluster into this one glyph.
+    pub text: String,
     /// Index of its outline in [`Shaped::glyphs`].
     pub outline: usize,
     /// The glyph origin (on the baseline).
