@@ -20,7 +20,7 @@ fn prod(id: &str, name: &str, modes: &str, channels: u32, universes: u32) -> Pro
 }
 
 fn session() -> Session {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     s.csd_library = Arc::new(vec![
         prod("FIX", "Spot", "Std:300, Ext:200, bad, :5, Zero:0", 0, 0),
         prod("PIX", "Épix Strip", "Pixel:720", 0, 0),
@@ -142,7 +142,7 @@ fn magicq_csv_matches_the_consoles_own_shape() {
 
 #[test]
 fn html_export_of_a_huge_spanning_fixture_stays_small() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let mut big = prod("BIG", "Big", "", 524_288, 0);
     big.modes = "Huge:524288".into();
     s.csd_library = Arc::new(vec![big]);

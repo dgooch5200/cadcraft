@@ -11,18 +11,18 @@ use crate::cmd::curves::handle_param;
 use crate::cmd::{CommandSpec, bad, point_param, point_req, str_param};
 use crate::{Result, Session};
 
-/// How close (drawing units) a click must be to a waypoint to pick or remove it.
+/// How close (pixels) a click must be to a waypoint to pick or remove it.
 const PICK: f64 = 9.0;
 
 pub(super) fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("csd.wire.hit", "Find Wire Point", run_hit)
-            .params("{at: [x,y], tolerance? (default 9)} → {wire: handle|null, point: index|null, points: count}; a waypoint under `at` wins over a wire's line")
+            .params("{at: [x,y], tolerance? (default 9 px, in drawing units)} → {wire: handle|null, point: index|null, points: count}; a waypoint under `at` wins over a wire's line")
             .noundo(),
         CommandSpec::new("csd.wire.point.add", "Add Wire Point", run_add)
             .params("{wire: handle, at: [x,y]} → {index}; inserted on the nearest leg, on the snap grid if SNAPMODE is on"),
         CommandSpec::new("csd.wire.point.remove", "Remove Wire Point", run_remove)
-            .params("{wire: handle, index? | at?: [x,y] (nearest waypoint within 9)} → {points: count}"),
+            .params("{wire: handle, index? | at?: [x,y] (nearest waypoint within 9 px, in drawing units)} → {points: count}"),
         CommandSpec::new("csd.wire.point.move", "Move Wire Point", run_move).params("{wire: handle, index, to: [x,y]} → {index}; dropped on the snap grid if SNAPMODE is on"),
         CommandSpec::new("csd.wire.route", "Preview Wire Route", run_route)
             .params("{wire: handle, index, to: [x,y]} → {path: [[x,y]], to: [x,y]}; `to` is the snapped waypoint; the route the wire would take with that waypoint moved (snapped as a move would be); changes nothing")
@@ -49,7 +49,11 @@ fn store_link(s: &mut Session, h: Handle, link: &WireLink) -> Result<()> {
 /// The wire's routed path, ports included.
 fn path_of(s: &Session, h: Handle) -> Result<Vec<Vec2>> {
     let store = s.doc()?.space(&s.space()).ok_or_else(|| bad("csd.wire", "no such space"))?;
-    Ok(layout(store, &s.csd_library, s.settings.orthomode).into_iter().find(|l| l.wire == h).map(|l| l.path).unwrap_or_default())
+    Ok(layout(store, &s.csd_library, s.settings.orthomode, super::units::px(s.doc()?))
+        .into_iter()
+        .find(|l| l.wire == h)
+        .map(|l| l.path)
+        .unwrap_or_default())
 }
 
 fn snapped(s: &Session, at: Vec2) -> Vec2 {
@@ -61,8 +65,9 @@ fn snapped(s: &Session, at: Vec2) -> Vec2 {
 /// A waypoint parameter; a coordinate past `MAX_COORD` would overflow the wire geometry.
 fn waypoint(s: &Session, cmd: &str, p: &Value, key: &str) -> Result<Vec2> {
     let v = point_req(cmd, p, key)?;
-    if v.x.abs() > MAX_COORD || v.y.abs() > MAX_COORD {
-        return Err(bad(cmd, format!("`{key}` must be within {MAX_COORD} of the origin")));
+    let k = super::units::px(s.doc()?);
+    if v.x.abs() > MAX_COORD * k || v.y.abs() > MAX_COORD * k {
+        return Err(bad(cmd, format!("`{key}` must be within {} of the origin", MAX_COORD * k)));
     }
     Ok(snapped(s, v))
 }
@@ -74,10 +79,10 @@ fn index_param(cmd: &str, p: &Value, link: &WireLink) -> Result<usize> {
 
 fn run_hit(s: &mut Session, p: &Value) -> Result<Value> {
     let at = point_req("csd.wire.hit", p, "at")?;
-    let tol = p.get("tolerance").and_then(Value::as_f64).filter(|t| t.is_finite() && *t >= 0.0).unwrap_or(PICK);
+    let tol = p.get("tolerance").and_then(Value::as_f64).filter(|t| t.is_finite() && *t >= 0.0).unwrap_or(PICK * super::units::px(s.doc()?));
     let store = s.doc()?.space(&s.space()).ok_or_else(|| bad("csd.wire.hit", "no such space"))?;
     let (mut point, mut line): (Option<(f64, Handle, usize, usize)>, Option<(f64, Handle, usize)>) = (None, None);
-    for Laid { wire, link, path, .. } in layout(store, &s.csd_library, s.settings.orthomode) {
+    for Laid { wire, link, path, .. } in layout(store, &s.csd_library, s.settings.orthomode, super::units::px(s.doc()?)) {
         for (i, pt) in link.points.iter().enumerate() {
             let d = pt.dist(at);
             if d <= tol && point.is_none_or(|b| d < b.0) {
@@ -115,13 +120,14 @@ fn run_add(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_remove(s: &mut Session, p: &Value) -> Result<Value> {
     let (h, mut link) = wire_param(s, "csd.wire.point.remove", p)?;
+    let pick = PICK * super::units::px(s.doc()?);
     let index = match point_param(p, "at") {
         Some(at) if p.get("index").is_none() => link
             .points
             .iter()
             .enumerate()
             .map(|(i, pt)| (i, pt.dist(at)))
-            .filter(|(_, d)| *d <= PICK)
+            .filter(|(_, d)| *d <= pick)
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(i, _)| i)
             .ok_or_else(|| bad("csd.wire.point.remove", "no waypoint near `at`"))?,
@@ -151,7 +157,7 @@ fn run_route(s: &mut Session, p: &Value) -> Result<Value> {
         *pt = to;
     }
     let store = s.doc()?.space(&s.space()).ok_or_else(|| bad("csd.wire.route", "no such space"))?;
-    let path = layout_with(store, &s.csd_library, s.settings.orthomode, Some((h, &link.points)))
+    let path = layout_with(store, &s.csd_library, s.settings.orthomode, super::units::px(s.doc()?), Some((h, &link.points)))
         .into_iter()
         .find(|l| l.wire == h)
         .map(|l| l.path)
