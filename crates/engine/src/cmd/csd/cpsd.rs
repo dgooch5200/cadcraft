@@ -13,6 +13,7 @@ use crate::{Result, Session};
 use cadcraft_doc::{EntityKind, Handle};
 
 const CMD: &str = "csd.import.cpsd";
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_BYTES: usize = 50 * 1024 * 1024;
 const MAX_DEVICES: usize = 20_000;
 const MAX_WIRES: usize = 50_000;
