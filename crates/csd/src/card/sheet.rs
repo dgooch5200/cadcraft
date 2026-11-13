@@ -57,6 +57,10 @@ pub const TITLE_H: f64 = 70.0;
 /// Height of the line key, and of the power note under it; the legend's origin is the note's bottom.
 pub const KEY_H: f64 = 18.0;
 pub const NOTE_H: f64 = 13.0;
+const NOTE_TEXT_H: f64 = 5.0;
+const NOTE_PITCH: f64 = 6.5;
+/// Widest advance of the stroke font as a fraction of the text height, so a wrapped line fits.
+const NOTE_CHAR_W: f64 = 0.9;
 const BRAND_W: f64 = 125.0;
 const ROW1_H: f64 = 40.0;
 const FAINT: u32 = 0x777777;
@@ -179,8 +183,11 @@ pub fn legend_protocols(block: &Block) -> Vec<Protocol> {
 pub fn legend_block(paper: Paper, used: &[Protocol], dash_scale: f64, mut new_handle: impl FnMut() -> Handle) -> Block {
     let mut p = Painter { block: Block::new(LEGEND), new_handle: &mut new_handle };
     let w = paper.size().0 - MARGIN * 2.0;
-    p.add(outline(rect(0.0, NOTE_H, w, NOTE_H + KEY_H), 0.5), RULE);
-    let mid = NOTE_H + KEY_H / 2.0;
+    let power = used.contains(&Protocol::Power);
+    let note = if power { wrap(POWER_NOTE, ((w - 10.0) / (NOTE_TEXT_H * NOTE_CHAR_W)) as usize) } else { Vec::new() };
+    let note_h = (note.len() as f64 * NOTE_PITCH).max(NOTE_H);
+    p.add(outline(rect(0.0, note_h, w, note_h + KEY_H), 0.5), RULE);
+    let mid = note_h + KEY_H / 2.0;
     p.add(EntityKind::Text(label(5.0, mid, 5.0, "LINE KEY:")), FAINT);
     let protocols: Vec<Protocol> = Protocol::ALL.into_iter().filter(|x| used.contains(x)).collect();
     let item_w = ((w - 60.0) / protocols.len().max(1) as f64).min(120.0);
@@ -194,8 +201,24 @@ pub fn legend_block(paper: Paper, used: &[Protocol], dash_scale: f64, mut new_ha
         p.block.entities.push(e);
         p.add(EntityKind::Text(label(x + 32.0, mid, 5.0, pr.label())), legible(pr.color()));
     }
-    if protocols.contains(&Protocol::Power) {
-        p.add(EntityKind::Text(label(0.0, NOTE_H / 2.0 - 1.0, 5.0, POWER_NOTE)), FAINT);
+    for (i, line) in note.iter().enumerate() {
+        let y = note_h / 2.0 - 1.0 + (note.len() - 1) as f64 / 2.0 * NOTE_PITCH - i as f64 * NOTE_PITCH;
+        p.add(EntityKind::Text(label(0.0, y, NOTE_TEXT_H, line)), FAINT);
     }
     p.block
+}
+
+/// Greedy word wrap to `max` characters a line (a longer word keeps its own line).
+fn wrap(text: &str, max: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split_whitespace() {
+        match lines.last_mut() {
+            Some(l) if l.chars().count() + 1 + word.chars().count() <= max => {
+                l.push(' ');
+                l.push_str(word);
+            }
+            _ => lines.push(word.to_string()),
+        }
+    }
+    lines
 }
