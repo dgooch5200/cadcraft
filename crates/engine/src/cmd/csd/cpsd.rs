@@ -48,15 +48,16 @@ fn list<'a>(v: &'a Value, key: &str, cap: usize) -> impl Iterator<Item = &'a Val
     v.get(key).and_then(Value::as_array).into_iter().flatten().take(cap)
 }
 
-/// ChamSys canvas (y down, page corner at 30,30) to the drawing (y up, page corner at the origin).
-pub(super) fn to_drawing(x: f64, y: f64) -> Option<Vec2> {
+/// ChamSys canvas (y down, page corner at 30,30, pixels) to the drawing (y up, page corner at the
+/// origin, `k` units per pixel).
+pub(super) fn to_drawing(x: f64, y: f64, k: f64) -> Option<Vec2> {
     let p = Vec2::new(x - PAGE_ORIGIN, PAGE_ORIGIN + Paper::Tabloid.size().1 - y);
-    (p.x.abs() <= MAX_COORD && p.y.abs() <= MAX_COORD).then_some(p)
+    (p.x.abs() <= MAX_COORD && p.y.abs() <= MAX_COORD).then(|| Vec2::new(p.x * k, p.y * k))
 }
 
-/// The drawing (y up, page corner at the origin) to ChamSys canvas coordinates.
-pub(super) fn from_drawing(p: Vec2) -> (f64, f64) {
-    (p.x + PAGE_ORIGIN, PAGE_ORIGIN + Paper::Tabloid.size().1 - p.y)
+/// The drawing (y up, page corner at the origin, `k` units per pixel) to ChamSys canvas pixels.
+pub(super) fn from_drawing(p: Vec2, k: f64) -> (f64, f64) {
+    (p.x / k + PAGE_ORIGIN, PAGE_ORIGIN + Paper::Tabloid.size().1 - p.y / k)
 }
 
 /// Title block fields as (ChamSys key, `csd.project` key).
@@ -137,6 +138,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
 
     s.settings.orthomode = file.get("ortho").and_then(Value::as_bool) == Some(true);
 
+    let k = super::units::pin_px(s.doc_mut()?);
     let library = s.csd_library.clone();
     let mut skips = Skips::default();
     let mut placed: HashMap<String, Handle> = HashMap::new();
@@ -171,7 +173,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             && (d.get("twoLine").and_then(Value::as_bool) == Some(true) || d.get("showNote").and_then(Value::as_bool) == Some(true));
         let card = card_size(&product, two_line);
         // x, y is the card's top-left; cards are inserted at their centre.
-        let Some(at) = to_drawing(x + w.unwrap_or(card.x) / 2.0, y + h.unwrap_or(card.y) / 2.0) else {
+        let Some(at) = to_drawing(x + w.unwrap_or(card.x) / 2.0, y + h.unwrap_or(card.y) / 2.0, k) else {
             skips.add("device outside the drawing limits");
             continue;
         };
@@ -193,8 +195,8 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         s.doc_mut()?.modify_entity(handle, |e| {
             let EntityKind::Insert(i) = &mut e.kind else { return };
             if w.is_some() || h.is_some() {
-                i.scale.x = w.map_or(1.0, |w| w / card.x);
-                i.scale.y = h.map_or(1.0, |h| h / card.y);
+                i.scale.x = k * w.map_or(1.0, |w| w / card.x);
+                i.scale.y = k * h.map_or(1.0, |h| h / card.y);
             }
             if !notes.is_empty() {
                 put_attr(i, "NOTES", notes);
@@ -250,7 +252,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             }),
         };
         let mut link = WireLink::new(from, side(c, "fromPort", Side::Right), to, side(c, "toPort", Side::Left), protocol);
-        link.points = list(c, "points", MAX_WIRE_POINTS).filter_map(|q| to_drawing(number(q, "x")?, number(q, "y")?)).collect();
+        link.points = list(c, "points", MAX_WIRE_POINTS).filter_map(|q| to_drawing(number(q, "x")?, number(q, "y")?, k)).collect();
         link.label_t = number(c, "labelT").map(|t| t.clamp(0.0, 1.0));
         link.name = Some(text(c, "label").trim().to_string()).filter(|n| !n.is_empty());
         add_wire(s, &link)?;
@@ -280,7 +282,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         sheet::run_project_set(s, &json!({ "fields": fields }))?;
     }
 
-    let shapes = super::shapes::import(s, list(&file, "shapes", super::shapes::MAX_SHAPES).filter(|v| on_page(v)), |r| skips.add(r))?;
+    let shapes = super::shapes::import(s, k, list(&file, "shapes", super::shapes::MAX_SHAPES).filter(|v| on_page(v)), |r| skips.add(r))?;
     let mut skipped: Vec<String> = skips.0.into_iter().map(|(r, n)| format!("{n} x {r}")).collect();
     if pages.len() > 1 {
         skipped.push(format!("{} other page(s); pass `page` to import another", pages.len() - 1));
@@ -309,7 +311,7 @@ mod tests {
     fn import(json: &str) -> (Session, Value) {
         let path = std::env::temp_dir().join(format!("cadcraft-cpsd-{}-{:p}.cpsd", std::process::id(), json));
         std::fs::write(&path, json).unwrap();
-        let mut s = Session::new();
+        let mut s = crate::cmd::csd::units::px_session();
         let r = s.execute("csd.import.cpsd", &json!({ "path": path.to_str().unwrap() }));
         let _ = std::fs::remove_file(&path);
         let r = r.unwrap_or_else(|e| json!({ "error": e.to_string() }));
@@ -378,6 +380,67 @@ mod tests {
     }
 
     #[test]
+    fn an_inch_drawing_gets_the_file_in_inches_and_writes_it_back_in_pixels() {
+        let file = json!({ "shapes": [
+            { "type": "line", "x1": 30, "y1": 30, "x2": 126, "y2": 126, "strokeStyle": "dashed", "weight": 2 },
+            { "type": "text", "x1": 30, "y1": 30, "x2": 126, "y2": 60, "text": "A", "fontSize": 24 }
+        ] });
+        let path = std::env::temp_dir().join(format!("cadcraft-cpsd-in-{}.cpsd", std::process::id()));
+        std::fs::write(&path, file.to_string()).unwrap();
+        let mut s = Session::new();
+        s.execute("csd.import.cpsd", &json!({ "path": path.to_str().unwrap() })).unwrap();
+        let store = s.doc().unwrap().space(&s.space()).unwrap();
+        let (mut line, mut mt) = (None, None);
+        for e in store.iter() {
+            match &e.kind {
+                EntityKind::Line(l) => line = Some((l.clone(), e.common.ltscale)),
+                EntityKind::MText(m) => mt = Some(m.clone()),
+                _ => {}
+            }
+        }
+        let ((l, ltscale), mt) = (line.unwrap(), mt.unwrap());
+        assert!((l.b.x - 1.0).abs() < 1e-9 && (l.b.y - 10.0).abs() < 1e-9 && l.a.y == 11.0, "{l:?}");
+        assert!((mt.height - 0.25).abs() < 1e-12 && (mt.width - 1.0).abs() < 1e-9);
+        let first = s.doc().unwrap().linetype("DASHED").and_then(|lt| lt.pattern.iter().map(|e| e.length.abs()).find(|l| *l > 0.0)).unwrap();
+        assert!((ltscale * first - 6.0 / 96.0).abs() < 1e-9, "the first dash is 6 px long: {ltscale}");
+        s.execute("csd.export.cpsd", &json!({ "path": path.to_str().unwrap() })).unwrap();
+        let out: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let shapes = out["shapes"].as_array().unwrap();
+        let near = |v: &Value, want: f64| (v.as_f64().unwrap() - want).abs() < 1e-6;
+        assert!(near(&shapes[0]["x2"], 126.0) && near(&shapes[0]["y2"], 126.0), "{shapes:?}");
+        assert!(near(&shapes[1]["fontSize"], 24.0), "{shapes:?}");
+    }
+
+    #[test]
+    #[ignore = "needs csd-units-a: place_card must insert at scale k"]
+    fn an_inch_drawing_places_an_imported_device_at_its_pixels_over_96_and_round_trips() {
+        let file = json!({ "nodes": [
+            { "id": "a", "prodId": PRODUCT, "x": 100, "y": 100 },
+            { "id": "b", "prodId": PRODUCT, "x": 400, "y": 100, "w": 140, "h": 146 }
+        ], "conns": [{ "from": "a", "to": "b", "type": "dmx", "points": [{ "x": 250, "y": 300 }] }] });
+        let path = std::env::temp_dir().join(format!("cadcraft-cpsd-in2-{}.cpsd", std::process::id()));
+        std::fs::write(&path, file.to_string()).unwrap();
+        let mut s = Session::new();
+        s.execute("csd.import.cpsd", &json!({ "path": path.to_str().unwrap() })).unwrap();
+        let lib = s.csd_library.clone();
+        let store = s.doc().unwrap().space(&s.space()).unwrap();
+        let mut devs = super::super::devices(store, &lib);
+        devs.sort_by(|a, b| a.insert.insert.x.total_cmp(&b.insert.insert.x));
+        let card = devs[0].size();
+        assert!((devs[0].insert.scale.x - 1.0 / 96.0).abs() < 1e-12);
+        assert!((devs[0].insert.insert.x - (100.0 - 30.0 + card.x / 2.0) / 96.0).abs() < 1e-9);
+        assert!((devs[1].insert.scale.x - 140.0 / card.x / 96.0).abs() < 1e-12);
+        s.execute("csd.export.cpsd", &json!({ "path": path.to_str().unwrap() })).unwrap();
+        let out: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let n = out["nodes"].as_array().unwrap();
+        assert!((n[0]["x"].as_f64().unwrap() - 100.0).abs() < 1e-6 && n[0].get("w").is_none(), "{n:?}");
+        assert!((n[1]["w"].as_f64().unwrap() - 140.0).abs() < 1e-6, "{n:?}");
+        assert!((out["conns"][0]["points"][0]["y"].as_f64().unwrap() - 300.0).abs() < 1e-6);
+    }
+
+    #[test]
     fn off_page_target_becomes_the_page_name() {
         let file = json!({
             "pages": [{ "id": "p1", "name": "Stage" }, { "id": "p2", "name": "" }, { "id": "p3", "name": "Riser" }],
@@ -441,7 +504,7 @@ mod tests {
 
     #[test]
     fn missing_file_and_bad_page_are_errors() {
-        let mut s = Session::new();
+        let mut s = crate::cmd::csd::units::px_session();
         assert!(s.execute("csd.import.cpsd", &json!({ "path": "/nonexistent/x.cpsd" })).is_err());
         let path = std::env::temp_dir().join(format!("cadcraft-cpsd-page-{}.cpsd", std::process::id()));
         std::fs::write(&path, "{}").unwrap();
