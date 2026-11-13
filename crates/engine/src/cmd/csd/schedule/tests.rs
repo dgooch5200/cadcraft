@@ -213,6 +213,18 @@ fn moving_a_device_wholly_into_a_card_mounts_it_and_out_unmounts() {
 }
 
 #[test]
+fn a_mounted_device_is_painted_after_its_host() {
+    let mut s = Session::new();
+    let inner = place(&mut s, NODE, [600.0, 0.0]);
+    let rack = place(&mut s, CONSOLE, [0.0, 0.0]);
+    let order = |s: &Session| s.doc().unwrap().space(&s.space()).unwrap().handles();
+    let at = |s: &Session, h| order(s).iter().position(|x| *x == h).unwrap();
+    assert!(at(&s, inner) < at(&s, rack));
+    set(&mut s, inner, json!({ "mount": rack.hex() })).unwrap();
+    assert!(at(&s, inner) > at(&s, rack));
+}
+
+#[test]
 fn builtin_blocks_place_but_are_on_no_list() {
     let mut s = Session::new();
     let node = place(&mut s, NODE, [0.0, 0.0]);

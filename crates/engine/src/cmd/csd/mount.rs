@@ -1,6 +1,7 @@
 //! Drag to mount: a single device moved so its card lies wholly inside another device's card is
 //! mounted in it, and one moved out of its host is unmounted (the web app's `mountTargetAt`).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use cadcraft_csd::Product;
@@ -61,5 +62,32 @@ pub(super) fn auto_mount(before: &Drawing, doc: &mut Arc<Drawing>, products: &[P
                 put_attr(i, "MOUNT", value);
             }
         });
+    }
+}
+
+/// A device is painted after the device it is mounted in, as the web app's `mountOrder` derives
+/// it, so a rack never covers its contents. Each pass fixes one more level of nesting.
+pub(super) fn stack(doc: &mut Arc<Drawing>) {
+    for space in spaces(doc) {
+        for _ in 0..super::MAX_MOUNT_DEPTH {
+            let Some(store) = doc.space(&space) else { break };
+            let pos: HashMap<Handle, usize> = store.iter().enumerate().map(|(n, e)| (e.handle, n)).collect();
+            let under: Vec<Handle> = store
+                .iter()
+                .filter_map(|e| {
+                    let EntityKind::Insert(i) = &e.kind else { return None };
+                    let parent = mount_of(store, i)?;
+                    (pos.get(&parent)? > pos.get(&e.handle)?).then_some(e.handle)
+                })
+                .collect();
+            if under.is_empty() {
+                break;
+            }
+            if let Some(store) = Arc::make_mut(doc).space_mut(&space) {
+                under.into_iter().for_each(|h| {
+                    store.bring_to_front(h);
+                });
+            }
+        }
     }
 }
