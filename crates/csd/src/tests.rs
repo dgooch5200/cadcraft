@@ -343,6 +343,18 @@ fn routes_pass_through_waypoints_in_both_modes() {
 }
 
 #[test]
+fn an_ortho_waypoint_past_the_turn_does_not_double_back() {
+    let (a, b, via) = (Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 300.0, y: 150.0 }, [Vec2 { x: 150.0, y: -150.0 }]);
+    let r = route_via(a, Side::Bottom, Slot::SOLO, b, Side::Bottom, Slot::SOLO, &via, true);
+    assert!(r.iter().any(|p| p.near(via[0], 1e-6)), "{r:?}");
+    let reverses = r.windows(3).any(|w| {
+        let (u, v) = (w[1] - w[0], w[2] - w[1]);
+        (u.x * v.y - u.y * v.x).abs() < 1e-9 && u.dot(v) < 0.0
+    });
+    assert!(!reverses, "{r:?}");
+}
+
+#[test]
 fn positions_along_a_path() {
     let p = [Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 10.0, y: 0.0 }, Vec2 { x: 10.0, y: 30.0 }];
     assert!(point_at(&p, 0.25).unwrap().near(Vec2 { x: 10.0, y: 0.0 }, 1e-9));

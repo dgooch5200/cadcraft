@@ -183,13 +183,32 @@ pub fn route_via(from: Vec2, from_side: Side, from_slot: Slot, to: Vec2, to_side
     }
     let a = from + d1 * from_slot.stub();
     let b = to + d2 * to_slot.stub();
-    // Each leg turns once; the stub leaves along one axis, so the first leg starts across it.
     let mut pts = vec![from, a];
-    let (mut cur, mut horizontal) = (a, d1.x == 0.0);
-    for &next in via.iter().chain(std::iter::once(&b)) {
-        pts.push(if horizontal { Vec2 { x: next.x, y: cur.y } } else { Vec2 { x: cur.x, y: next.y } });
-        pts.push(next);
-        (cur, horizontal) = (next, !horizontal);
+    if via.is_empty() {
+        // The stub leaves along one axis, so the one leg starts across it.
+        pts.push(if d1.x == 0.0 { Vec2 { x: b.x, y: a.y } } else { Vec2 { x: a.x, y: b.y } });
+        pts.push(b);
+    } else {
+        // Each leg turns once: it keeps the heading while the next point lies ahead, else turns
+        // first, so a waypoint never sends the wire back along itself.
+        let (mut cur, mut heading) = (a, d1);
+        let n = via.len();
+        for (i, &next) in via.iter().chain(std::iter::once(&b)).enumerate() {
+            let along = |h: Vec2| if h.x != 0.0 { Vec2 { x: next.x, y: cur.y } } else { Vec2 { x: cur.x, y: next.y } };
+            let across = |h: Vec2| if h.x != 0.0 { Vec2 { x: cur.x, y: next.y } } else { Vec2 { x: next.x, y: cur.y } };
+            let mut corner = if heading.dot(next - cur) >= 0.0 { along(heading) } else { across(heading) };
+            // Arriving at the last stub heading away from the port would double back into it.
+            if i == n && (next - corner).dot(d2) > 1e-9 {
+                corner = if corner.near(along(heading), 1e-9) { across(heading) } else { along(heading) };
+            }
+            pts.push(corner);
+            pts.push(next);
+            let last = if next.near(corner, 1e-9) { corner - cur } else { next - corner };
+            if last.len() > 1e-9 {
+                heading = last * (1.0 / last.len());
+            }
+            cur = next;
+        }
     }
     pts.push(to);
     pts.dedup_by(|p, q| p.near(*q, 1e-9));
