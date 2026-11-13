@@ -1,7 +1,7 @@
 //! The Lighting group of the Drafting tool set: the product library as a searchable list. Clicking
 //! a product arms it and starts the interactive `csd.place`, which keeps placing until Enter or Esc.
 
-use cadcraft_csd::{Product, Protocol};
+use cadcraft_csd::{Product, Protocol, builtin_products};
 use egui::{Color32, Rect, Sense, Stroke, pos2, vec2};
 use serde_json::json;
 
@@ -188,8 +188,10 @@ pub(super) fn body(app: &mut CadApp, ui: &mut egui::Ui) {
     let id = ui.scope_id().with("csd_lighting");
     let mut f = ui.ctx().data_mut(|d| d.get_temp::<Filter>(id)).unwrap_or_default();
     let library = app.session.csd_library.clone();
+    // The built-ins are in no library, so they are listed after it.
+    let all: Vec<&Product> = library.iter().chain(builtin_products()).collect();
     let mut cats: Vec<&str> = Vec::new();
-    for p in library.iter() {
+    for p in &all {
         if !cats.contains(&p.cat.as_str()) {
             cats.push(&p.cat);
         }
@@ -219,7 +221,7 @@ pub(super) fn body(app: &mut CadApp, ui: &mut egui::Ui) {
     });
     ui.add_space(4.0);
     let needle = f.query.trim().to_lowercase();
-    let hits: Vec<&Product> = library.iter().filter(|p| matches(p, &f, &needle)).collect();
+    let hits: Vec<&Product> = all.iter().copied().filter(|p| matches(p, &f, &needle)).collect();
     let placing = app.session.running.as_ref().is_some_and(|r| r.id == "csd.place");
     let mut picked = None;
     egui::ScrollArea::vertical().id_salt(id.with("list")).max_height(LIST_H).auto_shrink([false, true]).show_rows(

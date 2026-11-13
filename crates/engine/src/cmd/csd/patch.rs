@@ -3,7 +3,7 @@
 
 use std::cmp::Ordering;
 
-use cadcraft_csd::{CARD_H, Product};
+use cadcraft_csd::{CARD_H, Product, is_builtin};
 use cadcraft_doc::{EntityKind, Handle};
 use serde_json::{Value, json};
 
@@ -63,6 +63,9 @@ fn entries(s: &Session) -> Result<Vec<Entry>> {
         .filter_map(|e| {
             let EntityKind::Insert(i) = &e.kind else { return None };
             let product = resolve(&s.csd_library, product_attr(i)?).into_owned();
+            if is_builtin(&product.id) {
+                return None;
+            }
             let modes = parse_modes(&product);
             let mode = Some(attr(i, MODE_TAG)).filter(|m| modes.iter().any(|x| x.0 == *m)).map(String::from);
             let channels = match &mode {

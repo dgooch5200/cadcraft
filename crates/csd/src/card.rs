@@ -8,7 +8,7 @@ use cadcraft_doc::{
 use cadcraft_geom::{PolyVertex, Vec2};
 
 use crate::wire::{point_at, smooth};
-use crate::{Deco, Product, Protocol, Side};
+use crate::{Deco, OFF_PAGE_ID, Product, Protocol, Side, is_builtin};
 
 mod sheet;
 pub use sheet::*;
@@ -413,25 +413,36 @@ pub fn device_block(product: &Product, mut new_handle: impl FnMut() -> Handle, d
     let card = round_rect(-hw, -hh, hw, hh, [RADIUS - BORDER / 2.0; 4]);
     p.add(fill(card.clone()), PAPER);
     let mut border = p.entity(outline(card, BORDER), product.color);
-    if product.missing {
+    let builtin = is_builtin(&product.id);
+    if product.missing || builtin {
         border.common.linetype = "DASHED2".into();
         border.common.ltscale = dash_scale;
     }
     p.block.entities.push(border);
-    // The strip shares the card's border and bottom corners: its top edge is the rule.
-    let strip_top = -hh + STRIP_H;
-    let r = RADIUS - BORDER / 2.0;
-    p.add(outline(round_rect(-hw, -hh, hw, strip_top, [r, r, 0.0, 0.0]), BORDER), product.color);
-    // The outline's mitred top corners leave a notch against the card's border; the rule fills it.
-    let (rx, ry) = (hw + BORDER / 2.0, BORDER / 2.0);
-    p.add(fill(round_rect(-rx, strip_top - ry, rx, strip_top + ry, [0.0; 4])), product.color);
+    let label_y = if builtin {
+        // A dashed box for a sentence: no strip, no code. The off-page connector adds a break arrow.
+        if product.id == OFF_PAGE_ID {
+            let (x, h) = (hw - 3.0, 7.0);
+            p.add(fill(vec![vertex(x - h, h, 0.0), vertex(x, 0.0, 0.0), vertex(x - h, -h, 0.0)]), product.color);
+        }
+        0.0
+    } else {
+        // The strip shares the card's border and bottom corners: its top edge is the rule.
+        let strip_top = -hh + STRIP_H;
+        let r = RADIUS - BORDER / 2.0;
+        p.add(outline(round_rect(-hw, -hh, hw, strip_top, [r, r, 0.0, 0.0]), BORDER), product.color);
+        // The outline's mitred top corners leave a notch against the card's border; the rule fills it.
+        let (rx, ry) = (hw + BORDER / 2.0, BORDER / 2.0);
+        p.add(fill(round_rect(-rx, strip_top - ry, rx, strip_top + ry, [0.0; 4])), product.color);
 
-    let lines = wrap_code(&product.code);
-    let body_mid = (hh + strip_top) / 2.0;
-    let first = body_mid + (lines.len() as f64 - 1.0) / 2.0 * (CODE_H + 3.0);
-    for (i, line) in lines.iter().enumerate() {
-        p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: first - i as f64 * (CODE_H + 3.0) }, CODE_H, line)), INK);
-    }
+        let lines = wrap_code(&product.code);
+        let body_mid = (hh + strip_top) / 2.0;
+        let first = body_mid + (lines.len() as f64 - 1.0) / 2.0 * (CODE_H + 3.0);
+        for (i, line) in lines.iter().enumerate() {
+            p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: first - i as f64 * (CODE_H + 3.0) }, CODE_H, line)), INK);
+        }
+        (-hh + strip_top) / 2.0
+    };
     let attdef = |tag: &str, prompt: &str, at: Vec2, value: &str, invisible: bool| {
         EntityKind::AttDef(Attrib {
             tag: tag.into(),
@@ -447,7 +458,7 @@ pub fn device_block(product: &Product, mut new_handle: impl FnMut() -> Handle, d
     p.add(attdef("PRODUCT", "Product", Vec2::ZERO, &product.id, true), INK);
     p.add(attdef("NAME", "Name", Vec2::ZERO, "", true), INK);
     p.add(attdef("NOTES", "Notes", Vec2::ZERO, "", true), INK);
-    p.add(attdef("LABEL", "Label", Vec2 { x: 0.0, y: (-hh + strip_top) / 2.0 }, "", false), legible(product.color));
+    p.add(attdef("LABEL", "Label", Vec2 { x: 0.0, y: label_y }, "", false), legible(product.color));
     p.block
 }
 

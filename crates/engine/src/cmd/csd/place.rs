@@ -2,7 +2,7 @@
 //! app. With nothing armed it first asks for a product id. Placing goes through the JSON form, so
 //! both make the same device.
 
-use cadcraft_csd::{CARD_H, CARD_W};
+use cadcraft_csd::{CARD_H, CARD_W, lookup};
 use cadcraft_geom::Vec2;
 use serde_json::{Value, json};
 
@@ -13,7 +13,7 @@ use crate::{Accept, EntityKind, Input, Interactive, Prompt, Result, Session, Ste
 /// `csd.arm {product}`: names the product `csd.place` puts down next.
 pub(super) fn run_arm(s: &mut Session, p: &Value) -> Result<Value> {
     let id = str_param(p, "product").ok_or_else(|| bad("csd.arm", "`product` is required"))?;
-    if !s.csd_library.iter().any(|x| x.id == id) {
+    if lookup(&s.csd_library, id).is_none() {
         return Err(bad("csd.arm", format!("unknown product \"{id}\"")));
     }
     s.csd_armed = Some(id.to_string());
@@ -71,7 +71,7 @@ impl Interactive for PlaceM {
         let Some(product) = &self.product else {
             return Prompt::new("Enter product id", Accept::TEXT);
         };
-        let name = s.csd_library.iter().find(|x| &x.id == product).map_or(product.as_str(), |x| x.name.as_str());
+        let name = lookup(&s.csd_library, product).map_or(product.as_str(), |x| x.name.as_str());
         Prompt::new(format!("Specify insertion point for {name}"), Accept::POINT)
     }
     fn input(&mut self, s: &mut Session, i: Input) -> Result<Step> {

@@ -3,6 +3,7 @@
 //! applies. Keys this crate does not model (notably `img`) are kept in [`Product::extra`].
 
 use std::collections::HashSet;
+use std::sync::OnceLock;
 
 use serde_json::{Map, Value, json};
 
@@ -177,4 +178,47 @@ pub fn accessory_products<'a>(products: &'a [Product], fitting: &[&Product]) -> 
             owners.peek().is_none() || owners.any(|f| wanted.contains(f))
         })
         .collect()
+}
+
+pub const BY_OTHERS_ID: &str = "__by-others";
+pub const OFF_PAGE_ID: &str = "__off-page";
+
+/// The two products the app supplies. They are in no library, so a library cannot shadow or drop
+/// them, and the schedule, BOM and patch skip them. Every port count is 99 (they are markers, not
+/// hardware) except 10Scene in, which is 0 so they end a bus rather than join two.
+pub fn builtin_products() -> &'static [Product] {
+    static BUILTINS: OnceLock<[Product; 2]> = OnceLock::new();
+    BUILTINS.get_or_init(|| {
+        let mut counts = [(99, 99); 10];
+        if let Some(c) = counts.get_mut(crate::Protocol::Scene10.index()) {
+            *c = (0, 99);
+        }
+        let by_others = Product {
+            id: BY_OTHERS_ID.into(),
+            name: "Supply by others".into(),
+            code: "BY OTHERS".into(),
+            cat: "Annotation".into(),
+            notes: "A labelled box for a source outside this drawing. Not counted on the schedule or the BOM.".into(),
+            counts,
+            color: 0x64748b,
+            ..Product::default()
+        };
+        let off_page = Product {
+            id: OFF_PAGE_ID.into(),
+            name: "Off-page connector".into(),
+            code: "OFF PAGE".into(),
+            notes: "Marks a connection that continues on another drawing page. Not counted on the schedule or the BOM.".into(),
+            ..by_others.clone()
+        };
+        [by_others, off_page]
+    })
+}
+
+pub fn is_builtin(id: &str) -> bool {
+    id == BY_OTHERS_ID || id == OFF_PAGE_ID
+}
+
+/// The product with exactly this id: a built-in first, then the library.
+pub fn lookup<'a>(library: &'a [Product], id: &str) -> Option<&'a Product> {
+    builtin_products().iter().chain(library).find(|p| p.id == id)
 }

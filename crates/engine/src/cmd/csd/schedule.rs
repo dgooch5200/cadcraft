@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use cadcraft_csd::{Product, Protocol, WireLink, is_accessory};
+use cadcraft_csd::{Product, Protocol, WireLink, is_accessory, is_builtin};
 use cadcraft_doc::{Common, Drawing, EntityKind, HAlign, HVal, Handle, Space, Text, VAlign};
 use cadcraft_geom::Vec3;
 use serde_json::{Value, json};
@@ -90,6 +90,10 @@ fn placed(s: &Session) -> Result<Vec<Placed>> {
         .filter_map(|e| {
             let EntityKind::Insert(i) = &e.kind else { return None };
             let product = resolve(&s.csd_library, product_attr(i)?);
+            // The built-in blocks are drawing notes: on no list.
+            if is_builtin(&product.id) {
+                return None;
+            }
             let ports = port_usage(&product, &only, e.handle);
             let conns = only.iter().filter(|l| l.from == e.handle || l.to == e.handle).count();
             Some(Placed {
@@ -271,7 +275,7 @@ fn bom(s: &Session) -> Result<Vec<Line>> {
             add(a, q, "");
         }
     }
-    for (id, qty) in read(s.doc()?) {
+    for (id, qty) in read(s.doc()?).into_iter().filter(|(id, _)| !is_builtin(id)) {
         add(Prod::of(&resolve(&s.csd_library, &id)), qty, "");
     }
     let mut cats: BTreeMap<String, Vec<Line>> = BTreeMap::new();

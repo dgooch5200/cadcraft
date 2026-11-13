@@ -363,3 +363,38 @@ fn positions_along_a_path() {
     assert!((fraction_near(&p, Vec2 { x: 12.0, y: 15.0 }, true).unwrap() - 0.625).abs() < 1e-9);
     assert!((fraction_near(&p, Vec2 { x: 5.0, y: 1.0 }, true).unwrap() - 0.125).abs() < 1e-9);
 }
+
+#[test]
+fn builtins_take_any_protocol_and_end_a_10scene_bus() {
+    let (by_others, off_page) = (&builtin_products()[0], &builtin_products()[1]);
+    assert!(is_builtin(&by_others.id) && is_builtin(&off_page.id) && !is_builtin("logic-poex"));
+    let fixture = prod(&[(Protocol::Dmx, 1, 1), (Protocol::Scene10, 1, 1), (Protocol::Midi, 1, 1)]);
+    let devs = [(1, by_others), (2, &fixture), (3, off_page)];
+    for p in Protocol::ALL {
+        if fixture.effective_capacity(p) > 0 {
+            assert_eq!(code(&devs, &[], &link(1, 2, p)), None, "{p:?}");
+        }
+        assert_eq!(code(&devs, &[], &link(1, 3, p)), None, "{p:?}");
+    }
+    assert_eq!(by_others.ports(Protocol::Scene10), (0, 99));
+    assert_eq!(lookup(&[], BY_OTHERS_ID), Some(by_others));
+    // A library row of the same id cannot shadow the built-in.
+    let shadow = Product { id: BY_OTHERS_ID.into(), name: "other".into(), ..Product::default() };
+    assert_eq!(lookup(&[shadow], BY_OTHERS_ID).map(|p| p.name.as_str()), Some("Supply by others"));
+}
+
+#[test]
+fn builtin_card_is_a_dashed_box_without_a_strip() {
+    let mut n = 0;
+    let mut h = || {
+        n += 1;
+        Handle(n)
+    };
+    let plain = device_block(&sample_products()[0], &mut h, 1.0).entities;
+    let by_others = device_block(&builtin_products()[0], &mut h, 1.0).entities;
+    let off_page = device_block(&builtin_products()[1], &mut h, 1.0).entities;
+    assert!(by_others.len() < plain.len());
+    assert_eq!(off_page.len(), by_others.len() + 1, "the break arrow");
+    assert!(by_others.iter().any(|e| e.common.linetype == "DASHED2"));
+    assert!(plain.iter().all(|e| e.common.linetype != "DASHED2"));
+}

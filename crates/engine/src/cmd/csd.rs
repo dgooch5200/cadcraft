@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use cadcraft_csd::{
     BOLD_STYLE, CARD_H, CARD_W, Deco, Product, Protocol, Side, Slot, WIRE_W, WireLink, accessory_products, block_name, bold_style, can_connect,
-    deco_block, deco_block_name, deco_from_xdata, deco_points, deco_xdata, device_block, edge_frame, fan_order, library_json, parse_library,
-    parse_products, port_point, product_record, route_via, truncate_label, used, world_side,
+    deco_block, deco_block_name, deco_from_xdata, deco_points, deco_xdata, device_block, edge_frame, fan_order, is_builtin, library_json, lookup,
+    parse_library, parse_products, port_point, product_record, route_via, truncate_label, used, world_side,
 };
 use cadcraft_doc::color::{Color, Rgb};
 use cadcraft_doc::{Common, Drawing, Entity, EntityKind, EntityStore, Handle, Insert, Layer, LwPolyline, Space};
@@ -165,7 +165,7 @@ fn is_device_block(i: &Insert) -> bool {
 fn find_product<'a>(products: &'a [Product], id: &str) -> Option<&'a Product> {
     let key = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect::<String>();
     let k = key(id);
-    products.iter().find(|p| p.id == id).or_else(|| products.iter().find(|p| key(&p.id) == k)).or_else(|| {
+    lookup(products, id).or_else(|| products.iter().find(|p| key(&p.id) == k)).or_else(|| {
         let mut by_code = products.iter().filter(|p| key(&p.code) == k);
         by_code.next().filter(|_| by_code.next().is_none())
     })
@@ -458,7 +458,7 @@ const MAX_REFRESH: usize = 10_000;
 pub(crate) fn refresh_blocks(doc: &mut Arc<Drawing>, library: &[Product]) -> bool {
     let product_of = |b: &cadcraft_doc::Block| {
         b.entities.iter().take(MAX_REFRESH).find_map(|e| match &e.kind {
-            EntityKind::AttDef(a) if a.tag == "PRODUCT" => library.iter().find(|p| p.id == a.text.value),
+            EntityKind::AttDef(a) if a.tag == "PRODUCT" => lookup(library, &a.text.value),
             _ => None,
         })
     };
@@ -487,7 +487,7 @@ pub(crate) fn refresh_blocks(doc: &mut Arc<Drawing>, library: &[Product]) -> boo
     };
     for product in devices {
         ensure_bold(&mut d);
-        let dash = if product.missing { dashed_scale(&mut d, BORDER_DASH) } else { 1.0 };
+        let dash = if product.missing || is_builtin(&product.id) { dashed_scale(&mut d, BORDER_DASH) } else { 1.0 };
         let block = device_block(product, || d.new_handle(), dash);
         put(&mut d, block);
     }
@@ -530,10 +530,11 @@ fn run_place(s: &mut Session, p: &Value) -> Result<Value> {
     let id = str_param(p, "product").ok_or_else(|| bad("csd.place", "`product` is required"))?;
     let at = point_req("csd.place", p, "at")?;
     let library = s.csd_library.clone();
-    let product = library.iter().find(|x| x.id == id).ok_or_else(|| bad("csd.place", format!("unknown product \"{id}\"")))?;
+    let product = lookup(&library, id).ok_or_else(|| bad("csd.place", format!("unknown product \"{id}\"")))?;
     let name = ensure_device_block(s, product)?;
-    // The strip shows the label, or the short code until there is one.
-    let label = str_param(p, "label").filter(|l| !l.trim().is_empty()).unwrap_or(&product.code);
+    // The strip shows the label, or the short code until there is one; a built-in has no code on its card.
+    let default = if is_builtin(&product.id) { &product.name } else { &product.code };
+    let label = str_param(p, "label").filter(|l| !l.trim().is_empty()).unwrap_or(default);
     let mut values = Map::new();
     values.insert("PRODUCT".into(), json!(product.id));
     values.insert("NAME".into(), json!(label));
@@ -549,7 +550,7 @@ fn ensure_device_block(s: &mut Session, product: &Product) -> Result<String> {
     if s.doc()?.block(&name).is_none() {
         let d = s.doc_mut()?;
         ensure_bold(d);
-        let dash = if product.missing { dashed_scale(d, BORDER_DASH) } else { 1.0 };
+        let dash = if product.missing || is_builtin(&product.id) { dashed_scale(d, BORDER_DASH) } else { 1.0 };
         let block = device_block(product, || d.new_handle(), dash);
         d.blocks.insert(name.clone(), Arc::new(block));
     }
@@ -602,7 +603,7 @@ fn run_size(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_replace(s: &mut Session, p: &Value) -> Result<Value> {
     let id = str_param(p, "product").ok_or_else(|| bad("csd.replace", "`product` is required"))?;
     let library = s.csd_library.clone();
-    let product = library.iter().find(|x| x.id == id).ok_or_else(|| bad("csd.replace", format!("unknown product \"{id}\"")))?;
+    let product = lookup(&library, id).ok_or_else(|| bad("csd.replace", format!("unknown product \"{id}\"")))?;
     let mut hs = device_handles(s, &targets(s, p)?)?;
     if p.get("allOfProduct").and_then(Value::as_bool).unwrap_or(false) {
         let d = s.doc()?;
