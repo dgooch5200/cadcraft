@@ -61,11 +61,11 @@ fn own_specs() -> Vec<CommandSpec> {
             .enabled(always)
             .noundo(),
         CommandSpec::new("csd.import.cpsd", "Import ChamSys Designer Project", cpsd::run_import)
-            .params("{path: a .cpsd file, page?: 1-based number or id (default the first page)} → {devices, wires, unplaced, shapes, skipped: [reasons]}; builds the page's devices, wires (waypoints, label position, name), shapes and text (lines, rectangles, ellipses and text on layer CSD_SHAPES), off-page targets (as the page's name), the ortho setting, the unplaced list and the title block into the current drawing"),
+            .params("{path: a .cpsd file, page?: 1-based number, page id, or 'all' (default the first page; 'all' lays page i on sheet i, adding sheets and naming them)} → {devices, wires, unplaced, shapes, pages, skipped: [reasons]}; builds the page's devices, wires (waypoints, label position, name), shapes and text (lines, rectangles, ellipses and text on layer CSD_SHAPES), off-page targets (as the page's name), the ortho setting, the unplaced list and the title block into the current drawing"),
         CommandSpec::new("csd.import.lpro", "Import Luminary Project", lpro::run_import)
             .params("{path: a Luminary Pro .lpro file, choices?: {typeKey: product id, \"\" skips}, preview?: true} → {types: [{key, name, manufacturer, luminaire, catalog, quantity, product, matched, suggestions}], fixtures, skipped}; adds each fixture type's count to the unplaced list as the library product it names (types the file does not name specifically are skipped unless `choices` picks one); `preview` only reports"),
         CommandSpec::new("csd.export.cpsd", "Export ChamSys Designer Project", cpsd_out::run_export)
-            .params("{path} → {path, devices, wires, unplaced, shapes, skipped: [reasons]}; writes the drawing as a one-page .cpsd (devices, mounts, wires with waypoints and names, unplaced items, title block, the products they use, the ortho setting, off-page targets that name the exported page, and lines, rectangles, ellipses and text on layer CSD_SHAPES as shapes; what cannot be written is counted in skipped)")
+            .params("{path} → {path, devices, wires, unplaced, shapes, skipped: [reasons]}; writes the drawing as a .cpsd with one page per title-block sheet (devices, mounts, wires with waypoints and names, unplaced items, title block, the products they use, the ortho setting, off-page targets that name the exported page, and lines, rectangles, ellipses and text on layer CSD_SHAPES as shapes; what cannot be written is counted in skipped)")
             .noundo(),
         CommandSpec::new("csd.clear", "Clear Drawing", run_clear)
             .params("{} → {devices, wires}; removes every device, wire and wire decoration; the title block, line key and unplaced list stay"),
@@ -1155,13 +1155,13 @@ fn run_connect(s: &mut Session, p: &Value) -> Result<Value> {
         can_connect(&list, &existing, &link).map_err(|r| EngineError::Other(r.message))?;
         let ps = page::pages_in(store);
         let at = |h: Handle| devs.iter().find(|x| x.handle == h).and_then(|x| page::page_of(d, &ps, x.insert.insert.xy()));
-        if let (Some(a), Some(b)) = (at(link.from), at(link.to)) {
-            if a != b {
-                return Err(bad(
-                    "csd.connect",
-                    format!("devices on page {} and page {} can't be wired together; use an off-page connector", a + 1, b + 1),
-                ));
-            }
+        if let (Some(a), Some(b)) = (at(link.from), at(link.to))
+            && a != b
+        {
+            return Err(bad(
+                "csd.connect",
+                format!("devices on page {} and page {} can't be wired together; use an off-page connector", a + 1, b + 1),
+            ));
         }
         (link.protocol == Protocol::Network)
             .then(|| poe_verdict(&list, &existing, link.from, link.to, max_supply_watts(&products)))

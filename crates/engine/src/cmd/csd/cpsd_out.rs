@@ -10,19 +10,19 @@ use serde_json::{Map, Value, json};
 
 use super::cpsd::{TITLE_MAP, from_drawing};
 use super::patch::MODE_TAG;
-use super::{accessories_of, attr, bad, devices, find_product, mount_of, schedule, sheet, str_param, two_line, wires, write_library};
+use super::{accessories_of, attr, bad, devices, find_product, mount_of, page, schedule, sheet, str_param, two_line, wires, write_library};
 use crate::{EngineError, Result, Session};
 
 const CMD: &str = "csd.export.cpsd";
 /// ChamSys's `_format`; 7 added pages.
 const FORMAT: u32 = 7;
-/// Unplaced quantities are written one node per unit; a huge quantity must not balloon the file.
-const PAGE_ID: &str = "page-1";
 const PAGE_NAME: &str = "Canvas 1";
+/// Unplaced quantities are written one node per unit; a huge quantity must not balloon the file.
 const MAX_UNPLACED_NODES: u64 = 10_000;
 
-fn point(p: Vec2) -> Value {
-    let (x, y) = from_drawing(p);
+/// `dx` is the sheet's distance from the first, taken off so each page starts at its own corner.
+fn point(p: Vec2, dx: f64) -> Value {
+    let (x, y) = from_drawing(Vec2::new(p.x - dx, p.y));
     json!({ "x": x, "y": y })
 }
 
@@ -34,7 +34,27 @@ pub(super) fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = s.doc()?;
     let store = doc.space(&s.space()).ok_or_else(|| EngineError::Other("no such space".into()))?;
 
+    let sheets = page::pages_in(store);
+    let multi = sheets.len() > 1;
+    let origin = sheets.first().map_or(0.0, |g| g.at.x);
+    let offset = |i: usize| sheets.get(i).map_or(0.0, |g| g.at.x - origin);
+    let page_id = |i: usize| format!("page-{}", i + 1);
+    // A page's name in the file; the one unnamed page of a single-page drawing is ChamSys's "Canvas 1".
+    let page_names: Vec<String> = (0..sheets.len().max(1))
+        .map(|i| sheets.get(i).map_or(String::new(), |g| g.explicit.trim().to_string()))
+        .enumerate()
+        .map(|(i, n)| {
+            if !n.is_empty() {
+                n
+            } else if multi {
+                format!("Drawing {}", i + 1)
+            } else {
+                PAGE_NAME.to_string()
+            }
+        })
+        .collect();
     let devs = devices(store, &library);
+    let on: HashMap<Handle, usize> = devs.iter().map(|d| (d.handle, page::page_of(doc, &sheets, d.insert.insert.xy()).unwrap_or(0))).collect();
     let ids: HashMap<Handle, String> = devs.iter().enumerate().map(|(n, d)| (d.handle, format!("d{n}"))).collect();
     let mut used: BTreeSet<String> = BTreeSet::new();
 
@@ -46,7 +66,8 @@ pub(super) fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
         let card = d.size();
         let (w, h) = (card.x * i.scale.x.abs(), card.y * i.scale.y.abs());
         // The insert point is the card's centre; ChamSys keeps the top-left.
-        let (cx, cy) = from_drawing(Vec2::new(i.insert.x, i.insert.y));
+        let pg = on.get(&d.handle).copied().unwrap_or(0);
+        let (cx, cy) = from_drawing(Vec2::new(i.insert.x - offset(pg), i.insert.y));
         let name = attr(i, "NAME");
         let mut node = json!({
             "id": format!("d{n}"),
@@ -60,12 +81,15 @@ pub(super) fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
             node["w"] = json!(w);
             node["h"] = json!(h);
         }
+        if multi {
+            node["page"] = json!(page_id(pg));
+        }
         let target = attr(i, "LINKPAGE").trim();
         if !target.is_empty() {
-            if target == PAGE_NAME || target == PAGE_ID {
-                node["linkPage"] = json!(PAGE_ID);
-            } else {
-                lost_links += 1;
+            let to = (0..page_names.len()).find(|&n| target == page_names[n] || target == page_id(n) || target == format!("Drawing {}", n + 1));
+            match to {
+                Some(n) => node["linkPage"] = json!(page_id(n)),
+                None => lost_links += 1,
             }
         }
         if two_line(i) {
@@ -100,12 +124,13 @@ pub(super) fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
         .enumerate()
         .filter_map(|(n, (_, l))| {
             let (from, to) = (ids.get(&l.from)?, ids.get(&l.to)?);
+            let dx = offset(on.get(&l.from).copied().unwrap_or(0));
             let mut c = json!({
                 "id": format!("c{n}"), "from": from, "fromPort": l.from_side.id(), "to": to, "toPort": l.to_side.id(),
                 "type": l.protocol.id(), "label": l.name.clone().unwrap_or_default(),
             });
             if !l.points.is_empty() {
-                c["points"] = l.points.iter().copied().map(point).collect();
+                c["points"] = l.points.iter().map(|p| point(*p, dx)).collect();
             }
             if let Some(t) = l.label_t {
                 c["labelT"] = json!(t);
@@ -123,26 +148,40 @@ pub(super) fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
         .collect();
 
     let mut title = Map::new();
-    title.insert("sheet".into(), json!("1 of 1"));
+    title.insert("sheet".into(), json!(format!("1 of {}", page_names.len())));
     for (theirs, ours) in TITLE_MAP {
         title.insert(theirs.into(), json!(project["fields"][ours].as_str().unwrap_or_default()));
     }
-    let (shapes, skipped_shapes) = super::shapes::export(store);
+    let (mut shapes, skipped_shapes) = super::shapes::export(store);
+    if multi {
+        for v in &mut shapes {
+            let x = v["x1"].as_f64().unwrap_or(0.0) - from_drawing(Vec2::ZERO).0;
+            let n = (0..sheets.len()).rev().find(|&n| x >= origin + offset(n)).unwrap_or(0);
+            for k in ["x1", "x2"] {
+                v[k] = json!(v[k].as_f64().unwrap_or(0.0) - offset(n));
+            }
+            v["page"] = json!(page_id(n));
+        }
+    }
     if skipped_shapes > 0 {
         skipped.push(format!("{skipped_shapes} x entity on CSD_SHAPES that is not a line, rectangle, ellipse or text"));
     }
-    if lost_links > 0 {
+    if lost_links > 0 && multi {
+        skipped.push(format!("{lost_links} x off-page target that is not a page of this drawing"));
+    } else if lost_links > 0 {
         skipped.push(format!("{lost_links} x off-page target that is not this page (the export has one page, \"{PAGE_NAME}\")"));
     }
     let file = json!({
         "_app": "ChamSys System Designer", "_format": FORMAT, "_ext": ".cpsd", "ortho": ortho,
         "titleBlock": title,
-        "pages": [{ "id": PAGE_ID, "name": PAGE_NAME }],
+        "pages": page_names.iter().enumerate().map(|(n, name)| json!({ "id": page_id(n), "name": name })).collect::<Vec<_>>(),
         "products": products, "nodes": nodes, "conns": conns, "shapes": shapes,
     });
     let bytes = serde_json::to_vec_pretty(&file).map_err(|e| bad(CMD, e.to_string()))?;
     write_library(path, &bytes).map_err(|e| bad(CMD, format!("{path}: {e}")))?;
-    Ok(json!({ "path": path, "devices": devs.len(), "wires": conns.len(), "unplaced": unplaced, "shapes": shapes.len(), "skipped": skipped }))
+    Ok(
+        json!({ "path": path, "devices": devs.len(), "wires": conns.len(), "unplaced": unplaced, "shapes": shapes.len(), "skipped": skipped, "pages": page_names.len() }),
+    )
 }
 
 #[cfg(test)]
@@ -255,6 +294,44 @@ mod tests {
         let links: Vec<_> = file["nodes"].as_array().unwrap().iter().map(|n| n.get("linkPage").cloned()).collect();
         assert_eq!(links.iter().flatten().collect::<Vec<_>>(), [&json!("page-1")]);
         assert_eq!(r["skipped"].as_array().map(Vec::len), Some(1), "{r}");
+    }
+
+    #[test]
+    fn every_sheet_is_a_page_and_link_page_resolves_names() {
+        let dir = std::env::temp_dir();
+        let (a, b) =
+            (dir.join(format!("cadcraft-pg-in-{}.cpsd", std::process::id())), dir.join(format!("cadcraft-pg-out-{}.cpsd", std::process::id())));
+        std::fs::write(&a, super::super::cpsd::tests::two_page_file().to_string()).unwrap();
+        let mut s = Session::new();
+        s.execute("csd.import.cpsd", &json!({ "path": a.to_str().unwrap(), "page": "all" })).unwrap();
+        let r = s.execute("csd.export.cpsd", &json!({ "path": b.to_str().unwrap() })).unwrap();
+        let out: Value = serde_json::from_slice(&std::fs::read(&b).unwrap()).unwrap();
+        assert_eq!(
+            (r["devices"].clone(), r["wires"].clone(), r["pages"].clone(), r["skipped"].clone()),
+            (json!(5), json!(2), json!(2), json!([])),
+            "{r}"
+        );
+        assert_eq!(out["pages"], json!([{ "id": "page-1", "name": "Stage" }, { "id": "page-2", "name": "Drawing 2" }]));
+        let nodes = out["nodes"].as_array().unwrap();
+        let pages: Vec<_> = nodes.iter().map(|n| n["page"].as_str().unwrap().to_string()).collect();
+        assert_eq!(pages.iter().filter(|p| *p == "page-2").count(), 2);
+        let off = nodes.iter().find(|n| n["prodId"] == "__off-page").unwrap();
+        assert_eq!(off["linkPage"], "page-2");
+        // Each page is written from its own corner, as in the source file.
+        let c = nodes.iter().find(|n| n["page"] == "page-2" && n["x"].as_f64().unwrap() < 200.0).unwrap();
+        assert!((c["x"].as_f64().unwrap() - 100.0).abs() < 1e-6 && (c["y"].as_f64().unwrap() - 100.0).abs() < 1e-6, "{c}");
+        assert_eq!(out["shapes"][0]["page"], "page-2");
+        assert!((out["shapes"][0]["x1"].as_f64().unwrap() - 30.0).abs() < 1e-6, "{}", out["shapes"][0]);
+        assert!((out["conns"].as_array().unwrap().iter().find_map(|c| c["points"][0]["x"].as_f64()).unwrap() - 250.0).abs() < 1e-6);
+
+        let mut t = Session::new();
+        let r = t.execute("csd.import.cpsd", &json!({ "path": b.to_str().unwrap(), "page": "all" })).unwrap();
+        let _ = (std::fs::remove_file(&a), std::fs::remove_file(&b));
+        assert_eq!((r["devices"].clone(), r["wires"].clone(), r["skipped"].clone()), (json!(5), json!(2), json!([])), "{r}");
+        let (da, db) = (summary(&s).0, summary(&t).0);
+        for (x, y) in da.iter().zip(&db) {
+            assert!(x.2.near(y.2, 1e-6), "{:?} vs {:?}", x.2, y.2);
+        }
     }
 
     #[test]

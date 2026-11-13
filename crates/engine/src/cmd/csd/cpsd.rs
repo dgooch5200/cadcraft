@@ -8,7 +8,9 @@ use cadcraft_geom::Vec2;
 use serde_json::{Value, json};
 
 use super::patch::MODE_TAG;
-use super::{MAX_SIZE, MIN_SIZE, accessory_param, add_wire, bad, mount_cycles, place_card, put_attr, resolve, schedule, sheet, str_param, twoline};
+use super::{
+    MAX_SIZE, MIN_SIZE, accessory_param, add_wire, bad, mount_cycles, page, place_card, put_attr, resolve, schedule, sheet, str_param, twoline,
+};
 use crate::{Result, Session};
 use cadcraft_doc::{EntityKind, Handle};
 
@@ -120,8 +122,10 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     if pages.is_empty() {
         pages.push(String::new());
     }
+    let all = p.get("page").and_then(Value::as_str) == Some("all") && !pages.iter().any(|x| x == "all");
     let chosen = match p.get("page") {
         None | Some(Value::Null) => Some(0),
+        Some(Value::String(_)) if all => Some(0),
         Some(Value::Number(n)) => n.as_u64().and_then(|n| usize::try_from(n).ok()).and_then(|n| n.checked_sub(1)).filter(|i| *i < pages.len()),
         Some(Value::String(id)) => {
             pages.iter().position(|x| x == id).or_else(|| id.parse::<usize>().ok().and_then(|n| n.checked_sub(1)).filter(|i| *i < pages.len()))
@@ -129,17 +133,32 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => None,
     }
     .ok_or_else(|| bad(CMD, format!("`page` must be a number from 1 to {} or a page id", pages.len())))?;
-    let on_page = |d: &Value| {
-        let id = text(d, "page");
-        let listed = if pages.contains(&id) { id } else { pages.first().cloned().unwrap_or_default() };
-        pages.get(chosen).is_some_and(|c| *c == listed)
+    // The index of the page an item sits on (an unknown page is the first), if the import takes it.
+    let page_idx = |d: &Value| {
+        let i = pages.iter().position(|x| *x == text(d, "page")).unwrap_or(0);
+        (all || i == chosen).then_some(i)
     };
+    // `page: "all"` lays page i on sheet i; the offsets are the sheets' distances from the first.
+    let mut offsets = vec![0.0; pages.len()];
+    if all {
+        sheet::run_titleblock(s, &json!({}))?;
+        while page::pages(s).len() < pages.len() {
+            page::add_page(s)?;
+        }
+        let at: Vec<f64> = page::pages(s).iter().map(|g| g.at.x).collect();
+        for (o, x) in offsets.iter_mut().zip(&at) {
+            *o = x - at.first().copied().unwrap_or(0.0);
+        }
+        for (i, n) in names.iter().enumerate().filter(|(_, n)| !n.trim().is_empty()) {
+            page::name_page(s, i, n)?;
+        }
+    }
 
     s.settings.orthomode = file.get("ortho").and_then(Value::as_bool) == Some(true);
 
     let library = s.csd_library.clone();
     let mut skips = Skips::default();
-    let mut placed: HashMap<String, Handle> = HashMap::new();
+    let mut placed: HashMap<String, (Handle, usize)> = HashMap::new();
     let mut mounts: Vec<(Handle, String)> = Vec::new();
     let mut unplaced: Vec<String> = Vec::new();
     let mut stand_ins = 0;
@@ -154,10 +173,10 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             unplaced.push(pid);
             continue;
         }
-        if !on_page(d) {
+        let Some(page) = page_idx(d) else {
             skips.add("device on another page");
             continue;
-        }
+        };
         let id = text(d, "id");
         if placed.contains_key(&id) {
             skips.add("device with a repeated id");
@@ -171,7 +190,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             && (d.get("twoLine").and_then(Value::as_bool) == Some(true) || d.get("showNote").and_then(Value::as_bool) == Some(true));
         let card = card_size(&product, two_line);
         // x, y is the card's top-left; cards are inserted at their centre.
-        let Some(at) = to_drawing(x + w.unwrap_or(card.x) / 2.0, y + h.unwrap_or(card.y) / 2.0) else {
+        let Some(at) = to_drawing(x + w.unwrap_or(card.x) / 2.0 + offsets[page], y + h.unwrap_or(card.y) / 2.0) else {
             skips.add("device outside the drawing limits");
             continue;
         };
@@ -212,11 +231,11 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         if !mount.is_empty() {
             mounts.push((handle, mount));
         }
-        placed.insert(id, handle);
+        placed.insert(id, (handle, page));
     }
 
     for (child, parent) in mounts {
-        let Some(&parent) = placed.get(&parent) else { continue };
+        let Some(&(parent, _)) = placed.get(&parent) else { continue };
         let cycle = {
             let store = s.doc()?.space(&s.space()).ok_or_else(|| bad(CMD, "no such space"))?;
             mount_cycles(store, child, parent)
@@ -234,10 +253,14 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
 
     let mut wires = 0;
     for c in list(&file, "conns", MAX_WIRES) {
-        let (Some(&from), Some(&to)) = (placed.get(&text(c, "from")), placed.get(&text(c, "to"))) else {
+        let (Some(&(from, fp)), Some(&(to, tp))) = (placed.get(&text(c, "from")), placed.get(&text(c, "to"))) else {
             skips.add("wire to a device that is not on this page");
             continue;
         };
+        if fp != tp {
+            skips.add("wire between devices on different pages");
+            continue;
+        }
         if from == to {
             skips.add("wire from a device to itself");
             continue;
@@ -250,7 +273,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             }),
         };
         let mut link = WireLink::new(from, side(c, "fromPort", Side::Right), to, side(c, "toPort", Side::Left), protocol);
-        link.points = list(c, "points", MAX_WIRE_POINTS).filter_map(|q| to_drawing(number(q, "x")?, number(q, "y")?)).collect();
+        link.points = list(c, "points", MAX_WIRE_POINTS).filter_map(|q| to_drawing(number(q, "x")? + offsets[fp], number(q, "y")?)).collect();
         link.label_t = number(c, "labelT").map(|t| t.clamp(0.0, 1.0));
         link.name = Some(text(c, "label").trim().to_string()).filter(|n| !n.is_empty());
         add_wire(s, &link)?;
@@ -280,12 +303,16 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         sheet::run_project_set(s, &json!({ "fields": fields }))?;
     }
 
-    let shapes = super::shapes::import(s, list(&file, "shapes", super::shapes::MAX_SHAPES).filter(|v| on_page(v)), |r| skips.add(r))?;
+    let shapes = super::shapes::import(s, list(&file, "shapes", super::shapes::MAX_SHAPES).filter_map(|v| Some((v, offsets[page_idx(v)?]))), |r| {
+        skips.add(r)
+    })?;
     let mut skipped: Vec<String> = skips.0.into_iter().map(|(r, n)| format!("{n} x {r}")).collect();
-    if pages.len() > 1 {
+    if pages.len() > 1 && !all {
         skipped.push(format!("{} other page(s); pass `page` to import another", pages.len() - 1));
     }
-    Ok(json!({ "devices": placed.len(), "wires": wires, "unplaced": unplaced_rows, "shapes": shapes, "standIns": stand_ins, "skipped": skipped }))
+    Ok(
+        json!({ "devices": placed.len(), "wires": wires, "unplaced": unplaced_rows, "shapes": shapes, "standIns": stand_ins, "skipped": skipped, "pages": if all { pages.len() } else { 1 } }),
+    )
 }
 
 /// The file's accessory lines as `csd.device.set` writes them: `{product, qty}`, junk rows dropped.
@@ -301,7 +328,7 @@ fn accessories(d: &Value) -> Value {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     const PRODUCT: &str = "CHAMMQ50";
@@ -399,6 +426,62 @@ mod tests {
         let want = [("CHAMMQ50", ""), ("__off-page", ""), ("__off-page", "Drawing 2"), ("__off-page", "Riser")];
         assert_eq!(links, want.map(|(a, b)| (a.to_string(), b.to_string())));
         assert!(s.execute("csd.netlist", &json!({})).is_ok());
+    }
+
+    pub(in crate::cmd::csd) fn two_page_file() -> Value {
+        json!({
+            "pages": [{ "id": "p1", "name": "Stage" }, { "id": "p2", "name": "" }],
+            "titleBlock": { "project": "Show" },
+            "nodes": [
+                { "id": "a", "prodId": PRODUCT, "x": 100, "y": 100 },
+                { "id": "b", "prodId": PRODUCT, "x": 400, "y": 100, "page": "p1" },
+                { "id": "c", "prodId": PRODUCT, "x": 100, "y": 100, "page": "p2" },
+                { "id": "d", "prodId": PRODUCT, "x": 400, "y": 100, "page": "p2" },
+                { "id": "o", "prodId": "__off-page", "x": 700, "y": 100, "page": "p1", "linkPage": "p2" }
+            ],
+            "conns": [
+                { "from": "a", "to": "b", "type": "dmx" },
+                { "from": "c", "to": "d", "type": "dmx", "points": [{ "x": 250, "y": 200 }] },
+                { "from": "a", "to": "c", "type": "dmx" }
+            ],
+            "shapes": [{ "type": "line", "x1": 30, "y1": 30, "x2": 130, "y2": 30, "page": "p2" }]
+        })
+    }
+
+    #[test]
+    fn page_all_lays_each_page_on_its_own_sheet() {
+        let path = std::env::temp_dir().join(format!("cadcraft-cpsd-all-{}.cpsd", std::process::id()));
+        std::fs::write(&path, two_page_file().to_string()).unwrap();
+        let mut s = Session::new();
+        let r = s.execute("csd.import.cpsd", &json!({ "path": path.to_str().unwrap(), "page": "all" })).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(
+            (r["devices"].clone(), r["wires"].clone(), r["shapes"].clone(), r["pages"].clone()),
+            (json!(5), json!(2), json!(1), json!(2)),
+            "{r}"
+        );
+        assert!(r["skipped"].to_string().contains("wire between devices on different pages"), "{r}");
+        let pages = s.execute("csd.pages", &json!({})).unwrap();
+        assert_eq!((pages["pages"][0]["name"].clone(), pages["pages"][1]["name"].clone()), (json!("Stage"), json!("Drawing 2")));
+        let ps = page::pages(&s);
+        let lib = s.csd_library.clone();
+        let doc = s.doc().unwrap();
+        let store = doc.space(&s.space()).unwrap();
+        let mut on = [0usize; 2];
+        for d in super::super::devices(store, &lib) {
+            on[page::page_of(doc, &ps, d.insert.insert.xy()).unwrap()] += 1;
+        }
+        assert_eq!(on, [3, 2]);
+        let link = super::super::devices(store, &lib).into_iter().find(|d| d.product.id == "__off-page").unwrap();
+        assert_eq!(super::super::attr(link.insert, "LINKPAGE"), "Drawing 2");
+        assert_eq!(s.execute("csd.project", &json!({})).unwrap()["fields"]["project"], "Show");
+        // Without `page`, the one-page import is unchanged: page 1's three devices, no new sheets.
+        std::fs::write(&path, two_page_file().to_string()).unwrap();
+        let mut t = Session::new();
+        let r = t.execute("csd.import.cpsd", &json!({ "path": path.to_str().unwrap() })).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(r["devices"], 3, "{r}");
+        assert!(page::pages(&t).len() <= 1);
     }
 
     #[test]

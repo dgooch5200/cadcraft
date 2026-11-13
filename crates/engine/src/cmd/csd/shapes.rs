@@ -22,14 +22,15 @@ fn hex(v: &Value, key: &str) -> Option<Rgb> {
 }
 
 /// Draws one shape of the file; `skip` hears why a shape was left out.
-fn import_one(s: &mut Session, v: &Value, mut skip: impl FnMut(&'static str)) -> Result<bool> {
+/// `dx` shifts the shape right, onto its page's sheet.
+fn import_one(s: &mut Session, v: &Value, dx: f64, mut skip: impl FnMut(&'static str)) -> Result<bool> {
     if !v.is_object() {
         skip("shape that is not an object");
         return Ok(false);
     }
     let kind = text(v, "type");
     let coord = |k| number(v, k).unwrap_or(0.0);
-    let (Some(a), Some(b)) = (to_drawing(coord("x1"), coord("y1")), to_drawing(coord("x2"), coord("y2"))) else {
+    let (Some(a), Some(b)) = (to_drawing(coord("x1") + dx, coord("y1")), to_drawing(coord("x2") + dx, coord("y2"))) else {
         skip("shape outside the drawing limits");
         return Ok(false);
     };
@@ -85,13 +86,13 @@ fn import_one(s: &mut Session, v: &Value, mut skip: impl FnMut(&'static str)) ->
 }
 
 /// Imports `shapes`; returns how many were drawn.
-pub(super) fn import<'a>(s: &mut Session, shapes: impl Iterator<Item = &'a Value>, mut skip: impl FnMut(&'static str)) -> Result<usize> {
+pub(super) fn import<'a>(s: &mut Session, shapes: impl Iterator<Item = (&'a Value, f64)>, mut skip: impl FnMut(&'static str)) -> Result<usize> {
     let mut n = 0;
-    for v in shapes {
+    for (v, dx) in shapes {
         if s.doc()?.layer(SHAPES_LAYER).is_none() {
             s.doc_mut()?.layers.push(Layer::new(SHAPES_LAYER));
         }
-        n += usize::from(import_one(s, v, &mut skip)?);
+        n += usize::from(import_one(s, v, dx, &mut skip)?);
     }
     Ok(n)
 }
