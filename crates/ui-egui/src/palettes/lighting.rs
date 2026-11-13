@@ -124,18 +124,20 @@ fn toolbar(app: &mut CadApp, ui: &mut egui::Ui, t: &Tokens) {
     grid_size(app, ui, &st);
 }
 
-/// The snap grid in drawing units, as the web app's grid-size select. Greyed while Snap is off.
+/// The snap grid in drawing units, as the web app's grid-size select (greyed while Snap is off), with the
+/// sheet's title block (selected once placed, so its fields show in Properties) and line key beside it.
 fn grid_size(app: &mut CadApp, ui: &mut egui::Ui, st: &cadcraft_engine::Settings) {
     const CHOICES: [f64; 4] = [4.0, 8.0, 12.0, 24.0];
     let unit = app.session.drafting_settings().snapunit.x;
     let mut pick = None;
+    let mut sheet = None;
     ui.add_space(3.0);
     ui.horizontal(|ui| {
         ui.add_space(8.0);
         ui.add_enabled_ui(st.snapmode, |ui| {
             craft_ui::ComboBox::from_id_salt(ui.scope_id().with("csd_grid"))
                 .selected_text(format!("{} px", unit))
-                .width(ui.available_width() - 8.0)
+                .width(52.0)
                 .show_ui(ui, |ui| {
                     for c in CHOICES {
                         if ui.selectable_label((unit - c).abs() < 1e-9, format!("{c} px")).clicked() {
@@ -146,7 +148,18 @@ fn grid_size(app: &mut CadApp, ui: &mut egui::Ui, st: &cadcraft_engine::Settings
                 .response
                 .accessible_name(crate::tl!("Snap grid size"));
         });
+        let w = (ui.available_width() - 8.0 - 4.0) / 2.0;
+        for (label, cmd) in [("Title block", "csd.titleblock"), ("Legend", "csd.legend")] {
+            if ui.add_sized(vec2(w, 20.0), egui::Button::new(crate::i18n::t(label))).clicked() {
+                sheet = Some(cmd);
+            }
+        }
     });
+    if let Some(h) =
+        sheet.and_then(|cmd| app.run(cmd, json!({})).ok()).and_then(|v| v["handle"].as_str().and_then(cadcraft_engine::doc::Handle::parse_hex))
+    {
+        app.session.set_selection(vec![h]);
+    }
     if let Some(c) = pick {
         for var in ["SNAPUNIT", "GRIDUNIT"] {
             let _ = app.run("setvar", json!({ "name": var, "value": [c, c] }));

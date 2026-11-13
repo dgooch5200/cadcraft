@@ -137,8 +137,70 @@ fn notes_field(ui: &mut egui::Ui, id: egui::Id, value: &str) -> Option<String> {
     (resp.lost_focus() && buf != value).then_some(buf)
 }
 
-/// Adds the Device categories when `sel` is exactly one lighting device.
+/// The sheet's text fields: label, `csd.project` key.
+const SHEET_FIELDS: [(&str, &str); 9] = [
+    ("Project", "project"),
+    ("Venue", "venue"),
+    ("Location", "location"),
+    ("Drawn by", "drawnBy"),
+    ("Date", "date"),
+    ("Sheet", "sheet"),
+    ("Rev", "rev"),
+    ("Drawing title", "title"),
+    ("Meta", "meta"),
+];
+
+/// The project's `csd.project` answer, worked out once per drawing revision.
+fn project(ui: &egui::Ui, app: &mut CadApp) -> Option<Value> {
+    let uid_rev = app.session.state().ok().map(|s| (s.uid, s.revision))?;
+    let id = egui::Id::unique(("csd_project", uid_rev));
+    if let Some(c) = ui.data(|d| d.get_temp::<Option<Value>>(id)) {
+        return c;
+    }
+    let v = app.session.execute("csd.project", &json!({})).ok();
+    ui.data_mut(|d| d.insert_temp(id, v.clone()));
+    v
+}
+
+/// The Title Block category: for a selected title block, and with nothing selected on a drawing
+/// that has lighting devices or a title block.
+fn show_title_block(app: &mut CadApp, ui: &mut egui::Ui, sel: &[Handle]) {
+    let Some(info) = project(ui, app) else { return };
+    let tb = info["handle"].as_str().and_then(Handle::parse_hex);
+    let wanted = match *sel {
+        [] => tb.is_some() || info["devices"].as_u64().unwrap_or(0) > 0,
+        [h] => Some(h) == tb,
+        _ => false,
+    };
+    if !wanted {
+        return;
+    }
+    let sid = ui.scope_id().with("csd_title_block");
+    let mut cmd: Option<(&str, Value)> = None;
+    category(app, ui, "Title Block", |_, ui| {
+        for (label, key) in SHEET_FIELDS {
+            let now = info["fields"][key].as_str().unwrap_or_default().to_string();
+            prop_row(ui, label, |ui| {
+                if let Some(v) = edit_field(ui, sid.with(key), now) {
+                    cmd = Some(("csd.project.set", json!({ "fields": { key: v } })));
+                }
+            });
+        }
+        if tb.is_none() {
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new(crate::tl!("Typing here adds a title block to the drawing.")).small().color(Tokens::get().text_dim));
+            });
+        }
+    });
+    if let Some((id, params)) = cmd {
+        let _ = app.run(id, params);
+    }
+}
+
+/// Adds the Device categories when `sel` is exactly one lighting device, and the Title Block.
 pub(super) fn show(app: &mut CadApp, ui: &mut egui::Ui, sel: &[Handle]) {
+    show_title_block(app, ui, sel);
     let [h] = *sel else { return };
     if !is_device(app, h) {
         return;

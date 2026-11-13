@@ -21,6 +21,7 @@ use super::curves::handle_param;
 mod arrange;
 mod connect;
 mod place;
+mod sheet;
 mod wire;
 use super::{CommandSpec, always, bad, point_req, str_param, targets};
 use crate::{EngineError, Result, Session};
@@ -70,6 +71,16 @@ fn own_specs() -> Vec<CommandSpec> {
         CommandSpec::new("csd.netlist", "Device Netlist", run_netlist)
             .params("{} → {devices: [{handle, product, label, at}], wires: [{handle, from, fromSide, to, toSide, protocol}]}")
             .noundo(),
+        CommandSpec::new("csd.titleblock", "Title Block", sheet::run_titleblock)
+            .params("{at?: [x,y] the page's lower-left corner (default 0,0)} → {handle}; inserts the CSD_TITLEBLOCK sheet frame and title block if the drawing has none, else returns the existing one"),
+        CommandSpec::new("csd.project", "Project Info", sheet::run_project)
+            .params("{} → {fields: {brand, project, venue, location, drawnBy, date, sheet, rev, title, meta}, exists, handle, devices}; the title block's attributes, empty text when there is no title block")
+            .noundo()
+            .enabled(always),
+        CommandSpec::new("csd.project.set", "Set Project Info", sheet::run_project_set)
+            .params("{fields: {brand?, project?, venue?, location?, drawnBy?, date?, sheet?, rev?, title?, meta?: text}} → {handle}; inserts the title block first when there is none"),
+        CommandSpec::new("csd.legend", "Line Key", sheet::run_legend)
+            .params("{at?: [x,y] (default above the title block)} → {handle}; inserts the LINE KEY legend of the protocols in use if there is none, else refreshes and returns it; it then follows the wires"),
         CommandSpec::new("csd.library.load", "Load Product Library", run_library_load)
             .params("{path: JSON library file} → {count}")
             .noundo()
@@ -371,12 +382,16 @@ fn apply(doc: &mut Arc<Drawing>, space: &Space, plan: Plan) {
     }
 }
 
+fn spaces(doc: &Drawing) -> Vec<Space> {
+    std::iter::once(Space::Model).chain(doc.layouts.iter().map(|l| Space::Paper(l.name.clone()))).collect()
+}
+
 /// Brings every linked wire and its decorations in line with the devices.
 /// ponytail: every wire is re-routed after every command; index by changed handles (as assoc.rs
 /// does) when drawings get large.
 pub(crate) fn refresh(doc: &mut Arc<Drawing>, ortho: bool) {
-    let spaces: Vec<Space> = std::iter::once(Space::Model).chain(doc.layouts.iter().map(|l| Space::Paper(l.name.clone()))).collect();
-    for space in spaces {
+    sheet::refresh_legend(doc);
+    for space in spaces(doc) {
         let p = doc.space(&space).map(|st| plan(st, ortho)).unwrap_or_default();
         apply(doc, &space, p);
     }

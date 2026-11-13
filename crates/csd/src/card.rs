@@ -10,6 +10,9 @@ use cadcraft_geom::{PolyVertex, Vec2};
 use crate::wire::{point_at, smooth};
 use crate::{Deco, Product, Protocol, Side};
 
+mod sheet;
+pub use sheet::*;
+
 /// Card size in drawing units; the insertion point is the card centre. The body is the picture
 /// area (55 high) over the 18 high label strip.
 pub const CARD_W: f64 = 70.0;

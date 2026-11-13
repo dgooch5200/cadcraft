@@ -1022,3 +1022,77 @@ fn label_position_rename_and_dxf_round_trip() {
     assert_eq!((cleared.name, cleared.label_t, cleared.points.len()), (None, None, 0));
     assert!(pill(&s).near(default, 1e-6));
 }
+
+fn fields(s: &mut Session) -> Value {
+    s.execute("csd.project", &json!({})).unwrap()["fields"].clone()
+}
+
+#[test]
+fn titleblock_is_inserted_once_and_fields_are_set_and_undone() {
+    let mut s = Session::new();
+    assert_eq!(fields(&mut s)["project"], "");
+    let a = handle(&s.execute("csd.titleblock", &json!({ "at": [10, 20] })).unwrap());
+    assert_eq!(handle(&s.execute("csd.titleblock", &json!({})).unwrap()), a);
+    assert_eq!(fields(&mut s)["brand"], "CHAUVET Professional");
+    s.execute("csd.project.set", &json!({ "fields": { "project": "Arena", "drawnBy": "DG", "rev": "B" } })).unwrap();
+    let f = fields(&mut s);
+    assert_eq!(
+        (f["project"].as_str(), f["drawnBy"].as_str(), f["rev"].as_str(), f["venue"].as_str()),
+        (Some("Arena"), Some("DG"), Some("B"), Some(""))
+    );
+    assert!(s.execute("csd.project.set", &json!({ "fields": { "nope": "x" } })).is_err());
+    assert!(s.execute("csd.project.set", &json!({ "fields": { "rev": 3 } })).is_err());
+    s.undo().unwrap();
+    assert_eq!(fields(&mut s)["project"], "");
+}
+
+#[test]
+fn project_set_inserts_the_titleblock_when_missing_in_one_undo_step() {
+    let mut s = Session::new();
+    s.execute("csd.project.set", &json!({ "fields": { "venue": "O2" } })).unwrap();
+    assert_eq!(s.execute("csd.project", &json!({})).unwrap()["exists"], true);
+    s.undo().unwrap();
+    assert_eq!(s.execute("csd.project", &json!({})).unwrap()["exists"], false);
+}
+
+#[test]
+fn project_fields_survive_a_dxf_round_trip() {
+    let mut s = Session::new();
+    s.execute("csd.project.set", &json!({ "fields": { "project": "Tour", "title": "FOH rack", "meta": "v2" } })).unwrap();
+    let before = fields(&mut s);
+    let text = cadcraft_io::write_dxf(s.doc().unwrap());
+    let mut t = Session::empty();
+    t.open_drawing(cadcraft_io::read_dxf(text.as_bytes()).unwrap(), "Imported", None);
+    assert_eq!(fields(&mut t), before);
+}
+
+fn legend_labels(s: &Session) -> Vec<Protocol> {
+    cadcraft_csd::legend_protocols(s.doc().unwrap().block("CSD_LEGEND").unwrap())
+}
+
+fn legend_text(s: &Session) -> String {
+    let b = s.doc().unwrap().block("CSD_LEGEND").unwrap();
+    b.entities.iter().filter_map(|e| if let EntityKind::Text(t) = &e.kind { Some(t.value.clone()) } else { None }).collect::<Vec<_>>().join("|")
+}
+
+#[test]
+fn legend_lists_only_used_protocols_follows_the_wires_and_adds_the_power_note() {
+    let (mut s, a, b, _) = setup();
+    s.execute("csd.legend", &json!({})).unwrap();
+    assert_eq!(legend_labels(&s), vec![Protocol::NetData]);
+    assert!(!legend_text(&s).contains("Warning"));
+    let p = json!({ "from": a.hex(), "fromSide": "bot", "to": b.hex(), "toSide": "top", "protocol": "power" });
+    s.execute("csd.connect", &p).unwrap();
+    assert_eq!(legend_labels(&s), vec![Protocol::NetData, Protocol::Power]);
+    assert!(legend_text(&s).contains("Warning: Power connection lines"));
+    let h = handle(&s.execute("csd.legend", &json!({})).unwrap());
+    assert_eq!(handle(&s.execute("csd.legend", &json!({})).unwrap()), h);
+    s.undo().unwrap();
+    assert_eq!(legend_labels(&s), vec![Protocol::NetData]);
+}
+
+#[test]
+fn wiring_alone_creates_no_legend() {
+    let (s, ..) = setup();
+    assert!(s.doc().unwrap().block("CSD_LEGEND").is_none());
+}
