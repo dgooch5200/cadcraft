@@ -1486,8 +1486,30 @@ menu	View	视图
 	List Products	列出产品
 	Load Product Library	加载产品库
 	Place Device	放置设备
+	Place Device Grid	放置设备阵列
+	Clear Drawing	清除图纸
+	Card Display	卡片显示
+	Preview Wire Route	预览线缆路径
+	Place grid here...	在此放置阵列...
+	Place grid	放置阵列
+	Rows	行数
+	Columns	列数
+	Clear drawing	清除图纸
+	Codes only	仅显示代码
+	Straighten cable (1 point)	拉直线缆（1 个点）
 	Replace Devices	替换设备
+	Device Info	设备信息
+	Set Device Properties	设置设备属性
+	Delete Devices	删除设备
 	Size Devices	设备尺寸
+	Find Wire Point	查找线缆点
+	Add Wire Point	添加线缆点
+	Remove Wire Point	删除线缆点
+	Move Wire Point	移动线缆点
+	Straighten Wires	拉直线缆
+	Bent Wires	折弯线缆
+	Wire Label Position	线缆标签位置
+	Rename Wire	重命名线缆
 	Product Library	产品库
 	Save Product Library	保存产品库
 	Set Product Library	设置产品库
@@ -1507,3 +1529,165 @@ menu	View	视图
 	Request sent. An admin will approve it.	请求已发送，管理员将予以批准。
 	Couldn't reach the server: {m}	无法连接服务器：{m}
 	Sign Out	退出登录
+	Duplicate	创建副本
+	Device details	设备详情
+	Select all of this product	选择此产品的全部设备
+	Delete device	删除设备
+	Place one here	在此放置一个
+	Zoom to fit	缩放以适合
+	Align left	左对齐
+	Align top	顶部对齐
+	Distribute horizontally	水平分布
+	Distribute vertically	垂直分布
+	Copy {n} items	复制 {n} 个项目
+	Duplicate {n} items	创建 {n} 个项目的副本
+	Delete {n} items	删除 {n} 个项目
+	Deselect all	取消全选
+	Align Devices	对齐设备
+	Device at Point	指定点处的设备
+	Distribute Devices	分布设备
+	Select All of This Product	选择此产品的全部设备
+	Title Block	标题栏
+	Title block	标题栏
+	Legend	图例
+	Project Info	项目信息
+	Set Project Info	设置项目信息
+	Line Key	线型图例
+	Paper Size	图纸尺寸
+	Tabloid (11×17)	大幅面 (11×17)
+	Letter (8.5×11)	信纸 (8.5×11)
+	Project	项目
+	Venue	场馆
+	Location	地点
+	Drawn by	绘图人
+	Date	日期
+	Sheet	图纸
+	Rev	版本
+	Drawing title	图纸标题
+	Meta	附注
+	Typing here adds a title block to the drawing.	在此输入将向图纸添加标题栏。
+	Remove point	删除点
+	Add point here	在此添加点
+	Straighten cable ({n} points)	拉直线缆（{n} 个点）
+	Straighten {n} bent cables	拉直 {n} 条弯曲线缆
+	Move label here	将标签移到此处
+	Align label to middle of segment	将标签对齐到线段中点
+	Centre label	标签居中
+	Rename cable...	重命名线缆...
+	Rename cable	重命名线缆
+	Delete cable	删除线缆
+	Placed devices · {count}	已放置设备 · {count}
+	Unplaced · {count}	未放置 · {count}
+	Bill of materials · {count}	物料清单 · {count}
+	No devices placed yet.	尚未放置设备。
+	Nothing unplaced.	没有未放置的项目。
+	Nothing to list.	没有可列出的内容。
+	#	#
+	Product	产品
+	Code	代码
+	Label	标签
+	Ports in use	已用端口
+	Conns	连接数
+	PoE load	PoE 负载
+	Notes	备注
+	Actions	操作
+	Locate	定位
+	Item	项目
+	Qty	数量
+	Model ID	型号 ID
+	Product name	产品名称
+	Place	放置
+	Labels	标签
+	Add a product…	添加产品…
+	Export PDF	导出 PDF
+	Export CSV	导出 CSV
+	Exported {rows} rows: {path}	已导出 {rows} 行：{path}
+	Schedules	明细表
+	Add Unplaced Item	添加未放置项目
+	Bill of Materials	物料清单
+	Export Bill of Materials	导出物料清单
+	Place Unplaced Item	放置未放置项目
+	Placed Devices	已放置设备
+	Remove Unplaced Item	移除未放置项目
+	Set Unplaced Quantity	设置未放置数量
+	Unplaced Items	未放置项目
+	Mounting	安装
+	Accessories	配件
+	Mounted in	安装于
+	Not mounted	未安装
+	Add accessory	添加配件
+	Choose an accessory	选择配件
+	Remove accessory	移除配件
+	Supplied by others	由他人提供
+	Mounting is layout only: ports, cables and the bill of materials do not change.	安装仅影响布局：端口、线缆和物料清单不变。
+	Align right	右对齐
+	Align bottom	底部对齐
+	H	H
+	Devices	设备
+	Number from	编号起始
+	Replace all with	全部替换为
+	{n} devices: {summary}	{n} 台设备：{summary}
+	Label Devices	设备标签
+	Devices Info	设备信息
+	Patch · {count}	补丁表 · {count}
+	Drawing order	图纸顺序
+	Position	位置
+	Patch order	补丁顺序
+	Nothing to patch.	没有可补丁的设备。
+	Universes: {used} of {budget}	宇宙数：{used} / {budget}
+	Universes: {used}	宇宙数：{used}
+	Universe	宇宙
+	Address	地址
+	Mode	模式
+	Channels	通道数
+	{mode} (assumed)	{mode}（默认）
+	Largest mode	最大模式
+	Export MagicQ	导出 MagicQ
+	Set Device DMX Mode	设置设备 DMX 模式
+	DMX Patch	DMX 补丁表
+	Export DMX Patch	导出 DMX 补丁表
+	By others	他方供应
+	Import .cpsd…	导入 .cpsd…
+	Import ChamSys Designer Project	导入 ChamSys Designer 项目
+	Duplicate selected	复制所选
+	Import CSV…	导入 CSV…
+	Export CSV…	导出 CSV…
+	Rename this category to	将此类别重命名为
+	Rename	重命名
+	New category name	新类别名称
+	Import Library CSV	导入产品库 CSV
+	Export Library CSV	导出产品库 CSV
+	Export ChamSys Designer Project	导出 ChamSys Designer 项目
+	Export .cpsd…	导出 .cpsd…
+	Continues on	延续至
+	Print Sheet	打印图纸
+	Print sheet…	打印图纸…
+	DMX addressing	DMX 寻址
+	DMX addressing is off for this drawing.	此图纸已关闭 DMX 寻址。
+	{label} (on {device})	{label}（位于 {device}）
+	DMX Patch Setup	DMX 补丁设置
+	Add accessory to all	为全部添加配件
+	Add Accessory to Devices	为设备添加配件
+	Two label lines	双行标签
+	Set Devices Properties	设置设备属性
+	Hidden	隐藏
+	Hide from the Lighting palette	从照明面板中隐藏
+	All {n} {code} on this drawing	本图纸中全部 {n} 个 {code}
+	Choose a product	选择产品
+	Connect	连接
+	Not in the library	不在产品库中
+	Position, mounting and accessories stay as they are. Cables the new product cannot carry are removed — undo puts everything back in one step.	位置、安装和配件保持不变。新产品无法承载的线缆会被移除，放弃操作可一步恢复全部内容。
+	Snap grid size	捕捉栅格尺寸
+	The library's size for {name}. Taller sides fan more cables apart.	产品库中 {name} 的尺寸。侧面越高，线缆散开越明显。
+	pooled	共享
+	New lighting drawing	新建照明图纸
+	New Lighting Drawing	新建照明图纸
+	New Lighting Drawing...	新建照明图纸...
+	Export HTML	导出 HTML
+	Import Luminary…	导入 Luminary…
+	Import Luminary Project	导入 Luminary 项目
+	Skip	跳过
+	Fixture type	灯具类型
+	No sure match: check the product	没有确定的匹配：请检查产品
+	Fit sheet to drawing	放大图框以容纳图形
+	Fit Sheet to Drawing	放大图框以容纳图形

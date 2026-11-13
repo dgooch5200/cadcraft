@@ -31,6 +31,7 @@ pub mod context_menu;
 pub mod control;
 pub mod credits;
 pub mod csd_library;
+pub mod csd_schedule;
 pub mod dialogs;
 pub mod docking;
 pub mod fault;
@@ -43,7 +44,10 @@ mod panel_state;
 pub mod spacemouse;
 pub mod switch;
 // The Edit Text window, opened from the shortcut menu's Edit Text entry.
+pub mod lproreview;
+pub mod placegrid;
 pub mod textdlg;
+pub mod wirename;
 // The External References palette.
 pub mod xrefs;
 
@@ -125,6 +129,11 @@ pub struct UiState {
     pub start_tab: bool,
     #[serde(skip)]
     pub csd_lib: csd_library::State,
+    /// Products this person hides from the Lighting palette, by `cadcraft_csd::product_key`. A view
+    /// preference, not a product field: never in the library or its CSV, and placing by command ignores it.
+    pub csd_hidden: std::collections::BTreeSet<String>,
+    #[serde(skip)]
+    pub csd_sched: csd_schedule::State,
     pub dialog: Option<String>,
     pub history_lines: usize,
     /// The user's keyboard shortcuts ([`keys`]).
@@ -218,6 +227,8 @@ impl Default for UiState {
             in_window_menu: !cfg!(target_os = "macos"),
             start_tab: false,
             csd_lib: Default::default(),
+            csd_hidden: Default::default(),
+            csd_sched: Default::default(),
             dialog: None,
             history_lines: 3,
             shortcuts: keys::UserKeys::new(),
@@ -798,6 +809,10 @@ impl CadApp {
             }
             return;
         }
+        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("cpsd")) {
+            self.open_cpsd(path);
+            return;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.opening.start(path);
@@ -809,6 +824,18 @@ impl CadApp {
                 None => Err(format!("open: {}: the path is not valid Unicode", path.display())),
             };
             self.opened(r);
+        }
+    }
+
+    /// A ChamSys Designer project: imported into a new drawing.
+    fn open_cpsd(&mut self, path: &Path) {
+        let Some(text) = path.to_str() else { return self.open_failed(format!("OPEN: {}: the path is not valid Unicode", path.display())) };
+        match self.run("new", json!({})).and_then(|_| self.run("csd.import.cpsd", json!({ "path": text }))) {
+            Ok(_) => {
+                self.canvas.zoom_pending = true;
+                self.ui.start_tab = false;
+            }
+            Err(e) => self.open_failed(e),
         }
     }
 
@@ -1163,6 +1190,9 @@ impl CadApp {
         let has_doc = !self.session.docs.is_empty() && !self.ui.start_tab && !library;
         if has_doc && !self.ui.show_toolsets {
             palettes::toolsets_strip(self, ui);
+        }
+        if has_doc {
+            csd_schedule::show(self, ui);
         }
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
             if library {

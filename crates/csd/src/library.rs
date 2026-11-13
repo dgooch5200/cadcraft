@@ -3,6 +3,7 @@
 //! applies. Keys this crate does not model (notably `img`) are kept in [`Product::extra`].
 
 use std::collections::HashSet;
+use std::sync::OnceLock;
 
 use serde_json::{Map, Value, json};
 
@@ -40,7 +41,7 @@ fn text(v: Option<&Value>, default: &str) -> String {
 }
 
 /// A number or numeric string, clamped to `0..=max`; anything else is 0.
-fn num(v: Option<&Value>, max: f64) -> f64 {
+pub(crate) fn num(v: Option<&Value>, max: f64) -> f64 {
     let n = match v {
         Some(Value::Number(n)) => n.as_f64(),
         Some(Value::String(s)) => s.trim().parse().ok(),
@@ -177,4 +178,89 @@ pub fn accessory_products<'a>(products: &'a [Product], fitting: &[&Product]) -> 
             owners.peek().is_none() || owners.any(|f| wanted.contains(f))
         })
         .collect()
+}
+
+pub const BY_OTHERS_ID: &str = "__by-others";
+pub const OFF_PAGE_ID: &str = "__off-page";
+
+fn size_keys(w: u32, h: u32) -> Map<String, Value> {
+    [("iconW", w), ("iconH", h)].into_iter().map(|(k, v)| (k.to_string(), json!(v))).collect()
+}
+
+/// The two products the app supplies. They are in no library, so a library cannot shadow or drop
+/// them, and the schedule, BOM and patch skip them. Every port count is 99 (they are markers, not
+/// hardware) except 10Scene in, which is 0 so they end a bus rather than join two.
+pub fn builtin_products() -> &'static [Product] {
+    static BUILTINS: OnceLock<[Product; 2]> = OnceLock::new();
+    BUILTINS.get_or_init(|| {
+        let mut counts = [(99, 99); 10];
+        if let Some(c) = counts.get_mut(crate::Protocol::Scene10.index()) {
+            *c = (0, 99);
+        }
+        let by_others = Product {
+            id: BY_OTHERS_ID.into(),
+            name: "Supply by others".into(),
+            code: "BY OTHERS".into(),
+            cat: "Annotation".into(),
+            notes: "A labelled box for a source outside this drawing. Not counted on the schedule or the BOM.".into(),
+            counts,
+            color: 0x64748b,
+            // Wide and short, sized for a sentence rather than a model number.
+            extra: size_keys(216, 72),
+            ..Product::default()
+        };
+        let off_page = Product {
+            id: OFF_PAGE_ID.into(),
+            name: "Off-page connector".into(),
+            code: "OFF PAGE".into(),
+            extra: size_keys(200, 60),
+            notes: "Marks a connection that continues on another drawing page. Not counted on the schedule or the BOM.".into(),
+            ..by_others.clone()
+        };
+        [by_others, off_page]
+    })
+}
+
+pub fn is_builtin(id: &str) -> bool {
+    id == BY_OTHERS_ID || id == OFF_PAGE_ID
+}
+
+/// The product with exactly this id: a built-in first, then the library.
+pub fn lookup<'a>(library: &'a [Product], id: &str) -> Option<&'a Product> {
+    builtin_products().iter().chain(library).find(|p| p.id == id)
+}
+
+/// A product's `cat` as (family, sub-category): `Rogue — Wash` is `("Rogue", "Wash")`, `Rogue` is
+/// `("Rogue", "")`. The separator is an em or en dash between spaces (the web app's `splitCategory`).
+pub fn split_category(cat: &str) -> (String, String) {
+    let (mut family, mut sub) = (Vec::new(), Vec::new());
+    for word in cat.split_whitespace() {
+        let dash = word == "—" || word == "–";
+        if sub.is_empty() && dash && !family.is_empty() {
+            sub.push(String::new());
+        } else if sub.is_empty() {
+            family.push(word);
+        } else {
+            sub.push(if dash { "—" } else { word }.to_string());
+        }
+    }
+    (family.join(" "), sub.join(" ").trim().to_string())
+}
+
+/// The identity two libraries are compared on: the id with each run of whitespace turned into `_`
+/// (the web app's `productKey`). Case-sensitive.
+pub fn product_key(id: &str) -> String {
+    let mut out = String::with_capacity(id.len());
+    let mut gap = false;
+    for c in id.chars() {
+        if c.is_whitespace() {
+            if !std::mem::replace(&mut gap, true) {
+                out.push('_');
+            }
+        } else {
+            gap = false;
+            out.push(c);
+        }
+    }
+    out
 }

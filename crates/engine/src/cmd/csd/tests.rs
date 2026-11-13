@@ -14,6 +14,15 @@ fn handle(r: &Value) -> Handle {
     Handle::parse_hex(r["handle"].as_str().unwrap()).unwrap()
 }
 
+/// Adds a generic PoE switch to `s`'s library: the sample POE-X feeds MR16s only.
+pub(super) fn poe_switch(s: &mut Session) -> &'static str {
+    let mut lib = (*s.csd_library).clone();
+    let poex = lib.iter().find(|p| p.id == "logic-poex").unwrap().clone();
+    lib.push(cadcraft_csd::Product { id: "poe-switch".into(), name: "PoE Switch".into(), code: "POE-SW".into(), ..poex });
+    s.csd_library = std::sync::Arc::new(lib);
+    "poe-switch"
+}
+
 /// A session routing wires at right angles (the tests below assume it; the default is smooth curves).
 fn ortho_session() -> Session {
     let mut s = Session::new();
@@ -67,7 +76,7 @@ fn wire_bends_are_rounded_arcs_on_the_route() {
 
 fn port(s: &Session, dev: Handle, side: Side) -> Vec2 {
     let Some(EntityKind::Insert(i)) = s.doc().unwrap().entity(dev).map(|e| e.kind.clone()) else { panic!("no insert") };
-    port_point(i.insert.xy(), i.rotation, Vec2::new(i.scale.x, i.scale.y), side, Slot::SOLO)
+    port_point(i.insert.xy(), i.rotation, Vec2::new(i.scale.x, i.scale.y), super::card_of(&i, &s.csd_library), side, Slot::SOLO)
 }
 
 fn assert_orthogonal(v: &[Vec2]) {
@@ -158,7 +167,7 @@ fn hostile_xdata_is_left_alone() {
     let tag = |code, v: &str| RawTag { code, value: v.into() };
     let bad_sets = [
         vec![tag(1001, "CSD"), tag(1000, "zz"), tag(1000, "garbage"), tag(1000, "")],
-        WireLink { from: ghost, from_side: Side::Top, to: ghost, to_side: Side::Left, protocol: cadcraft_csd::Protocol::Dmx }.to_xdata(),
+        WireLink::new(ghost, Side::Top, ghost, Side::Left, cadcraft_csd::Protocol::Dmx).to_xdata(),
         vec![tag(1001, "CSD")],
     ];
     for xdata in bad_sets {
@@ -200,7 +209,8 @@ fn links_survive_a_dxf_round_trip() {
 #[test]
 fn three_wires_off_one_side_fan_out_in_far_end_order() {
     let mut s = ortho_session();
-    let src = handle(&s.execute("csd.place", &json!({ "product": "logic-poex", "at": [0, 0] })).unwrap());
+    let sw = poe_switch(&mut s);
+    let src = handle(&s.execute("csd.place", &json!({ "product": sw, "at": [0, 0] })).unwrap());
     let mut wires = Vec::new();
     // Placed right, left, middle: the slots must still follow the far ends' x.
     for x in [150, -150, 0] {
@@ -317,7 +327,8 @@ fn erasing_a_wire_removes_its_decorations_and_erasing_one_decoration_restores_it
 fn refreshing_twice_changes_nothing() {
     let (mut s, ..) = setup();
     let doc = s.state_mut().unwrap().doc.clone();
-    super::refresh(&mut s.state_mut().unwrap().doc, true);
+    let lib = s.csd_library.clone();
+    super::refresh(&mut s.state_mut().unwrap().doc, &lib, true);
     assert!(std::sync::Arc::ptr_eq(&doc, &s.state_mut().unwrap().doc));
 }
 
@@ -381,6 +392,38 @@ fn library_set_list_and_place() {
     let img = s.csd_library.first().and_then(|p| p.extra.get("img").cloned());
     assert_eq!(img, Some(json!("data:x")));
     assert_eq!(s.csd_library.first().map(|p| p.name.as_str()), Some("Renamed"));
+}
+
+#[test]
+fn library_csv_round_trips_and_reads_old_headers() {
+    let mut s = Session::new();
+    let csv = s.execute("csd.library.export", &json!({})).unwrap();
+    let before = csv["count"].clone();
+    assert!(before.as_u64() > Some(1));
+    let r = s.execute("csd.library.import", &json!({ "text": csv["csv"] })).unwrap();
+    assert_eq!(r["count"], before);
+    assert_eq!(s.execute("csd.library.export", &json!({})).unwrap()["csv"], csv["csv"]);
+
+    let text = "\u{feff}Product Name,Model ID,DMX Ports,Network Ports,Notes\r\n\"Wash, big\",My Wash,2,1,\"say \"\"hi\"\"\"\r\n,No Name,1,1,\r\nSpot,My Wash,9,9,dup\r\n";
+    let r = s.execute("csd.library.import", &json!({ "text": text })).unwrap();
+    assert_eq!(r["count"], 1);
+    let p = &s.csd_library[0];
+    assert_eq!((p.id.as_str(), p.code.as_str(), p.name.as_str(), p.notes.as_str()), ("My_Wash", "My_Wash", "Wash, big", "say \"hi\""));
+    assert_eq!((p.counts[3].1, p.counts[0].1), (2, 1));
+}
+
+#[test]
+fn library_csv_import_rejects_hostile_input() {
+    let mut s = Session::new();
+    let import = |s: &mut Session, t: String| s.execute("csd.library.import", &json!({ "text": t }));
+    assert!(import(&mut s, String::new()).is_err());
+    assert!(import(&mut s, "a,b\n1,2\n".into()).is_err());
+    assert!(import(&mut s, "Model ID,Product Name\n\"open,x\n".into()).is_err());
+    let many = format!("Model ID,Product Name\n{}", "a,b\n".repeat(10_001));
+    assert!(import(&mut s, many).is_err());
+    let wide = format!("Model ID,Product Name{}\nx,y{}\n", ",c".repeat(5000), ",1".repeat(5000));
+    assert_eq!(import(&mut s, wide).unwrap()["count"], 1);
+    assert!(s.execute("csd.library.import", &json!({})).is_err());
 }
 
 #[test]
@@ -616,6 +659,37 @@ fn size_resizes_every_listed_device_and_the_wire_follows() {
 }
 
 #[test]
+fn waypoints_past_the_coordinate_bound_are_refused() {
+    let (mut s, _, _, w) = setup();
+    wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [100, 150] }));
+    for id in ["csd.wire.point.add", "csd.wire.point.move", "csd.wire.route"] {
+        let p = json!({ "wire": w.hex(), "at": [1e308, 0], "to": [0, 1e308], "index": 0 });
+        assert!(s.execute(id, &p).is_err(), "{id}");
+    }
+    assert!(verts(&s, w).iter().all(|v| v.x.is_finite() && v.y.is_finite()));
+}
+
+#[test]
+fn replace_refits_the_label_to_the_new_card() {
+    let mut s = Session::new();
+    let mut lib = (*s.csd_library).clone();
+    let node = lib.iter().find(|p| p.id == NODE).unwrap().clone();
+    let mut wide = cadcraft_csd::Product { id: "wide".into(), ..node };
+    wide.extra.insert("iconW".into(), json!(400));
+    lib.push(wide);
+    s.csd_library = std::sync::Arc::new(lib);
+    let long = "A very long device label that cannot fit";
+    let label = |s: &Session, h: Handle| crate::cmd::csd::attr(&insert(s, h), "LABEL").to_string();
+    let place = |s: &mut Session, p: &str| handle(&s.execute("csd.place", &json!({ "product": p, "at": [0, 0], "label": long })).unwrap());
+    let (a, b) = (place(&mut s, NODE), place(&mut s, "wide"));
+    let (want_a, want_b) = (label(&s, a), label(&s, b));
+    assert_ne!(want_a, want_b, "the two cards must differ in width for this test");
+    s.execute("csd.replace", &json!({ "product": "wide", "handles": [a.hex()] })).unwrap();
+    s.execute("csd.replace", &json!({ "product": NODE, "handles": [b.hex()] })).unwrap();
+    assert_eq!((label(&s, a), label(&s, b)), (want_b, want_a));
+}
+
+#[test]
 fn replace_swaps_the_product_on_the_selection_and_skips_the_same_one() {
     let (mut s, a, b, _) = setup();
     s.set_selection(vec![a, b]);
@@ -659,7 +733,10 @@ fn smooth_wires_by_default_leave_the_ports_and_follow_the_ortho_toggle() {
     let b = handle(&s.execute("csd.place", &json!({ "product": NODE, "at": [200, 60] })).unwrap());
     let w = connect(&mut s, a, b).unwrap();
     let smooth = polyline(&s, w);
-    let (p, q) = (port_point(Vec2::ZERO, 0.0, Vec2::new(1.0, 1.0), Side::Right, Slot::SOLO), smooth[smooth.len() - 1].0);
+    let (p, q) = (
+        port_point(Vec2::ZERO, 0.0, Vec2::new(1.0, 1.0), Vec2::new(cadcraft_csd::CARD_W, cadcraft_csd::CARD_H), Side::Right, Slot::SOLO),
+        smooth[smooth.len() - 1].0,
+    );
     assert_eq!(smooth[0].0, p);
     assert!(smooth.len() > 10 && smooth.iter().all(|v| v.1 == 0.0));
     assert!(smooth.windows(2).any(|v| v[0].0.x != v[1].0.x && v[0].0.y != v[1].0.y));
@@ -678,4 +755,771 @@ fn smooth_wires_by_default_leave_the_ports_and_follow_the_ortho_toggle() {
 
     s.execute("ortho", &json!({ "on": false })).unwrap();
     assert_eq!(polyline(&s, w), smooth);
+}
+
+#[test]
+fn device_info_reports_ports_connections_and_size() {
+    let (mut s, a, b, w) = setup();
+    s.execute("csd.size", &json!({ "handles": [a.hex()], "w": 140 })).unwrap();
+    let r = s.execute("csd.device.info", &json!({ "handle": a.hex() })).unwrap();
+    assert_eq!(r["product"]["id"], CONSOLE);
+    assert_eq!(r["known"], true);
+    assert_eq!(r["sameProduct"], 1);
+    assert_eq!(r["size"][0], 140.0);
+    assert_eq!(r["libSize"][0], cadcraft_csd::CARD_W);
+    let net = r["ports"].as_array().unwrap().iter().find(|p| p["protocol"] == "netdata").unwrap();
+    assert_eq!((net["used"].as_u64(), net["capacity"].as_u64(), net["pooled"].as_bool()), (Some(1), Some(2), Some(true)));
+    assert!(r["ports"].as_array().unwrap().iter().all(|p| p["protocol"] != "midi"));
+    assert_eq!((r["connections"][0]["wire"].as_str(), r["connections"][0]["dir"].as_str()), (Some(w.hex().as_str()), Some("out")));
+    assert_eq!(r["connections"][0]["other"]["handle"], b.hex());
+    // The selection stands in for the handle; the far end sees the wire as incoming.
+    s.set_selection(vec![b]);
+    assert_eq!(s.execute("csd.device.info", &json!({})).unwrap()["connections"][0]["dir"], "in");
+    s.set_selection(vec![a, b]);
+    assert!(s.execute("csd.device.info", &json!({})).is_err());
+}
+
+#[test]
+fn off_page_connector_shows_see_page_under_its_label() {
+    let (mut s, a, ..) = setup();
+    let off = handle(&s.execute("csd.place", &json!({ "product": cadcraft_csd::OFF_PAGE_ID, "at": [0, 300] })).unwrap());
+    s.execute("csd.device.set", &json!({ "handle": off.hex(), "label": "To riser", "linkPage": " Sheet 2 " })).unwrap();
+    assert_eq!(s.execute("csd.device.info", &json!({ "handle": off.hex() })).unwrap()["linkPage"], "Sheet 2");
+    let shown =
+        |s: &Session, t: &str| insert(s, off).attribs.iter().find(|x| x.tag == t).map(|x| (x.text.value.clone(), x.invisible, x.text.insert.y));
+    assert_eq!(shown(&s, "LINKSEE").map(|x| (x.0, x.1)), Some(("See Sheet 2".to_string(), false)));
+    let (label_y, see_y) = (shown(&s, "LABEL").unwrap().2, shown(&s, "LINKSEE").unwrap().2);
+    assert!(see_y < label_y, "the See line sits under the label");
+    s.execute("csd.device.set", &json!({ "handle": off.hex(), "linkPage": "" })).unwrap();
+    assert_eq!(shown(&s, "LINKSEE").map(|x| x.0), Some(String::new()));
+    // Only the off-page connector takes a page.
+    assert!(s.execute("csd.device.set", &json!({ "handle": a.hex(), "linkPage": "x" })).is_err());
+}
+
+#[test]
+fn device_set_writes_label_and_notes_in_one_undo_step_and_survives_a_library_refresh() {
+    let (mut s, a, _, _) = setup();
+    s.execute("csd.device.set", &json!({ "handle": a.hex(), "label": "Main desk", "notes": "FOH" })).unwrap();
+    let r = s.execute("csd.device.info", &json!({ "handle": a.hex() })).unwrap();
+    assert_eq!((r["label"].as_str(), r["notes"].as_str()), (Some("Main desk"), Some("FOH")));
+    let attr = |s: &Session, t: &str| insert(s, a).attribs.iter().find(|x| x.tag == t).map(|x| x.text.value.clone());
+    assert_eq!(attr(&s, "LABEL").as_deref(), Some("Main desk"));
+    let products = s.csd_library.to_vec();
+    s.execute("csd.library.set", &json!({ "products": products.iter().map(cadcraft_csd::product_record).collect::<Vec<_>>() })).unwrap();
+    assert_eq!(attr(&s, "NOTES").as_deref(), Some("FOH"));
+    // An empty label falls back to the product code.
+    s.execute("csd.device.set", &json!({ "handle": a.hex(), "label": " " })).unwrap();
+    assert_eq!(attr(&s, "NAME").as_deref(), Some("MQ50"));
+    assert!(s.execute("csd.device.set", &json!({ "handle": a.hex(), "notes": 3 })).is_err());
+    s.undo().unwrap();
+    assert_eq!(attr(&s, "NAME").as_deref(), Some("Main desk"));
+}
+
+#[test]
+fn device_set_adds_notes_to_a_device_that_lacks_them() {
+    let (mut s, a, _, _) = setup();
+    s.doc_mut()
+        .unwrap()
+        .modify_entity(a, |e| {
+            if let EntityKind::Insert(i) = &mut e.kind {
+                i.attribs.retain(|x| x.tag != "NOTES");
+            }
+        })
+        .unwrap();
+    s.execute("csd.device.set", &json!({ "handle": a.hex(), "notes": "late" })).unwrap();
+    let i = insert(&s, a);
+    assert!(i.attribs.iter().any(|x| x.tag == "NOTES" && x.text.value == "late" && x.invisible));
+}
+
+#[test]
+fn device_delete_removes_wires_and_their_decorations_in_one_undo_step() {
+    let (mut s, a, b, w) = setup();
+    let count = |s: &Session| s.doc().unwrap().space(&s.space()).unwrap().iter().count();
+    let before = count(&s);
+    assert!(before > 3, "wire decorations exist");
+    let r = s.execute("csd.device.delete", &json!({ "handles": [a.hex()] })).unwrap();
+    assert_eq!((r["deleted"].as_u64(), r["wires"].as_u64()), (Some(1), Some(1)));
+    assert!(s.doc().unwrap().entity(w).is_none());
+    assert_eq!(count(&s), 1, "only the other device is left");
+    assert!(s.doc().unwrap().entity(b).is_some());
+    s.undo().unwrap();
+    assert_eq!(count(&s), before);
+}
+
+#[test]
+fn replace_all_of_product_reaches_devices_outside_the_selection() {
+    let (mut s, a, b, _) = setup();
+    let c = handle(&s.execute("csd.place", &json!({ "product": CONSOLE, "at": [0, 200] })).unwrap());
+    s.set_selection(vec![a]);
+    assert_eq!(s.execute("csd.replace", &json!({ "product": NODE })).unwrap()["replaced"], 1);
+    s.set_selection(vec![b]);
+    let r = s.execute("csd.replace", &json!({ "product": CONSOLE, "allOfProduct": true })).unwrap();
+    assert_eq!(r["replaced"], 2);
+    assert_eq!(insert(&s, a).block, cadcraft_csd::block_name(CONSOLE));
+    assert_eq!(insert(&s, c).block, cadcraft_csd::block_name(CONSOLE));
+}
+
+fn product(id: &str, code: &str) -> cadcraft_csd::Product {
+    cadcraft_csd::Product { id: id.into(), name: id.into(), code: code.into(), ..Default::default() }
+}
+
+#[test]
+fn product_lookup_falls_back_to_a_unique_code() {
+    let lib = [product("OVATIONB565FC", "B-565FC"), product("OVATIONB565", "B-565"), product("OTHER1", "B 565fc")];
+    assert_eq!(find_product(&lib[..2], "b565fc").map(|p| p.id.as_str()), Some("OVATIONB565FC"));
+    // Two products share the code, so there is no match; an exact id still wins.
+    assert!(find_product(&lib, "b565fc").is_none());
+    assert_eq!(find_product(&lib, "OTHER1").map(|p| p.id.as_str()), Some("OTHER1"));
+}
+
+/// A card whose PRODUCT attribute names `id`, whatever the library holds.
+fn card_of(s: &mut Session, id: &str, at: [f64; 2]) -> Handle {
+    let h = handle(&s.execute("csd.place", &json!({ "product": CONSOLE, "at": at })).unwrap());
+    s.doc_mut()
+        .unwrap()
+        .modify_entity(h, |e| {
+            if let EntityKind::Insert(i) = &mut e.kind {
+                i.attribs.iter_mut().filter(|a| a.tag == "PRODUCT").for_each(|a| a.text.value = id.into());
+            }
+        })
+        .unwrap();
+    h
+}
+
+#[test]
+fn a_card_not_in_the_library_is_a_device_that_can_be_replaced_or_deleted() {
+    let mut s = ortho_session();
+    let ghost = card_of(&mut s, "OVCYC1FCV2", [0.0, 0.0]);
+    let node = handle(&s.execute("csd.place", &json!({ "product": NODE, "at": [200, 60] })).unwrap());
+    let info = s.execute("csd.device.info", &json!({ "handle": ghost.hex() })).unwrap();
+    assert_eq!(info["known"], false);
+    assert_eq!(info["product"]["id"], "OVCYC1FCV2");
+    assert_eq!(info["product"]["name"], "OVCYC1FCV2 (not in library)");
+    assert_eq!(info["product"]["code"], "OVCYC1FCV2");
+    assert_eq!(info["ports"], json!([]));
+    let netlist = s.execute("csd.netlist", &json!({})).unwrap();
+    assert_eq!(netlist["devices"].as_array().unwrap().len(), 2);
+    let err = connect(&mut s, ghost, node).unwrap_err().to_string();
+    assert!(err.contains("not in the library"), "{err}");
+    s.execute("csd.size", &json!({ "handles": [ghost.hex()], "w": 100 })).unwrap();
+    s.execute("csd.device.set", &json!({ "handle": ghost.hex(), "notes": "n" })).unwrap();
+    s.execute("csd.replace", &json!({ "product": CONSOLE, "handles": [ghost.hex()] })).unwrap();
+    let info = s.execute("csd.device.info", &json!({ "handle": ghost.hex() })).unwrap();
+    assert_eq!((info["known"].as_bool(), info["product"]["id"].as_str(), info["notes"].as_str()), (Some(true), Some(CONSOLE), Some("n")));
+    assert!(connect(&mut s, ghost, node).is_ok());
+    let gone = card_of(&mut s, "NOPE", [0.0, 300.0]);
+    assert_eq!(s.execute("csd.device.delete", &json!({ "handles": [gone.hex()] })).unwrap()["deleted"], 1);
+}
+
+fn place_at(s: &mut Session, product: &str, x: f64, y: f64) -> Handle {
+    handle(&s.execute("csd.place", &json!({ "product": product, "at": [x, y] })).unwrap())
+}
+
+fn at(s: &Session, h: Handle) -> (f64, f64) {
+    let Some(EntityKind::Insert(i)) = s.doc().unwrap().entity(h).map(|e| &e.kind) else { panic!("no insert") };
+    (i.insert.x, i.insert.y)
+}
+
+#[test]
+fn select_product_selects_every_device_of_that_product() {
+    let mut s = Session::new();
+    let a = place_at(&mut s, CONSOLE, 0.0, 0.0);
+    let b = place_at(&mut s, CONSOLE, 100.0, 0.0);
+    place_at(&mut s, NODE, 200.0, 0.0);
+    let r = s.execute("csd.select.product", &json!({ "device": a.hex() })).unwrap();
+    assert_eq!(r["count"], 2);
+    let mut sel = s.selection();
+    sel.sort();
+    assert_eq!(sel, vec![a, b]);
+    assert!(s.execute("csd.select.product", &json!({ "device": "FFFF" })).is_err());
+}
+
+#[test]
+fn align_lines_up_card_edges_and_wires_follow() {
+    let mut s = ortho_session();
+    let a = place_at(&mut s, CONSOLE, 0.0, 0.0);
+    let b = place_at(&mut s, NODE, 200.0, 60.0);
+    let w = connect(&mut s, a, b).unwrap();
+    let before = verts(&s, w);
+    s.execute("csd.size", &json!({ "handles": [b.hex()], "w": 140 })).unwrap();
+    s.execute("csd.align", &json!({ "mode": "left", "handles": [a.hex(), b.hex()] })).unwrap();
+    // Left edges meet at a's -35, so the 140-wide card's centre lands at 35.
+    assert_eq!(at(&s, a), (0.0, 0.0));
+    assert_eq!(at(&s, b), (35.0, 60.0));
+    assert_ne!(verts(&s, w), before);
+    s.set_selection(vec![a, b]);
+    s.execute("csd.align", &json!({ "mode": "top" })).unwrap();
+    assert_eq!(at(&s, a).1, at(&s, b).1);
+    assert!(s.execute("csd.align", &json!({ "mode": "middle" })).is_err());
+    assert!(s.execute("csd.align", &json!({ "mode": "left", "handles": [a.hex()] })).is_err());
+}
+
+#[test]
+fn distribute_equalises_gaps_and_keeps_the_ends() {
+    let mut s = Session::new();
+    let a = place_at(&mut s, CONSOLE, 0.0, 0.0);
+    let b = place_at(&mut s, CONSOLE, 50.0, 0.0);
+    let c = place_at(&mut s, CONSOLE, 400.0, 0.0);
+    let all = json!([a.hex(), b.hex(), c.hex()]);
+    s.execute("csd.distribute", &json!({ "axis": "x", "handles": all })).unwrap();
+    assert_eq!((at(&s, a).0, at(&s, b).0, at(&s, c).0), (0.0, 200.0, 400.0));
+    assert!(s.execute("csd.distribute", &json!({ "axis": "x", "handles": [a.hex(), b.hex()] })).is_err());
+}
+
+#[test]
+fn device_at_finds_the_card_under_a_point() {
+    let mut s = Session::new();
+    let a = place_at(&mut s, CONSOLE, 0.0, 0.0);
+    let hit = |s: &mut Session, x: f64, y: f64| s.execute("csd.device.at", &json!({ "at": [x, y] })).unwrap()["handle"].clone();
+    assert_eq!(hit(&mut s, 30.0, 30.0), json!(a.hex()));
+    assert_eq!(hit(&mut s, 90.0, 0.0), json!(null));
+}
+
+fn link_of(s: &Session, w: Handle) -> WireLink {
+    WireLink::from_xdata(&s.doc().unwrap().entity(w).unwrap().common.xdata).unwrap()
+}
+
+fn wire_cmd(s: &mut Session, id: &str, p: Value) -> Value {
+    s.execute(id, &p).unwrap()
+}
+
+fn passes_through(v: &[Vec2], at: Vec2) -> bool {
+    v.iter().any(|p| p.near(at, 1e-6))
+}
+
+fn xy(v: Vec2) -> [f64; 2] {
+    [v.x, v.y]
+}
+
+#[test]
+fn waypoints_add_move_remove_and_straighten_in_ortho() {
+    let (mut s, _, _, w) = setup();
+    let straight = verts(&s, w);
+    let r = wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [100, 150] }));
+    assert_eq!(r["index"], 0);
+    assert_eq!(link_of(&s, w).points, [Vec2::new(100.0, 150.0)]);
+    assert!(passes_through(&verts(&s, w), Vec2::new(100.0, 150.0)));
+    assert_orthogonal(&verts(&s, w));
+    assert_eq!(wire_cmd(&mut s, "csd.wire.bent", json!({}))["count"], 1);
+
+    // A second point near the far end lands after the first.
+    assert_eq!(wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [180, 150] }))["index"], 1);
+    wire_cmd(&mut s, "csd.wire.point.move", json!({ "wire": w.hex(), "index": 0, "to": [90, -80] }));
+    assert!(passes_through(&verts(&s, w), Vec2::new(90.0, -80.0)));
+    wire_cmd(&mut s, "csd.wire.point.remove", json!({ "wire": w.hex(), "at": [181, 149] }));
+    assert_eq!(link_of(&s, w).points, [Vec2::new(90.0, -80.0)]);
+    wire_cmd(&mut s, "csd.wire.point.remove", json!({ "wire": w.hex(), "index": 0 }));
+    assert_eq!(verts(&s, w), straight);
+
+    wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [100, 150] }));
+    assert_eq!(wire_cmd(&mut s, "csd.wire.straighten", json!({}))["count"], 1);
+    assert_eq!(verts(&s, w), straight);
+    assert_eq!(wire_cmd(&mut s, "csd.wire.bent", json!({}))["count"], 0);
+    s.execute("undo", &json!({})).unwrap();
+    assert_eq!(link_of(&s, w).points.len(), 1, "straighten is one undo step");
+}
+
+#[test]
+fn waypoint_errors_change_nothing() {
+    let (mut s, _, _, w) = setup();
+    for (id, p) in [
+        ("csd.wire.point.move", json!({ "wire": w.hex(), "index": 0, "to": [1, 1] })),
+        ("csd.wire.point.remove", json!({ "wire": w.hex(), "index": 3 })),
+        ("csd.wire.point.remove", json!({ "wire": w.hex(), "at": [5, 5] })),
+        ("csd.wire.point.add", json!({ "wire": "FFFF", "at": [5, 5] })),
+        ("csd.wire.label", json!({ "wire": w.hex(), "mode": "segment" })),
+    ] {
+        assert!(s.execute(id, &p).is_err(), "{id}");
+    }
+    assert!(link_of(&s, w).points.is_empty());
+}
+
+#[test]
+fn smooth_wires_pass_through_their_waypoints() {
+    let mut s = Session::new();
+    let a = handle(&s.execute("csd.place", &json!({ "product": CONSOLE, "at": [0, 0] })).unwrap());
+    let b = handle(&s.execute("csd.place", &json!({ "product": NODE, "at": [200, 60] })).unwrap());
+    let w = connect(&mut s, a, b).unwrap();
+    let plain = polyline(&s, w);
+    wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [100, 150] }));
+    let bent = polyline(&s, w);
+    assert!(passes_through(&bent.iter().map(|v| v.0).collect::<Vec<_>>(), Vec2::new(100.0, 150.0)));
+    assert!(bent.len() > plain.len() && bent.iter().all(|v| v.1 == 0.0));
+    assert_eq!(bent[0], plain[0]);
+    assert_eq!(bent.last(), plain.last());
+}
+
+#[test]
+fn waypoints_follow_when_both_ends_move_together_only() {
+    let (mut s, a, b, w) = setup();
+    wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [100, 150] }));
+    mv(&mut s, b, [0.0, 30.0]);
+    assert_eq!(link_of(&s, w).points, [Vec2::new(100.0, 150.0)], "one end moving leaves the point");
+    s.execute("move", &json!({ "handles": [a.hex(), b.hex()], "delta": [10, 20] })).unwrap();
+    assert_eq!(link_of(&s, w).points, [Vec2::new(110.0, 170.0)]);
+    assert!(passes_through(&verts(&s, w), Vec2::new(110.0, 170.0)));
+    s.execute("undo", &json!({})).unwrap();
+    assert_eq!(link_of(&s, w).points, [Vec2::new(100.0, 150.0)]);
+}
+
+#[test]
+fn waypoints_snap_to_the_grid_when_snap_is_on() {
+    let (mut s, _, _, w) = setup();
+    s.settings.snapmode = true;
+    s.settings.snapunit = Vec2::new(10.0, 10.0);
+    wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [103, 148] }));
+    assert_eq!(link_of(&s, w).points, [Vec2::new(100.0, 150.0)]);
+}
+
+#[test]
+fn hit_prefers_a_waypoint_over_the_line() {
+    let (mut s, _, _, w) = setup();
+    let miss = wire_cmd(&mut s, "csd.wire.hit", json!({ "at": [100, 300] }));
+    assert_eq!(miss, json!({ "wire": null, "point": null, "points": 0 }));
+    let start = verts(&s, w)[0];
+    let on_line = wire_cmd(&mut s, "csd.wire.hit", json!({ "at": [start.x + 3.0, start.y + 2.0] }));
+    assert_eq!((on_line["wire"].as_str(), on_line["point"].is_null()), (Some(w.hex().as_str()), true));
+    wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [100, 150] }));
+    let hit = wire_cmd(&mut s, "csd.wire.hit", json!({ "at": [104, 146] }));
+    assert_eq!((hit["wire"].as_str(), hit["point"].as_u64(), hit["points"].as_u64()), (Some(w.hex().as_str()), Some(0), Some(1)));
+    assert!(wire_cmd(&mut s, "csd.wire.hit", json!({ "at": [104, 146], "tolerance": 2 }))["point"].is_null());
+}
+
+#[test]
+fn label_position_rename_and_dxf_round_trip() {
+    let (mut s, _, _, w) = setup();
+    let pill = |s: &Session| decos(s).into_iter().find(|d| d.2 == Deco::Pill).unwrap().3.insert.xy();
+    let default = pill(&s);
+    let start = verts(&s, w)[0];
+    let at_start = wire_cmd(&mut s, "csd.wire.label", json!({ "wire": w.hex(), "at": xy(start) }));
+    assert_eq!(at_start["labelT"], 0.0);
+    assert!(pill(&s).near(start, 1e-6));
+    let seg = wire_cmd(&mut s, "csd.wire.label", json!({ "wire": w.hex(), "mode": "segment", "at": xy(start) }));
+    let t = seg["labelT"].as_f64().unwrap();
+    assert!(t > 0.0 && t < 0.5);
+    wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [100, 150] }));
+    wire_cmd(&mut s, "csd.wire.set", json!({ "wire": w.hex(), "name": "  Stage left  " }));
+    let saved = link_of(&s, w);
+    assert_eq!((saved.name.as_deref(), saved.label_t, saved.points.len()), (Some("Stage left"), Some(t), 1));
+
+    let imported = cadcraft_io::read_dxf(cadcraft_io::write_dxf(s.doc().unwrap()).as_bytes()).unwrap();
+    let mut u = Session::empty();
+    u.execute("ortho", &json!({ "on": true })).unwrap();
+    u.open_drawing(imported, "Imported", None);
+    assert_eq!(link_of(&u, w), saved);
+    assert_eq!(verts(&u, w), verts(&s, w));
+
+    wire_cmd(&mut s, "csd.wire.label", json!({ "wire": w.hex() }));
+    wire_cmd(&mut s, "csd.wire.set", json!({ "wire": w.hex(), "name": "" }));
+    wire_cmd(&mut s, "csd.wire.straighten", json!({}));
+    let cleared = link_of(&s, w);
+    assert_eq!((cleared.name, cleared.label_t, cleared.points.len()), (None, None, 0));
+    assert!(pill(&s).near(default, 1e-6));
+}
+
+fn fields(s: &mut Session) -> Value {
+    s.execute("csd.project", &json!({})).unwrap()["fields"].clone()
+}
+
+#[test]
+fn titleblock_is_inserted_once_and_fields_are_set_and_undone() {
+    let mut s = Session::new();
+    assert_eq!(fields(&mut s)["project"], "");
+    let a = handle(&s.execute("csd.titleblock", &json!({ "at": [10, 20] })).unwrap());
+    assert_eq!(handle(&s.execute("csd.titleblock", &json!({})).unwrap()), a);
+    assert_eq!(fields(&mut s)["brand"], "CHAUVET Professional");
+    s.execute("csd.project.set", &json!({ "fields": { "project": "Arena", "drawnBy": "DG", "rev": "B" } })).unwrap();
+    let f = fields(&mut s);
+    assert_eq!(
+        (f["project"].as_str(), f["drawnBy"].as_str(), f["rev"].as_str(), f["venue"].as_str()),
+        (Some("Arena"), Some("DG"), Some("B"), Some(""))
+    );
+    assert!(s.execute("csd.project.set", &json!({ "fields": { "nope": "x" } })).is_err());
+    assert!(s.execute("csd.project.set", &json!({ "fields": { "rev": 3 } })).is_err());
+    s.undo().unwrap();
+    assert_eq!(fields(&mut s)["project"], "");
+}
+
+fn block_right(s: &Session, name: &str) -> f64 {
+    let b = s.doc().unwrap().block(name).unwrap();
+    b.entities
+        .iter()
+        .filter_map(|e| if let EntityKind::LwPolyline(p) = &e.kind { Some(p.vertices.iter().map(|v| v.p.x).fold(0.0, f64::max)) } else { None })
+        .fold(0.0, f64::max)
+}
+
+#[test]
+fn paper_sizes_the_sheet_and_legend_and_keeps_fields() {
+    let mut s = Session::new();
+    assert!(s.execute("csd.paper", &json!({ "paper": "letter" })).is_err(), "needs a title block");
+    assert!(s.execute("csd.titleblock", &json!({ "paper": "a4" })).is_err());
+    assert_eq!(s.execute("csd.titleblock", &json!({})).unwrap()["paper"], "tabloid");
+    assert_eq!(block_right(&s, "CSD_TITLEBLOCK"), 1632.0 - 22.0);
+    s.execute("csd.project.set", &json!({ "fields": { "project": "Arena" } })).unwrap();
+    s.execute("csd.legend", &json!({})).unwrap();
+    assert_eq!(block_right(&s, "CSD_LEGEND"), 1632.0 - 44.0);
+
+    assert_eq!(s.execute("csd.paper", &json!({ "paper": "letter" })).unwrap()["paper"], "letter");
+    assert_eq!(block_right(&s, "CSD_TITLEBLOCK"), 1056.0 - 22.0);
+    assert_eq!(block_right(&s, "CSD_LEGEND"), 1056.0 - 44.0);
+    assert_eq!(fields(&mut s)["project"], "Arena");
+    assert_eq!(s.execute("csd.project", &json!({})).unwrap()["paper"], "letter");
+    // An existing title block is resized when the paper is given, and left alone when not.
+    s.execute("csd.titleblock", &json!({})).unwrap();
+    assert_eq!(block_right(&s, "CSD_TITLEBLOCK"), 1056.0 - 22.0);
+    s.execute("csd.titleblock", &json!({ "paper": "tabloid" })).unwrap();
+    assert_eq!(block_right(&s, "CSD_TITLEBLOCK"), 1632.0 - 22.0);
+    s.undo().unwrap();
+    assert_eq!(block_right(&s, "CSD_TITLEBLOCK"), 1056.0 - 22.0);
+}
+
+#[test]
+fn a_new_letter_titleblock_is_letter_sized() {
+    let mut s = Session::new();
+    s.execute("csd.titleblock", &json!({ "paper": "letter" })).unwrap();
+    assert_eq!(block_right(&s, "CSD_TITLEBLOCK"), 1056.0 - 22.0);
+    s.execute("csd.legend", &json!({})).unwrap();
+    assert_eq!(block_right(&s, "CSD_LEGEND"), 1056.0 - 44.0);
+}
+
+#[test]
+fn project_set_inserts_the_titleblock_when_missing_in_one_undo_step() {
+    let mut s = Session::new();
+    s.execute("csd.project.set", &json!({ "fields": { "venue": "O2" } })).unwrap();
+    assert_eq!(s.execute("csd.project", &json!({})).unwrap()["exists"], true);
+    s.undo().unwrap();
+    assert_eq!(s.execute("csd.project", &json!({})).unwrap()["exists"], false);
+}
+
+#[test]
+fn project_fields_survive_a_dxf_round_trip() {
+    let mut s = Session::new();
+    s.execute("csd.project.set", &json!({ "fields": { "project": "Tour", "title": "FOH rack", "meta": "v2" } })).unwrap();
+    let before = fields(&mut s);
+    let text = cadcraft_io::write_dxf(s.doc().unwrap());
+    let mut t = Session::empty();
+    t.open_drawing(cadcraft_io::read_dxf(text.as_bytes()).unwrap(), "Imported", None);
+    assert_eq!(fields(&mut t), before);
+}
+
+fn legend_labels(s: &Session) -> Vec<Protocol> {
+    cadcraft_csd::legend_protocols(s.doc().unwrap().block("CSD_LEGEND").unwrap())
+}
+
+fn legend_text(s: &Session) -> String {
+    let b = s.doc().unwrap().block("CSD_LEGEND").unwrap();
+    b.entities.iter().filter_map(|e| if let EntityKind::Text(t) = &e.kind { Some(t.value.clone()) } else { None }).collect::<Vec<_>>().join("|")
+}
+
+#[test]
+fn legend_lists_only_used_protocols_follows_the_wires_and_adds_the_power_note() {
+    let (mut s, a, b, _) = setup();
+    s.execute("csd.legend", &json!({})).unwrap();
+    assert_eq!(legend_labels(&s), vec![Protocol::NetData]);
+    assert!(!legend_text(&s).contains("Warning"));
+    let p = json!({ "from": a.hex(), "fromSide": "bot", "to": b.hex(), "toSide": "top", "protocol": "power" });
+    s.execute("csd.connect", &p).unwrap();
+    assert_eq!(legend_labels(&s), vec![Protocol::NetData, Protocol::Power]);
+    assert!(legend_text(&s).contains("Warning: Power connection lines"));
+    let h = handle(&s.execute("csd.legend", &json!({})).unwrap());
+    assert_eq!(handle(&s.execute("csd.legend", &json!({})).unwrap()), h);
+    s.undo().unwrap();
+    assert_eq!(legend_labels(&s), vec![Protocol::NetData]);
+}
+
+#[test]
+fn wiring_alone_creates_no_legend() {
+    let (s, ..) = setup();
+    assert!(s.doc().unwrap().block("CSD_LEGEND").is_none());
+}
+
+#[test]
+fn bom_footer_defaults_to_the_title_block_project_fields() {
+    let mut s = Session::new();
+    assert!(super::sheet::project_footer(&s).is_empty());
+    s.execute("csd.project.set", &json!({ "fields": { "project": "Demo", "rev": "B" } })).unwrap();
+    assert_eq!(super::sheet::project_footer(&s), vec!["Project: Demo   Rev: B".to_string()]);
+}
+
+#[test]
+fn devices_label_numbers_in_reading_order_and_is_one_undo() {
+    let mut s = Session::new();
+    let mut at = |x: i32, y: i32| handle(&s.execute("csd.place", &json!({ "product": NODE, "at": [x, y] })).unwrap());
+    let (c, a, b) = (at(0, -200), at(300, 0), at(0, 10));
+    let hs = json!([c.hex(), a.hex(), b.hex()]);
+    let r = s.execute("csd.devices.label", &json!({ "handles": hs, "base": "N", "start": 8, "pad": 2 })).unwrap();
+    let got: Vec<_> = r["labels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| (l["handle"].as_str().unwrap().to_string(), l["label"].as_str().unwrap().to_string()))
+        .collect();
+    assert_eq!(got, vec![(b.hex(), "N08".into()), (a.hex(), "N09".into()), (c.hex(), "N10".into())]);
+    let name = |s: &Session, h| insert(s, h).attribs.iter().find(|x| x.tag == "NAME").unwrap().text.value.clone();
+    assert_eq!(name(&s, a), "N09");
+    // Without `start` every device gets the base.
+    s.execute("csd.devices.label", &json!({ "handles": hs, "base": "Rack" })).unwrap();
+    assert_eq!((name(&s, a), name(&s, c)), ("Rack".into(), "Rack".into()));
+    assert!(s.execute("csd.devices.label", &json!({ "handles": hs, "base": "x", "start": "1" })).is_err());
+    assert!(s.execute("csd.devices.label", &json!({ "handles": hs, "base": "x", "start": i64::MAX })).is_err());
+    assert_eq!(name(&s, a), "Rack");
+    s.undo().unwrap();
+    assert_eq!(name(&s, a), "N09");
+}
+
+#[test]
+fn devices_info_summarises_products_and_common_size() {
+    let (mut s, a, b, _) = setup();
+    let hs = json!([a.hex(), b.hex()]);
+    let r = s.execute("csd.devices.info", &json!({ "handles": hs })).unwrap();
+    assert_eq!(r["count"], 2);
+    assert_eq!(r["products"].as_array().unwrap().len(), 2);
+    assert_eq!(r["size"]["w"], cadcraft_csd::CARD_W);
+    s.execute("csd.size", &json!({ "handles": [a.hex()], "w": 140 })).unwrap();
+    let r = s.execute("csd.devices.info", &json!({ "handles": hs })).unwrap();
+    assert!(r["size"]["w"].is_null() && r["size"]["h"].is_number());
+}
+
+#[test]
+fn place_grid_lays_out_rows_down_and_columns_across_in_one_undo() {
+    let mut s = ortho_session();
+    let r = s.execute("csd.place.grid", &json!({ "product": NODE, "at": [0, 0], "rows": 2, "cols": 3, "dx": 100, "dy": 120 })).unwrap();
+    let at: Vec<(f64, f64)> = r["handles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| match &s.doc().unwrap().entity(Handle::parse_hex(h.as_str().unwrap()).unwrap()).unwrap().kind {
+            EntityKind::Insert(i) => (i.insert.x, i.insert.y),
+            _ => panic!("not an insert"),
+        })
+        .collect();
+    assert_eq!(at, [(0.0, 0.0), (100.0, 0.0), (200.0, 0.0), (0.0, -120.0), (100.0, -120.0), (200.0, -120.0)]);
+    s.undo().unwrap();
+    assert_eq!(device_count(&mut s), 0);
+}
+
+#[test]
+fn place_grid_refuses_hostile_sizes() {
+    let mut s = ortho_session();
+    for p in [
+        json!({ "rows": 0, "cols": 1 }),
+        json!({ "rows": 21, "cols": 20 }),
+        json!({ "rows": -1, "cols": 2 }),
+        json!({ "rows": u64::MAX, "cols": u64::MAX }),
+        json!({ "rows": 1, "cols": 1, "dx": "x" }),
+    ] {
+        let mut p = p;
+        p["product"] = json!(NODE);
+        p["at"] = json!([0, 0]);
+        assert!(s.execute("csd.place.grid", &p).is_err(), "{p}");
+    }
+    assert_eq!(device_count(&mut s), 0);
+}
+
+#[test]
+fn clear_removes_devices_wires_and_decorations_but_keeps_the_sheet_furniture() {
+    let (mut s, ..) = setup();
+    s.execute("csd.project.set", &json!({ "fields": { "project": "Demo" } })).unwrap();
+    s.execute("csd.unplaced.add", &json!({ "product": NODE, "qty": 2 })).unwrap();
+    let r = s.execute("csd.clear", &json!({})).unwrap();
+    assert_eq!((r["devices"].as_u64(), r["wires"].as_u64()), (Some(2), Some(1)));
+    assert_eq!(device_count(&mut s), 0);
+    assert!(s.doc().unwrap().model.iter().all(|e| !matches!(e.kind, EntityKind::LwPolyline(_)) && deco_from_xdata(&e.common.xdata).is_none()));
+    assert_eq!(s.execute("csd.project", &json!({})).unwrap()["fields"]["project"], "Demo");
+    assert_eq!(s.execute("csd.unplaced.list", &json!({})).unwrap()["items"].as_array().map(Vec::len), Some(1));
+    s.undo().unwrap();
+    assert_eq!(device_count(&mut s), 2);
+}
+
+fn label_hidden(s: &Session, h: Handle) -> bool {
+    let Some(EntityKind::Insert(i)) = s.doc().unwrap().entity(h).map(|e| e.kind.clone()) else { panic!("no insert") };
+    i.attribs.iter().find(|a| a.tag == "LABEL").unwrap().invisible
+}
+
+#[test]
+fn codes_only_is_stored_but_leaves_labels_alone_and_shows_labels_hidden_by_older_files() {
+    let mut s = ortho_session();
+    let a = handle(&s.execute("csd.place", &json!({ "product": NODE, "at": [0, 0] })).unwrap());
+    assert_eq!(s.execute("csd.display", &json!({})).unwrap()["codesOnly"], false);
+    assert_eq!(s.execute("csd.display", &json!({ "codesOnly": true })).unwrap()["codesOnly"], true);
+    assert!(!label_hidden(&s, a));
+    let mut t = Session::empty();
+    t.open_drawing(cadcraft_io::read_dxf(cadcraft_io::write_dxf(s.doc().unwrap()).as_bytes()).unwrap(), "Imported", None);
+    assert_eq!(t.execute("csd.display", &json!({})).unwrap()["codesOnly"], true);
+    s.doc_mut()
+        .unwrap()
+        .modify_entity(a, |e| {
+            if let EntityKind::Insert(i) = &mut e.kind {
+                i.attribs.iter_mut().for_each(|x| x.invisible = true);
+            }
+        })
+        .unwrap();
+    let lib = s.csd_library.clone();
+    super::refresh(&mut s.state_mut().unwrap().doc, &lib, true);
+    assert!(!label_hidden(&s, a));
+}
+
+fn body_texts(s: &Session, block: &str) -> Vec<String> {
+    let b = s.doc().unwrap().block(block).unwrap();
+    b.entities.iter().filter_map(|e| if let EntityKind::Text(t) = &e.kind { Some(t.value.clone()) } else { None }).collect()
+}
+
+#[test]
+fn card_body_and_default_label_show_the_canvas_code_and_old_blocks_are_refreshed() {
+    let mut s = ortho_session();
+    let a = handle(&s.execute("csd.place", &json!({ "product": NODE, "at": [0, 0] })).unwrap());
+    assert_eq!(body_texts(&s, "CSD_epix-flex-drive"), ["EpixFLXDRV"]);
+    let Some(EntityKind::Insert(i)) = s.doc().unwrap().entity(a).map(|e| e.kind.clone()) else { panic!("no insert") };
+    assert_eq!(i.attribs.iter().find(|x| x.tag == "LABEL").unwrap().text.value, "EpixFLXD...");
+    let before = s.doc().unwrap().block("CSD_epix-flex-drive").unwrap().entities.iter().find_map(|e| match &e.kind {
+        EntityKind::AttDef(d) if d.tag == "LABEL" => Some(d.text.insert),
+        _ => None,
+    });
+    // A drawing saved with the earlier body: the full code, wrapped.
+    let d = s.doc_mut().unwrap();
+    let block = d.blocks.get_mut("CSD_epix-flex-drive").unwrap();
+    let store = &mut std::sync::Arc::make_mut(block).entities;
+    for h in store.handles() {
+        store.modify(h, |e| {
+            if let EntityKind::Text(t) = &mut e.kind {
+                t.value = "EPIX FLEX".into();
+            }
+        });
+    }
+    let lib = s.csd_library.clone();
+    assert!(super::refresh_blocks(&mut s.state_mut().unwrap().doc, &lib));
+    assert_eq!(body_texts(&s, "CSD_epix-flex-drive"), ["EpixFLXDRV"]);
+    let after = s.doc().unwrap().block("CSD_epix-flex-drive").unwrap().entities.iter().find_map(|e| match &e.kind {
+        EntityKind::AttDef(d) if d.tag == "LABEL" => Some(d.text.insert),
+        _ => None,
+    });
+    assert_eq!(before, after);
+}
+
+#[test]
+fn route_preview_matches_the_move_and_changes_nothing() {
+    let (mut s, _, _, w) = setup();
+    wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [100, 150] }));
+    let before = verts(&s, w);
+    let r = wire_cmd(&mut s, "csd.wire.route", json!({ "wire": w.hex(), "index": 0, "to": [90, -80] }));
+    let path: Vec<Vec2> = r["path"].as_array().unwrap().iter().map(|p| Vec2::new(p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).collect();
+    assert_eq!(verts(&s, w), before);
+    wire_cmd(&mut s, "csd.wire.point.move", json!({ "wire": w.hex(), "index": 0, "to": [90, -80] }));
+    assert_eq!(verts(&s, w), path);
+    assert!(s.execute("csd.wire.route", &json!({ "wire": w.hex(), "index": 5, "to": [0, 0] })).is_err());
+}
+
+#[test]
+fn moving_a_waypoint_snaps_to_the_grid_when_snap_is_on() {
+    let (mut s, _, _, w) = setup();
+    wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [100, 150] }));
+    s.settings.snapmode = true;
+    s.settings.snapunit = Vec2::new(10.0, 10.0);
+    wire_cmd(&mut s, "csd.wire.point.move", json!({ "wire": w.hex(), "index": 0, "to": [93, 148] }));
+    assert_eq!(link_of(&s, w).points, [Vec2::new(90.0, 150.0)]);
+}
+
+#[test]
+fn devices_accessory_adds_one_part_to_every_device_and_resets_a_held_line() {
+    let mut s = Session::new();
+    let (a, b) = (place_at(&mut s, NODE, 0.0, 0.0), place_at(&mut s, CONSOLE, 300.0, 0.0));
+    let hs = json!([a.hex(), b.hex()]);
+    s.execute("csd.device.set", &json!({ "handle": a.hex(), "accessories": [{ "product": "b565fc", "qty": 4 }] })).unwrap();
+    let qty = |s: &mut Session, h: Handle| s.execute("csd.device.info", &json!({ "handle": h.hex() })).unwrap()["accessories"][0]["qty"].clone();
+    assert_eq!(s.execute("csd.devices.accessory", &json!({ "handles": hs, "product": "b565fc" })).unwrap()["changed"], 2);
+    assert_eq!((qty(&mut s, a), qty(&mut s, b)), (json!(1), json!(1)));
+    assert!(s.execute("csd.devices.accessory", &json!({ "handles": hs, "product": "nope" })).is_err());
+    s.execute("undo", &json!({})).unwrap();
+    assert_eq!((qty(&mut s, a), qty(&mut s, b)), (json!(4), Value::Null), "one undo step restores both");
+}
+
+#[test]
+fn two_line_grows_the_card_and_moves_the_bottom_ports_down() {
+    let (mut s, a, _, w) = setup();
+    let (before, route) = (port(&s, a, Side::Bottom), verts(&s, w));
+    let right = port(&s, a, Side::Right);
+    s.execute("csd.device.set", &json!({ "handle": a.hex(), "twoLine": true })).unwrap();
+    let Some(EntityKind::Insert(i)) = s.doc().unwrap().entity(a).map(|e| e.kind.clone()) else { panic!("no insert") };
+    assert_eq!((i.block.as_str(), i.scale.y), ("CSD_CHAMMQ50.2", 1.0));
+    assert!(s.doc().unwrap().block("CSD_CHAMMQ50.2").is_some());
+    // 18 taller about the same centre: the bottom edge drops 9, the side ports stay.
+    assert!(port(&s, a, Side::Bottom).near(before + Vec2::new(0.0, -9.0), 1e-9));
+    assert!(port(&s, a, Side::Right).near(right, 1e-9));
+    assert_eq!(s.execute("csd.device.info", &json!({ "handle": a.hex() })).unwrap()["libSize"], json!([70.0, 91.0]));
+    // The label moves to the middle of the lower strip (inside the border), off the rule at -26.75.
+    let label = i.attribs.iter().find(|x| x.tag == "LABEL").and_then(|x| x.text.align_pt).unwrap();
+    assert!((label.y - i.insert.y - -35.75).abs() < 1e-9, "label at {}", label.y - i.insert.y);
+    s.execute("csd.device.set", &json!({ "handle": a.hex(), "twoLine": false })).unwrap();
+    assert!(port(&s, a, Side::Bottom).near(before, 1e-9));
+    assert_eq!(verts(&s, w), route, "off again routes as before");
+}
+
+#[test]
+fn two_line_for_a_group_skips_built_ins_and_refuses_them_singly() {
+    let (mut s, a, b, _) = setup();
+    let o = handle(&s.execute("csd.place", &json!({ "product": "__off-page", "at": [400, 0] })).unwrap());
+    let r = s.execute("csd.devices.set", &json!({ "handles": [a.hex(), b.hex(), o.hex()], "twoLine": true })).unwrap();
+    assert_eq!(r["changed"], json!(2));
+    assert!(s.execute("csd.device.set", &json!({ "handle": o.hex(), "twoLine": true })).is_err());
+}
+
+#[test]
+fn built_in_cards_have_their_own_size_and_keep_the_whole_label() {
+    let mut s = Session::new();
+    let o = handle(
+        &s.execute("csd.place", &json!({ "product": "__by-others", "at": [0, 0], "label": "120/208V 3 Phase 100A Input from others" })).unwrap(),
+    );
+    let info = s.execute("csd.device.info", &json!({ "handle": o.hex() })).unwrap();
+    assert_eq!(info["libSize"], json!([216.0, 72.0]));
+    assert_eq!(info["label"], json!("120/208V 3 Phase 100A Input from others"));
+}
+
+#[test]
+fn a_products_icon_size_sets_its_card_and_a_resized_card_scales_from_it() {
+    let mut s = Session::new();
+    let mut lib = (*s.csd_library).clone();
+    if let Some(p) = lib.iter_mut().find(|p| p.id == CONSOLE) {
+        p.extra.insert("iconW".into(), json!(216));
+        p.extra.insert("iconH".into(), json!(72));
+    }
+    s.csd_library = std::sync::Arc::new(lib);
+    let a = handle(&s.execute("csd.place", &json!({ "product": CONSOLE, "at": [0, 0] })).unwrap());
+    assert_eq!(s.execute("csd.device.info", &json!({ "handle": a.hex() })).unwrap()["libSize"], json!([216.0, 90.0]));
+    assert!(port(&s, a, Side::Right).near(Vec2::new(108.0, 0.0), 1e-9));
+    s.execute("csd.size", &json!({ "handles": [a.hex()], "w": 432 })).unwrap();
+    assert_eq!(s.execute("csd.device.info", &json!({ "handle": a.hex() })).unwrap()["size"], json!([432.0, 90.0]));
+}
+
+#[test]
+fn titleblock_fit_grows_the_sheet_around_the_drawing_and_undoes_in_one_step() {
+    let (mut s, a, b, _) = setup();
+    s.execute("csd.titleblock", &json!({ "at": [0, 0] })).unwrap();
+    s.execute("csd.place", &json!({ "product": CONSOLE, "at": [5000, 3000] })).unwrap();
+    let r = s.execute("csd.titleblock.fit", &json!({})).unwrap();
+    assert_eq!(r["changed"], true, "{r}");
+    let k = r["scale"].as_f64().unwrap();
+    assert!(k > 3.0, "{r}");
+    let d = s.doc().unwrap();
+    let store = d.space(&s.space()).unwrap();
+    let ins = store.iter().find_map(|e| match &e.kind {
+        EntityKind::Insert(i) if i.block == cadcraft_csd::TITLEBLOCK => Some(i.clone()),
+        _ => None,
+    });
+    let ins = ins.unwrap();
+    assert!((ins.scale.x - k).abs() < 1e-9);
+    let (w, h) = cadcraft_csd::Paper::Tabloid.size();
+    for dev in [a, b] {
+        let at = cadcraft_doc::entity_bounds(d, d.entity(dev).unwrap(), 0);
+        let lo = ins.insert.xy() + Vec2::new(cadcraft_csd::MARGIN, cadcraft_csd::MARGIN + cadcraft_csd::TITLE_H) * k;
+        let hi = ins.insert.xy() + Vec2::new(w - cadcraft_csd::MARGIN, h - cadcraft_csd::MARGIN) * k;
+        assert!(at.min.x >= lo.x && at.min.y >= lo.y && at.max.x <= hi.x && at.max.y <= hi.y, "{at:?} not in {lo:?}..{hi:?}");
+    }
+    assert_eq!(s.execute("csd.titleblock.fit", &json!({})).unwrap()["changed"], false);
+    s.execute("undo", &json!({})).unwrap();
+    s.execute("undo", &json!({})).unwrap();
+    let scale = s.doc().unwrap().space(&s.space()).unwrap().iter().find_map(|e| match &e.kind {
+        EntityKind::Insert(i) if i.block == cadcraft_csd::TITLEBLOCK => Some(i.scale.x),
+        _ => None,
+    });
+    assert_eq!(scale, Some(1.0));
 }

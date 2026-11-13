@@ -22,6 +22,7 @@ mod list;
 mod pick;
 mod viewport;
 mod widgets;
+mod wirepts;
 
 use cursor::{draw_crosshair, draw_snap_marker, draw_tracking, effective_point, override_cursor};
 use cycle::{CycleList, cycle_badge, cycle_click, cycle_list, over_canvas_menu, shift_space_cycle};
@@ -183,6 +184,12 @@ pub struct CanvasState {
     /// The right-click that opened the shortcut menu held Shift or Ctrl: it is the object snap
     /// menu ([`crate::context_menu`]).
     pub snap_menu: bool,
+    /// Where the right-click that opened the shortcut menu landed, in drawing units.
+    pub menu_world: Option<Vec2>,
+    /// The cable waypoint being dragged: (cable, index, where the pointer is in drawing units).
+    wire_drag: Option<(Handle, usize, Vec2)>,
+    /// The cable's route with that waypoint where the pointer is.
+    wire_preview: Vec<Vec2>,
     /// Tab was pressed over a snap marker: show the next candidate ([`SnapCycle`]).
     pub snap_tab: bool,
     pub snap_cycle: Option<SnapCycle>,
@@ -869,7 +876,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         app.session.pending_window = None;
         app.canvas.drag_window = false;
     }
-    let pressed_primary = pressed_primary && !picked && !hatch_dialog && !idle_dbl;
+    let on_waypoint = wirepts::point_at(app, &xf, hover_pos).is_some();
+    let pressed_primary = pressed_primary && !picked && !hatch_dialog && !idle_dbl && !on_waypoint;
     let key: CycleKey = (
         app.session.running.as_ref().map(|r| r.id.clone()),
         app.session.current_prompt().map(|p| p.message),
@@ -933,6 +941,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         && rect.contains(origin)
         && grip_at(app, &xf, Some(origin)).is_none()
         && crate::dyngrips::at(app, &xf, Some(origin)).is_none()
+        && wirepts::point_at(app, &xf, Some(origin)).is_none()
     {
         app.canvas.drag_window = app.session.begin_window(xf.to_world(origin));
     }
@@ -948,12 +957,17 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             }
         }
     }
+    wirepts::interact(app, ui, &resp, &xf, hover_pos, dbl_primary);
     // Right-click acts as Enter while a command runs (the classic CAD default; held, it opens the
     // command menu); otherwise it opens the shortcut menu (Repeat, Clipboard, …).
     // Shift/Ctrl+right-click opens the object snap menu.
     let idle = !app.session.prompting();
     if inside && pressed_secondary {
         app.canvas.snap_menu = mods.shift || mods.ctrl;
+        app.canvas.menu_world = raw_world;
+        if idle && !app.canvas.snap_menu {
+            crate::context_menu::select_device_at(app, raw_world);
+        }
     }
     if crate::context_menu::in_command(app, ui, inside, pressed_secondary) {
         let _ = app.session.input(Input::Enter);
@@ -1103,7 +1117,7 @@ fn paint_canvas(frame: CanvasPaint<'_>) {
     {
         let gs = app.session.settings.gripsize as f32;
         for h in sel.iter().take(200) {
-            if let Some(e) = st.doc.entity(*h) {
+            if let Some(e) = st.doc.entity(*h).filter(|e| crate::context_menu::wire_link(e).is_none()) {
                 let grips = e.kind.grips();
                 let count = grips.len();
                 for (gi, g) in grips.into_iter().enumerate() {
@@ -1129,6 +1143,7 @@ fn paint_canvas(frame: CanvasPaint<'_>) {
             }
         }
         crate::dyngrips::draw(app, painter, &xf, rect, hover_pos);
+        wirepts::draw(app, painter, &xf, rect, &t);
     }
     // Rubber band preview of the active command.
     // `xf` is the space being edited: paper space, or model space inside the active viewport.

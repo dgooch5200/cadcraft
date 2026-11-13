@@ -3,17 +3,27 @@
 
 use cadcraft_doc::color::{Color, Rgb};
 use cadcraft_doc::{
-    Attrib, AttribModes, AttribProps, Block, Entity, EntityKind, HAlign, Handle, Hatch, HatchLoop, LwPolyline, Text, TextStyle, VAlign, Wipeout,
+    Attrib, AttribModes, AttribProps, Block, Entity, EntityKind, HAlign, Handle, Hatch, HatchLoop, LwPolyline, MText, MultilineAttrib, Text,
+    TextStyle, VAlign, Wipeout,
 };
 use cadcraft_geom::{PolyVertex, Vec2};
 
-use crate::{Deco, Product, Protocol, Side};
+use crate::wire::{point_at, smooth};
+use crate::{Deco, OFF_PAGE_ID, Product, Protocol, Side, is_builtin};
 
-/// Card size in drawing units; the insertion point is the card centre. The body is the picture
-/// area (55 high) over the 18 high label strip.
+mod canvas;
+mod sheet;
+pub use canvas::*;
+pub use sheet::*;
+
+/// Default card size in drawing units; the insertion point is the card centre. The body is the
+/// picture area (55 high) over the 18 high label strip. A product's own size is [`card_size`].
 pub const CARD_W: f64 = 70.0;
 pub const CARD_H: f64 = 73.0;
+const BODY_H: f64 = 55.0;
 const STRIP_H: f64 = 18.0;
+const MIN_CARD: f64 = 20.0;
+const MAX_CARD: f64 = 1000.0;
 const BORDER: f64 = 1.5;
 const RADIUS: f64 = 5.0;
 const PAPER: u32 = 0xf5f2ec;
@@ -25,17 +35,35 @@ const LANE: f64 = 6.0;
 pub const TERM_R: f64 = 4.5;
 pub const WIRE_W: f64 = 2.5;
 const PILL_H: f64 = 14.0;
-const CODE_H: f64 = 7.0;
+/// Text height of the body's code: [`CANVAS_CODE_MAX`] bold characters fit the 70 wide card.
+const CODE_H: f64 = 9.0;
 const LABEL_H: f64 = 6.0;
-/// Characters of the code on one line of the body, and lines kept.
-const CODE_CHARS: usize = 9;
-const CODE_LINES: usize = 3;
 /// Width the strip text may use, in the estimate of `truncate_label`.
 const LABEL_W: f64 = 60.0;
+/// Space kept clear inside a built-in box on each side of its wrapped label.
+const BOX_PAD: f64 = 8.0;
 /// The text style of every card and badge text. The drawing needs it (see [`bold_style`]).
 pub const BOLD_STYLE: &str = "CSDBOLD";
 /// Darkest luma, 0 to 1, a text colour may have on the paper; see [`legible`].
 const MAX_TEXT_LUMA: f64 = 0.45;
+
+/// The card's size before any insert scale. A product's `iconW` and `iconH` (the body, as in the
+/// web app) give the size, 70 by 55 where absent or zero; the label strip is added under the body,
+/// and a second strip for `two_line`. A built-in is one box of exactly that size, with no strip.
+pub fn card_size(product: &Product, two_line: bool) -> Vec2 {
+    let dim = |key: &str, default: f64| match crate::library::num(product.extra.get(key), MAX_CARD) {
+        n if n > 0.0 => n.max(MIN_CARD),
+        _ => default,
+    };
+    let strips = if is_builtin(&product.id) {
+        0.0
+    } else if two_line {
+        2.0
+    } else {
+        1.0
+    };
+    Vec2 { x: dim("iconW", CARD_W), y: dim("iconH", BODY_H) + strips * STRIP_H }
+}
 
 /// A wire's place on one side of a card: `index` of `total`, counted from the top or the left,
 /// and its `lane`, how many wires turn between it and the edge's own end of the fan.
@@ -67,12 +95,13 @@ fn scale_sign(v: f64) -> f64 {
 /// World position where slot `slot` of `side` meets a card inserted at `at`.
 /// ponytail: slots are spread evenly along the edge; no manual port order, and no lane
 /// assignment for legs that run collinear (the TS wireLanes).
-pub fn port_point(at: Vec2, rotation: f64, scale: Vec2, side: Side, slot: Slot) -> Vec2 {
+/// `size` is the card's own size, [`card_size`].
+pub fn port_point(at: Vec2, rotation: f64, scale: Vec2, size: Vec2, side: Side, slot: Slot) -> Vec2 {
     let d = side.dir();
     let t = slot.offset();
     // Slots run left to right along a top or bottom edge and top to bottom along a side edge.
-    let along = if d.x == 0.0 { Vec2 { x: t * CARD_W, y: 0.0 } } else { Vec2 { x: 0.0, y: -t * CARD_H } };
-    let local = Vec2 { x: d.x * CARD_W / 2.0 + along.x, y: d.y * CARD_H / 2.0 + along.y };
+    let along = if d.x == 0.0 { Vec2 { x: t * size.x, y: 0.0 } } else { Vec2 { x: 0.0, y: -t * size.y } };
+    let local = Vec2 { x: d.x * size.x / 2.0 + along.x, y: d.y * size.y / 2.0 + along.y };
     at + Vec2 { x: local.x * scale.x, y: local.y * scale.y }.rotate(rotation)
 }
 
@@ -85,12 +114,12 @@ pub struct EdgeFrame {
     half: f64,
 }
 
-pub fn edge_frame(at: Vec2, rotation: f64, scale: Vec2, side: Side) -> EdgeFrame {
+pub fn edge_frame(at: Vec2, rotation: f64, scale: Vec2, size: Vec2, side: Side) -> EdgeFrame {
     let d = side.dir();
     let signed = |v: Vec2| Vec2 { x: v.x * scale_sign(scale.x), y: v.y * scale_sign(scale.y) }.rotate(rotation);
     let (along, half) =
-        if d.x == 0.0 { (Vec2 { x: 1.0, y: 0.0 }, CARD_W / 2.0 * scale.x.abs()) } else { (Vec2 { x: 0.0, y: -1.0 }, CARD_H / 2.0 * scale.y.abs()) };
-    EdgeFrame { anchor: port_point(at, rotation, scale, side, Slot::SOLO), along: signed(along), out: signed(d), half }
+        if d.x == 0.0 { (Vec2 { x: 1.0, y: 0.0 }, size.x / 2.0 * scale.x.abs()) } else { (Vec2 { x: 0.0, y: -1.0 }, size.y / 2.0 * scale.y.abs()) };
+    EdgeFrame { anchor: port_point(at, rotation, scale, size, side, Slot::SOLO), along: signed(along), out: signed(d), half }
 }
 
 /// The wires on one edge in slot order, from where each one's far end is (the TS `portFan`):
@@ -153,7 +182,17 @@ const CURVE_MIN: f64 = 25.0;
 /// port along its side's outward direction, flattened to `CURVE_SEGMENTS` segments.
 /// ponytail: naive route, no obstacle avoidance; port the real wireRoute when overlaps matter.
 pub fn route(from: Vec2, from_side: Side, from_slot: Slot, to: Vec2, to_side: Side, to_slot: Slot, ortho: bool) -> Vec<Vec2> {
+    route_via(from, from_side, from_slot, to, to_side, to_slot, &[], ortho)
+}
+
+/// [`route`] through the waypoints `via`: right angles between them with `ortho`, otherwise a
+/// smooth curve through each.
+#[allow(clippy::too_many_arguments)]
+pub fn route_via(from: Vec2, from_side: Side, from_slot: Slot, to: Vec2, to_side: Side, to_slot: Slot, via: &[Vec2], ortho: bool) -> Vec<Vec2> {
     let (d1, d2) = (from_side.dir(), to_side.dir());
+    if !ortho && !via.is_empty() {
+        return smooth(from, d1, via, to, d2);
+    }
     if !ortho {
         let pull = (from.dist(to) * CURVE_PULL).max(CURVE_MIN);
         let c1 = from + d1 * (pull + from_slot.lane as f64 * LANE);
@@ -169,9 +208,38 @@ pub fn route(from: Vec2, from_side: Side, from_slot: Slot, to: Vec2, to_side: Si
     }
     let a = from + d1 * from_slot.stub();
     let b = to + d2 * to_slot.stub();
-    let corner = if d1.x == 0.0 { Vec2 { x: b.x, y: a.y } } else { Vec2 { x: a.x, y: b.y } };
-    let mut pts = vec![from, a, corner, b, to];
+    let mut pts = vec![from, a];
+    if via.is_empty() {
+        // The stub leaves along one axis, so the one leg starts across it.
+        pts.push(if d1.x == 0.0 { Vec2 { x: b.x, y: a.y } } else { Vec2 { x: a.x, y: b.y } });
+        pts.push(b);
+    } else {
+        // Each leg turns once: it keeps the heading while the next point lies ahead, else turns
+        // first, so a waypoint never sends the wire back along itself.
+        let (mut cur, mut heading) = (a, d1);
+        let n = via.len();
+        for (i, &next) in via.iter().chain(std::iter::once(&b)).enumerate() {
+            let along = |h: Vec2| if h.x != 0.0 { Vec2 { x: next.x, y: cur.y } } else { Vec2 { x: cur.x, y: next.y } };
+            let across = |h: Vec2| if h.x != 0.0 { Vec2 { x: cur.x, y: next.y } } else { Vec2 { x: next.x, y: cur.y } };
+            let mut corner = if heading.dot(next - cur) >= 0.0 { along(heading) } else { across(heading) };
+            // Arriving at the last stub heading away from the port would double back into it.
+            if i == n && (next - corner).dot(d2) > 1e-9 {
+                corner = if corner.near(along(heading), 1e-9) { across(heading) } else { along(heading) };
+            }
+            pts.push(corner);
+            pts.push(next);
+            let last = if next.near(corner, 1e-9) { corner - cur } else { next - corner };
+            if last.len() > 1e-9 {
+                heading = last * (1.0 / last.len());
+            }
+            cur = next;
+        }
+    }
+    pts.push(to);
     pts.dedup_by(|p, q| p.near(*q, 1e-9));
+    if !via.is_empty() {
+        return pts; // a waypoint the user placed stays, even where the wire doubles back
+    }
     // Facing stubs that overlap would run past a turn and double back; cut that spur.
     let mut out: Vec<Vec2> = Vec::with_capacity(pts.len());
     for p in pts {
@@ -194,44 +262,48 @@ pub fn block_name(product_id: &str) -> String {
     format!("CSD_{safe}")
 }
 
-/// The code as the body shows it: wrapped at words, or inside a long word, to `CODE_CHARS` a line.
-pub fn wrap_code(code: &str) -> Vec<String> {
-    let mut lines: Vec<String> = Vec::new();
-    for word in code.split_whitespace() {
-        for chunk in word.chars().collect::<Vec<_>>().chunks(CODE_CHARS) {
-            let chunk: String = chunk.iter().collect();
-            match lines.last_mut() {
-                Some(l) if l.chars().count() + 1 + chunk.chars().count() <= CODE_CHARS => {
-                    l.push(' ');
-                    l.push_str(&chunk);
-                }
-                _ => lines.push(chunk),
-            }
-        }
-    }
-    lines.truncate(CODE_LINES);
-    lines
+/// Suffix of the two-strip variant's block name; no [`block_name`] contains a `.`, so no product id can collide with it.
+const TWO_LINE_SUFFIX: &str = ".2";
+
+/// The block a card of `product_id` is an insert of: [`block_name`], or its two-strip variant.
+pub fn card_block_name(product_id: &str, two_line: bool) -> String {
+    let name = block_name(product_id);
+    if two_line { name + TWO_LINE_SUFFIX } else { name }
 }
 
-/// `label` cut with "..." to fit the strip.
-/// ponytail: widths are per character class, in the web app's 9px bold type, not measured.
-pub fn truncate_label(label: &str) -> String {
-    let width = |c: char| {
-        if c.is_lowercase() {
-            5.2
-        } else if c.is_whitespace() {
-            3.0
-        } else {
-            6.6
-        }
-    };
-    if label.chars().map(width).sum::<f64>() <= LABEL_W {
+/// Whether `block` (a name from [`card_block_name`]) is the two-strip variant.
+pub fn is_two_line_block(block: &str) -> bool {
+    block.ends_with(TWO_LINE_SUFFIX)
+}
+
+/// Estimated width of `c` in the web app's 9px bold type.
+/// ponytail: per character class, not measured.
+fn char_w(c: char) -> f64 {
+    match c {
+        'W' => 8.5,
+        'M' => 7.5,
+        c if c.is_lowercase() => 5.2,
+        c if c.is_whitespace() => 3.0,
+        _ => 6.6,
+    }
+}
+
+/// `height`, or less where `value` would be wider than the strip of a card `card_w` wide.
+fn fit_height(value: &str, card_w: f64, height: f64) -> f64 {
+    let max = card_w - (CARD_W - LABEL_W);
+    height.min(max * 9.0 / value.chars().map(char_w).sum::<f64>().max(1.0))
+}
+
+/// `label` cut with "..." to fit the strip of a card `card_w` wide.
+pub fn truncate_label(label: &str, card_w: f64) -> String {
+    let max = card_w - (CARD_W - LABEL_W);
+    if label.chars().map(char_w).sum::<f64>() <= max {
         return label.into();
     }
     let (mut used, mut out) = (8.0, String::new());
     for c in label.chars() {
-        used += width(c);
-        if used > LABEL_W {
+        used += char_w(c);
+        if used > max {
             break;
         }
         out.push(c);
@@ -358,37 +430,56 @@ impl<F: FnMut() -> Handle> Painter<'_, F> {
     }
 }
 
-/// The device symbol: paper with a rounded border in the brand colour, the product code on the
-/// body (where a picture goes later), and a bordered label strip.
-/// The hidden `PRODUCT` and `NAME` and the visible `LABEL` attribute definitions carry the
+/// The device symbol at its real size ([`card_size`]): paper with a rounded border in the brand
+/// colour, the product code on the body (where a picture goes later), and a bordered label strip.
+/// With `two_line` there is a second strip: the code in the upper one, the label in the lower.
+/// The hidden `PRODUCT`, `NAME` and `NOTES` and the visible `LABEL` attribute definitions carry the
 /// product id, the label and the label as the strip shows it. A product missing from the library
 /// gets a dashed border, drawn with linetype scale `dash_scale`.
 /// `new_handle` allocates drawing-unique handles for the block's entities (`Drawing::new_handle`).
-pub fn device_block(product: &Product, mut new_handle: impl FnMut() -> Handle, dash_scale: f64) -> Block {
-    let mut p = Painter { block: Block::new(&block_name(&product.id)), new_handle: &mut new_handle };
-    let (hw, hh) = (CARD_W / 2.0 - BORDER / 2.0, CARD_H / 2.0 - BORDER / 2.0);
+pub fn device_block(product: &Product, two_line: bool, mut new_handle: impl FnMut() -> Handle, dash_scale: f64) -> Block {
+    let builtin = is_builtin(&product.id);
+    let two_line = two_line && !builtin;
+    let mut p = Painter { block: Block::new(&card_block_name(&product.id, two_line)), new_handle: &mut new_handle };
+    let size = card_size(product, two_line);
+    let (hw, hh) = (size.x / 2.0 - BORDER / 2.0, size.y / 2.0 - BORDER / 2.0);
     let card = round_rect(-hw, -hh, hw, hh, [RADIUS - BORDER / 2.0; 4]);
     p.add(fill(card.clone()), PAPER);
     let mut border = p.entity(outline(card, BORDER), product.color);
-    if product.missing {
+    if product.missing || builtin {
         border.common.linetype = "DASHED2".into();
         border.common.ltscale = dash_scale;
     }
     p.block.entities.push(border);
-    // The strip shares the card's border and bottom corners: its top edge is the rule.
-    let strip_top = -hh + STRIP_H;
-    let r = RADIUS - BORDER / 2.0;
-    p.add(outline(round_rect(-hw, -hh, hw, strip_top, [r, r, 0.0, 0.0]), BORDER), product.color);
-    // The outline's mitred top corners leave a notch against the card's border; the rule fills it.
-    let (rx, ry) = (hw + BORDER / 2.0, BORDER / 2.0);
-    p.add(fill(round_rect(-rx, strip_top - ry, rx, strip_top + ry, [0.0; 4])), product.color);
+    let label_y = if builtin {
+        // A dashed box for a sentence: no strip, no code. The off-page connector adds a break arrow.
+        if product.id == OFF_PAGE_ID {
+            let (x, h) = (hw - 3.0, 7.0);
+            p.add(fill(vec![vertex(x - h, h, 0.0), vertex(x, 0.0, 0.0), vertex(x - h, -h, 0.0)]), product.color);
+        }
+        // The label sits above the middle, leaving the "See <page>" line under it.
+        if product.id == OFF_PAGE_ID { 3.0 } else { 0.0 }
+    } else {
+        // The strip shares the card's border and bottom corners: its top edge is the rule.
+        let strips = if two_line { 2.0 } else { 1.0 };
+        let strip_top = -hh + strips * STRIP_H;
+        let r = RADIUS - BORDER / 2.0;
+        p.add(outline(round_rect(-hw, -hh, hw, strip_top, [r, r, 0.0, 0.0]), BORDER), product.color);
+        // The outline's mitred top corners leave a notch against the card's border; the rule fills it.
+        let (rx, ry) = (hw + BORDER / 2.0, BORDER / 2.0);
+        p.add(fill(round_rect(-rx, strip_top - ry, rx, strip_top + ry, [0.0; 4])), product.color);
 
-    let lines = wrap_code(&product.code);
-    let body_mid = (hh + strip_top) / 2.0;
-    let first = body_mid + (lines.len() as f64 - 1.0) / 2.0 * (CODE_H + 3.0);
-    for (i, line) in lines.iter().enumerate() {
-        p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: first - i as f64 * (CODE_H + 3.0) }, CODE_H, line)), INK);
-    }
+        let code = canvas_code(product);
+        if two_line {
+            let rule = -hh + STRIP_H;
+            p.add(fill(round_rect(-rx, rule - ry, rx, rule + ry, [0.0; 4])), product.color);
+            p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: rule + STRIP_H / 2.0 }, fit_height(&code, size.x, LABEL_H), &code)), INK);
+        } else {
+            let body_mid = (hh + strip_top) / 2.0;
+            p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: body_mid }, fit_height(&code, size.x, CODE_H), &code)), INK);
+        }
+        -hh + STRIP_H / 2.0
+    };
     let attdef = |tag: &str, prompt: &str, at: Vec2, value: &str, invisible: bool| {
         EntityKind::AttDef(Attrib {
             tag: tag.into(),
@@ -403,7 +494,30 @@ pub fn device_block(product: &Product, mut new_handle: impl FnMut() -> Handle, d
     };
     p.add(attdef("PRODUCT", "Product", Vec2::ZERO, &product.id, true), INK);
     p.add(attdef("NAME", "Name", Vec2::ZERO, "", true), INK);
-    p.add(attdef("LABEL", "Label", Vec2 { x: 0.0, y: (-hh + strip_top) / 2.0 }, "", false), legible(product.color));
+    p.add(attdef("NOTES", "Notes", Vec2::ZERO, "", true), INK);
+    let mut label = attdef("LABEL", "Label", Vec2 { x: 0.0, y: label_y }, "", false);
+    if let (true, EntityKind::AttDef(a)) = (builtin, &mut label) {
+        // A built-in's sentence wraps inside the box where other cards cut it to their strip. The
+        // off-page connector's grows upward from just above its "See" line.
+        let mtext = MText {
+            insert: a.text.insert,
+            height: LABEL_H,
+            width: size.x - 2.0 * BOX_PAD,
+            attach: if product.id == OFF_PAGE_ID { 8 } else { 5 },
+            rotation: 0.0,
+            style: BOLD_STYLE.into(),
+            contents: String::new(),
+            line_spacing: 1.0,
+            line_spacing_exact: false,
+            columns: None,
+        };
+        a.multiline = Some(MultilineAttrib { mtext, read_as: String::new() });
+    }
+    p.add(label, legible(product.color));
+    if product.id == OFF_PAGE_ID {
+        p.add(attdef("LINKPAGE", "Page", Vec2::ZERO, "", true), INK);
+        p.add(attdef("LINKSEE", "See", Vec2 { x: 0.0, y: -LABEL_H }, "", false), legible(product.color));
+    }
     p.block
 }
 
@@ -440,10 +554,14 @@ pub fn deco_block(protocol: Protocol, deco: Deco, mut new_handle: impl FnMut() -
 /// Where a wire's decorations go: its end dots on the ports,
 /// and its pill on the middle of the longest segment (the first, when several tie), or the middle
 /// of a smooth (not `ortho`) curve.
-/// ponytail: no user-set pill position (the TS labelT) and no pill on the router's free segment.
-pub fn deco_points(path: &[Vec2], ortho: bool) -> Option<[(Deco, Vec2); 3]> {
+/// A `label_t` puts the pill that fraction of the way along the path instead.
+/// ponytail: no pill on the router's free segment.
+pub fn deco_points(path: &[Vec2], ortho: bool, label_t: Option<f64>) -> Option<[(Deco, Vec2); 3]> {
     let (a, b) = (*path.first()?, *path.get(1)?);
     let z = *path.last()?;
+    if let Some(t) = label_t {
+        return Some([(Deco::Start, a), (Deco::End, z), (Deco::Pill, point_at(path, t)?)]);
+    }
     if !ortho {
         return Some([(Deco::Start, a), (Deco::End, z), (Deco::Pill, *path.get(path.len() / 2)?)]);
     }
@@ -456,4 +574,22 @@ pub fn deco_points(path: &[Vec2], ortho: bool) -> Option<[(Deco, Vec2); 3]> {
         }
     }
     Some([(Deco::Start, a), (Deco::End, z), (Deco::Pill, (longest.0 + longest.1) * 0.5)])
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+
+    #[test]
+    fn a_ten_character_code_is_not_cut_off() {
+        for code in ["WWWWWWWWWW", "EpixFLXDRV", "MMMMMMMMMM"] {
+            for h in [CODE_H, LABEL_H] {
+                let fit = fit_height(code, CARD_W, h);
+                let w: f64 = code.chars().map(char_w).sum::<f64>() * fit / 9.0;
+                assert!(w <= LABEL_W + 1e-9, "{code} at {h}: {w}");
+            }
+        }
+        // The old strip cut this with an ellipsis though its 6 high text fits.
+        assert_eq!(fit_height("EpixFLXDRV", CARD_W, LABEL_H), LABEL_H);
+    }
 }

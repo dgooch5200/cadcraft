@@ -91,6 +91,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.panel.layers", "Layers Palette", &["Window", "Layers Palette"], None),
     ("ui.toggle.quickcalc", "QuickCalc", &["Window", "QuickCalc"], Some("Cmd+8")),
     ("ui.panel.quickcalc", "QuickCalc", &[], None),
+    ("ui.csd.schedule", "Schedules", &["Window", "Schedules"], None),
     ("ui.toggle.systemcursor", "Show System Cursor", &["View", "Accessibility", "Show System Cursor"], None),
     ("ui.animations.system", "Use System Setting", &["View", "Accessibility", "Animation Effects", "Use System Setting"], None),
     ("ui.animations.on", "On", &["View", "Accessibility", "Animation Effects", "On"], None),
@@ -159,6 +160,9 @@ fn route_ui_subsystems(app: &mut CadApp, id: &str, params: &Value) -> Option<Res
         return Some(result);
     }
     if let Some(r) = crate::csd_library::route(app, id) {
+        return Some(r);
+    }
+    if let Some(r) = crate::csd_schedule::route(app, id) {
         return Some(r);
     }
     if let Some(r) = crate::xrefs::route(app, id, params) {
@@ -492,7 +496,10 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             app.ui.start_tab = false;
             Ok(Value::Null)
         }
-        "export" | "exp" | "import" | "imp" | "publish" | "preview" | "pre" if params.is_null() && app.session.state().is_ok() => {
+        "export" | "exp" | "import" | "imp" | "publish" | "preview" | "pre" | "csd.import.cpsd" | "csd.import.lpro" | "csd.print"
+        | "csd.export.cpsd"
+            if params.is_null() && app.session.state().is_ok() =>
+        {
             return Some(crate::exchange::route(app, id));
         }
         "ui.hidepalettes" => {
