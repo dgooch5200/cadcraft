@@ -21,9 +21,14 @@ fn choices(types: &[Value], picks: &[String]) -> Value {
     Value::Object(m)
 }
 
-/// Library product ids for a row's combo: its suggestions first, then the rest, each once.
+/// Library product ids for a row's combo: its suggestions first in the matcher's order, then the rest, each once.
 fn ordered<'a>(suggestions: &'a [String], library: &'a [String]) -> (Vec<&'a str>, Vec<&'a str>) {
-    let first: Vec<&str> = library.iter().map(String::as_str).filter(|id| suggestions.iter().any(|s| s == id)).collect();
+    let mut first: Vec<&str> = Vec::new();
+    for id in suggestions.iter().map(String::as_str).filter(|id| library.iter().any(|l| l == id)) {
+        if !first.contains(&id) {
+            first.push(id);
+        }
+    }
     let rest = library.iter().map(String::as_str).filter(|id| !first.contains(id)).collect();
     (first, rest)
 }
@@ -123,9 +128,9 @@ mod tests {
     #[test]
     fn suggestions_come_first_without_duplicates() {
         let lib: Vec<String> = ["a", "b", "c", "d"].map(String::from).into();
-        let sugg: Vec<String> = ["c", "a", "zz"].map(String::from).into();
+        let sugg: Vec<String> = ["c", "a", "zz", "c"].map(String::from).into();
         let (first, rest) = ordered(&sugg, &lib);
-        assert_eq!((first, rest), (vec!["a", "c"], vec!["b", "d"]));
+        assert_eq!((first, rest), (vec!["c", "a"], vec!["b", "d"]));
     }
 
     #[test]
