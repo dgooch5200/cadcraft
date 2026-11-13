@@ -5,9 +5,9 @@ use cadcraft_csd::{Product, Protocol, builtin_products};
 use egui::{Color32, Rect, Sense, Stroke, pos2, vec2};
 use serde_json::json;
 
-use crate::CadApp;
 use crate::icons::Icon;
 use crate::theme::Tokens;
+use crate::{CadApp, Pick};
 
 const ROW_H: f32 = 46.0;
 const LIST_H: f32 = 180.0;
@@ -200,8 +200,15 @@ pub(super) fn body(app: &mut CadApp, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.add_space(8.0);
-        if ui.add_sized(vec2(ui.available_width() - 8.0, 20.0), egui::Button::new(crate::tl!("Import .cpsd…"))).clicked() {
+        let w = (ui.available_width() - 12.0) / 2.0;
+        if ui.add_sized(vec2(w, 20.0), egui::Button::new(crate::tl!("Import .cpsd…"))).clicked() {
             let _ = app.run("csd.import.cpsd", serde_json::Value::Null);
+        }
+        if ui.add_sized(vec2(w, 20.0), egui::Button::new(crate::tl!("Export .cpsd…"))).clicked() {
+            let save = |app: &mut CadApp, path: String| app.run("csd.export.cpsd", json!({ "path": path }));
+            if let Some(Err(e)) = app.pick_then(Pick::Save("drawing.cpsd".into()), save) {
+                app.session.echo(e);
+            }
         }
     });
     ui.add_space(4.0);

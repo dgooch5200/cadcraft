@@ -54,6 +54,22 @@ fn to_drawing(x: f64, y: f64) -> Option<Vec2> {
     (p.x.abs() <= MAX_COORD && p.y.abs() <= MAX_COORD).then_some(p)
 }
 
+/// The drawing (y up, page corner at the origin) to ChamSys canvas coordinates.
+pub(super) fn from_drawing(p: Vec2) -> (f64, f64) {
+    (p.x + PAGE_ORIGIN, PAGE_ORIGIN + Paper::Tabloid.size().1 - p.y)
+}
+
+/// Title block fields as (ChamSys key, `csd.project` key).
+pub(super) const TITLE_MAP: [(&str, &str); 7] = [
+    ("project", "project"),
+    ("venue", "venue"),
+    ("location", "location"),
+    ("designer", "drawnBy"),
+    ("date", "date"),
+    ("rev", "rev"),
+    ("system", "title"),
+];
+
 fn side(v: &Value, key: &str, fallback: Side) -> Side {
     match text(v, key).as_str() {
         "bottom" => Side::Bottom,
@@ -229,20 +245,12 @@ pub(super) fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     let title = file.get("titleBlock").cloned().unwrap_or(Value::Null);
-    let fields: serde_json::Map<String, Value> = [
-        ("project", "project"),
-        ("venue", "venue"),
-        ("location", "location"),
-        ("designer", "drawnBy"),
-        ("date", "date"),
-        ("rev", "rev"),
-        ("system", "title"),
-    ]
-    .into_iter()
-    .map(|(from, to)| (to.to_string(), text(&title, from)))
-    .filter(|(_, t)| !t.trim().is_empty())
-    .map(|(k, t)| (k, json!(t)))
-    .collect();
+    let fields: serde_json::Map<String, Value> = TITLE_MAP
+        .into_iter()
+        .map(|(from, to)| (to.to_string(), text(&title, from)))
+        .filter(|(_, t)| !t.trim().is_empty())
+        .map(|(k, t)| (k, json!(t)))
+        .collect();
     if !fields.is_empty() {
         sheet::run_project_set(s, &json!({ "fields": fields }))?;
     }

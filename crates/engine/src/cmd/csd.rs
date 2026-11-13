@@ -21,6 +21,7 @@ use super::curves::handle_param;
 mod arrange;
 mod connect;
 mod cpsd;
+mod cpsd_out;
 mod group;
 mod library_csv;
 mod patch;
@@ -47,6 +48,9 @@ fn own_specs() -> Vec<CommandSpec> {
             .params("{product: id of a library product, at: [x,y] (first card's centre), rows, cols: >= 1 (rows * cols <= 400), dx?, dy?: spacing (default card plus 24)} → {handles}; rows run downwards"),
         CommandSpec::new("csd.import.cpsd", "Import ChamSys Designer Project", cpsd::run_import)
             .params("{path: a .cpsd file, page?: 1-based number or id (default the first page)} → {devices, wires, unplaced, skipped: [reasons]}; builds the page's devices, wires (waypoints, label position, name), the unplaced list and the title block into the current drawing"),
+        CommandSpec::new("csd.export.cpsd", "Export ChamSys Designer Project", cpsd_out::run_export)
+            .params("{path} → {path, devices, wires, unplaced}; writes the drawing as a one-page .cpsd (devices, mounts, wires with waypoints and names, unplaced items, title block, the products they use)")
+            .noundo(),
         CommandSpec::new("csd.clear", "Clear Drawing", run_clear)
             .params("{} → {devices, wires}; removes every device, wire and wire decoration; the title block, line key and unplaced list stay"),
         CommandSpec::new("csd.display", "Card Display", run_display)

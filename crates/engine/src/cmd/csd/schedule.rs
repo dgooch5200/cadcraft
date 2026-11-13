@@ -145,7 +145,7 @@ pub(super) fn run_schedule(s: &mut Session, _p: &Value) -> Result<Value> {
     Ok(json!({ "devices": devices }))
 }
 
-fn read(d: &Drawing) -> Vec<(String, u64)> {
+pub(super) fn read(d: &Drawing) -> Vec<(String, u64)> {
     let rows: Vec<(String, u64)> = d.header.get(VAR).and_then(HVal::as_str).and_then(|t| serde_json::from_str(t).ok()).unwrap_or_default();
     rows.into_iter().take(MAX_ROWS).collect()
 }
