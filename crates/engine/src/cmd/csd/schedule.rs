@@ -335,7 +335,7 @@ fn csv(lines: &[Line]) -> String {
 }
 
 /// A titled table and footer as text on a scratch drawing, plotted by the PDF writer onto one
-/// landscape A4 page. Columns are (heading, width).
+/// landscape A4 page. Columns are (heading, width). A one-cell row is a full-width section row.
 /// ponytail: one page, so a very long list shrinks; paginate when that matters.
 pub(super) fn table_pdf(cmd: &str, title: &str, cols: &[(&str, f64)], rows: &[Vec<String>], footer: &[String]) -> Result<Vec<u8>> {
     const H: f64 = 8.0;
@@ -361,6 +361,9 @@ pub(super) fn table_pdf(cmd: &str, title: &str, cols: &[(&str, f64)], rows: &[Ve
     put(0.0, 0.0, 14.0, 400.0, title)?;
     let mut y = -28.0;
     let mut row = |cells: &[String], y: f64| -> Result<()> {
+        if let [only] = cells {
+            return put(0.0, y, H, cols.iter().map(|c| c.1).sum(), only);
+        }
         let mut x = 0.0;
         for (cell, (_, w)) in cells.iter().zip(cols) {
             put(x, y, H, w - 6.0, cell)?;

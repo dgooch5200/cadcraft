@@ -5,12 +5,23 @@ use cadcraft_engine::Session;
 use cadcraft_engine::cmd::file::{IoHooks, set_io};
 use serde_json::json;
 
+static TEXT: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
 #[test]
 fn patch_exports_a_pdf() {
     set_io(IoHooks {
         read: |_, _| Err("no reader in this test".into()),
         write: |_, _| Err("no writer in this test".into()),
-        plot: Some(|d, space, opts| cadcraft_io::plotter::plot(d, space, opts).map_err(|e| e.to_string())),
+        plot: Some(|d, space, opts| {
+            let t: Vec<String> = d
+                .space(&cadcraft_doc::Space::Model)
+                .into_iter()
+                .flat_map(|st| st.iter())
+                .filter_map(|e| if let cadcraft_doc::EntityKind::Text(t) = &e.kind { Some(t.value.clone()) } else { None })
+                .collect();
+            *TEXT.lock().unwrap() = t.join("\n");
+            cadcraft_io::plotter::plot(d, space, opts).map_err(|e| e.to_string())
+        }),
     });
     let mut s = Session::new();
     let fix = Product { id: "FIX".into(), name: "Spot".into(), code: "FIX".into(), channels: 20, ..Product::default() };
@@ -22,4 +33,5 @@ fn patch_exports_a_pdf() {
     let bytes = std::fs::read(&path).unwrap();
     let _ = std::fs::remove_file(&path);
     assert!(bytes.starts_with(b"%PDF-") && bytes.len() > 500);
+    assert!(TEXT.lock().unwrap().contains("Universe 1  20 of 512 channels used"));
 }

@@ -368,22 +368,33 @@ fn universes_text(plan: &Plan) -> String {
     format!("Universes used: {}{}", plan.used, if plan.budget > 0 { format!(" of {} available", plan.budget) } else { String::new() })
 }
 
-/// The patch page: a header row per universe with its channels used. A fixture spanning several
-/// universes is listed under its first, with one note naming the last universe it reaches.
-fn html(s: &Session, p: &Value, plan: &Plan) -> String {
-    use super::html::{footer_lines, group_row, page, row};
+/// Rows grouped by universe, ascending: (universe, header title, header note, row indices).
+fn universe_groups(plan: &Plan) -> Vec<(u32, String, String, Vec<usize>)> {
     use std::collections::BTreeMap;
     let size = u64::from(UNIVERSE_SIZE);
-    let span = |e: &Entry, a: u32| (u64::from(a).saturating_sub(1) + u64::from(e.channels)).div_ceil(size).max(1);
     let mut by_uni: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
     for (i, (_, u, _)) in plan.rows.iter().enumerate() {
         by_uni.entry(*u).or_default().push(i);
     }
+    by_uni
+        .into_iter()
+        .map(|(u, list)| {
+            let used: u64 = list.iter().filter_map(|&i| plan.rows.get(i)).map(|(e, _, _)| u64::from(e.channels).min(size)).sum();
+            (u, format!("Universe {u}"), format!("{used} of {size} channels used"), list)
+        })
+        .collect()
+}
+
+/// The patch page: a header row per universe with its channels used. A fixture spanning several
+/// universes is listed under its first, with one note naming the last universe it reaches.
+fn html(s: &Session, p: &Value, plan: &Plan) -> String {
+    use super::html::{footer_lines, group_row, page, row};
+    let size = u64::from(UNIVERSE_SIZE);
+    let span = |e: &Entry, a: u32| (u64::from(a).saturating_sub(1) + u64::from(e.channels)).div_ceil(size).max(1);
     let mut body = String::new();
-    for (&u, list) in &by_uni {
-        let used: u64 = list.iter().filter_map(|&i| plan.rows.get(i)).map(|(e, _, _)| u64::from(e.channels).min(size)).sum();
-        body.push_str(&group_row("group", 6, &format!("Universe {u}"), &format!("{used} of {size} channels used")));
-        for &i in list {
+    for (u, title, note, list) in universe_groups(plan) {
+        body.push_str(&group_row("group", 6, &title, &note));
+        for i in list {
             let Some((e, _, a)) = plan.rows.get(i) else { continue };
             let last = (a + e.channels).saturating_sub(1).min(UNIVERSE_SIZE);
             let n = span(e, *a);
@@ -410,24 +421,24 @@ fn html(s: &Session, p: &Value, plan: &Plan) -> String {
 fn pdf(s: &Session, p: &Value, plan: &Plan) -> Result<Vec<u8>> {
     const COLS: [(&str, f64); 7] =
         [("DMX", 70.0), ("Head", 40.0), ("Fixture", 200.0), ("Product", 220.0), ("Mode", 120.0), ("Ch", 40.0), ("Addresses", 110.0)];
-    let rows: Vec<Vec<String>> = plan
-        .rows
-        .iter()
-        .enumerate()
-        .map(|(n, (e, u, a))| {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for (_, title, note, list) in universe_groups(plan) {
+        rows.push(vec![format!("{title}  {note}")]);
+        for i in list {
+            let Some((e, u, a)) = plan.rows.get(i) else { continue };
             let last = a.saturating_add(e.channels).saturating_sub(1).min(UNIVERSE_SIZE);
             let carried = e.carried_by.as_ref().map(|c| format!(" (accessory of {c})")).unwrap_or_default();
-            vec![
+            rows.push(vec![
                 format!("{u}-{a}"),
-                (n + 1).to_string(),
+                (i + 1).to_string(),
                 format!("{}{carried}", e.label),
                 format!("{} - {}", e.product.code, e.product.name),
                 e.mode_text(),
                 e.channels.to_string(),
                 format!("{a}-{last}"),
-            ]
-        })
-        .collect();
+            ]);
+        }
+    }
     let mut footer = super::html::footer_lines(s, p);
     footer.insert(0, universes_text(plan));
     schedule::table_pdf("csd.patch.export", "DMX Patch", &COLS, &rows, &footer)
