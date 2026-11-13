@@ -955,6 +955,26 @@ fn align_lines_up_card_edges_and_wires_follow() {
 }
 
 #[test]
+fn arranging_a_selection_moves_mounted_devices_with_their_host() {
+    let mut s = crate::cmd::csd::units::px_session();
+    let a = place_at(&mut s, CONSOLE, 0.0, 0.0);
+    let b = place_at(&mut s, CONSOLE, 300.0, 200.0);
+    let c = place_at(&mut s, CONSOLE, 600.0, 400.0);
+    let ia = place_at(&mut s, NODE, 10.0, 5.0);
+    let ib = place_at(&mut s, NODE, 310.0, 205.0);
+    for (child, host) in [(ia, a), (ib, b)] {
+        s.execute("csd.device.set", &json!({ "handle": child.hex(), "mount": host.hex() })).unwrap();
+    }
+    let all = json!([a.hex(), ia.hex(), b.hex(), ib.hex(), c.hex()]);
+    s.execute("csd.align", &json!({ "mode": "left", "handles": all })).unwrap();
+    assert_eq!(at(&s, b), (0.0, 200.0));
+    assert_eq!(at(&s, ia), (10.0, 5.0));
+    assert_eq!(at(&s, ib), (10.0, 205.0));
+    s.execute("csd.distribute", &json!({ "axis": "y", "handles": all })).unwrap();
+    assert_eq!(at(&s, ib), (10.0, 205.0));
+}
+
+#[test]
 fn distribute_equalises_gaps_and_keeps_the_ends() {
     let mut s = crate::cmd::csd::units::px_session();
     let a = place_at(&mut s, CONSOLE, 0.0, 0.0);
