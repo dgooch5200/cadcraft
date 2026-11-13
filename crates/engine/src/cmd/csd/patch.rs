@@ -60,6 +60,8 @@ struct Entry {
     mode: Option<String>,
     channels: u32,
     at: [f64; 2],
+    /// 0-based sheet holding the device; None when unplaced or off every sheet.
+    page: Option<usize>,
 }
 
 impl Entry {
@@ -72,6 +74,7 @@ impl Entry {
 fn entries(s: &Session) -> Result<Vec<Entry>> {
     let d = s.doc()?;
     let store = d.space(&s.space()).ok_or_else(|| EngineError::Other("no such space".into()))?;
+    let pages = super::page::pages(s);
     let mut left = MAX_ROWS;
     Ok(store
         .iter()
@@ -83,10 +86,11 @@ fn entries(s: &Session) -> Result<Vec<Entry>> {
             }
             let label = attr(i, "NAME").to_string();
             let mut dev = entry(Some(e.handle), label.clone(), product, attr(i, MODE_TAG), [i.insert.x, i.insert.y]);
+            dev.page = super::page::page_of(d, &pages, i.insert.xy());
             for (id, qty) in accessories_of(i) {
                 let part = resolve(&s.csd_library, &id).into_owned();
                 if !is_builtin(&part.id) {
-                    let a = Entry { carried_by: Some(label.clone()), ..entry(None, part.code.clone(), part, "", dev.at) };
+                    let a = Entry { carried_by: Some(label.clone()), page: dev.page, ..entry(None, part.code.clone(), part, "", dev.at) };
                     let n = units(qty).min(left);
                     left -= n;
                     dev.accessories.extend(std::iter::repeat_n(a, n));
@@ -110,7 +114,7 @@ fn entry(handle: Option<Handle>, label: String, product: Product, mode: &str, at
         None => widest(&modes).map(|x| x.1),
     }
     .unwrap_or(product.channels);
-    Entry { handle, carried_by: None, accessories: Vec::new(), label, product, modes, mode, channels, at }
+    Entry { handle, carried_by: None, accessories: Vec::new(), label, product, modes, mode, channels, at, page: None }
 }
 
 /// "2" < "10": digit runs compare as numbers, the rest case-insensitively.
@@ -141,8 +145,9 @@ fn natural(a: &str, b: &str) -> Ordering {
 }
 
 /// Orders `v` for patching: `drawing` keeps the drawing's order; `position` reads rows top to
-/// bottom (a card height apart is another row) and each row left to right.
-fn order(v: &mut [Entry], by: &str, cmd: &str) -> Result<()> {
+/// bottom (a card height apart is another row) and each row left to right. With two or more pages
+/// every order but `drawing` groups by page first.
+fn order(v: &mut [Entry], by: &str, pages: usize, cmd: &str) -> Result<()> {
     match by {
         "drawing" => {}
         "name" => v.sort_by(|a, b| natural(&a.label, &b.label)),
@@ -152,6 +157,10 @@ fn order(v: &mut [Entry], by: &str, cmd: &str) -> Result<()> {
             v.sort_by(|a, b| band(a).total_cmp(&band(b)).then_with(|| a.at[0].total_cmp(&b.at[0])));
         }
         _ => return Err(bad(cmd, "`order` must be drawing, name, product or position")),
+    }
+    // Stable, so the chosen order holds within each page; off-sheet devices trail.
+    if by != "drawing" && pages > 1 {
+        v.sort_by_key(|e| e.page.unwrap_or(usize::MAX));
     }
     Ok(())
 }
@@ -206,7 +215,7 @@ fn plan(s: &Session, by: &str, cmd: &str) -> Result<Plan> {
     }
     // What the controllers on the drawing can originate.
     let budget = devs.iter().map(|e| e.product.universes).fold(0u32, u32::saturating_add);
-    order(&mut devs, by, cmd)?;
+    order(&mut devs, by, super::page::pages(s).len(), cmd)?;
     // Accessories follow their device and products not yet drawn come last, a unit each: four
     // fixtures need four addresses.
     let mut all: Vec<Entry> =
@@ -238,7 +247,7 @@ pub(super) fn run_patch(s: &mut Session, p: &Value) -> Result<Value> {
             json!({
                 "handle": e.handle.map(|h| h.hex()), "carriedBy": e.carried_by, "label": e.label, "product": e.product.id, "name": e.product.name, "mode": e.mode,
                 "assumedMode": e.mode_text(), "modes": e.modes.iter().map(|m| m.0.as_str()).collect::<Vec<_>>(),
-                "channels": e.channels, "universe": universe, "address": address,
+                "channels": e.channels, "page": e.page.map(|p| p + 1), "universe": universe, "address": address,
             })
         })
         .collect();

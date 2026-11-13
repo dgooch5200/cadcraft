@@ -256,3 +256,20 @@ fn mode_channels_are_capped_and_csv_quotes_carriage_returns() {
     assert_eq!(parse_modes(&p), [("Big".to_string(), MAX_MODE_CHANNELS)]);
     assert_eq!(quoted("a\rb".into()), "\"a\rb\"");
 }
+
+#[test]
+fn with_two_pages_every_order_but_drawing_groups_by_page_and_unplaced_trail() {
+    let mut s = session();
+    s.execute("csd.page.add", &json!({})).unwrap();
+    place(&mut s, "PLAIN", [2000.0, 500.0], "A");
+    place(&mut s, "PLAIN", [300.0, 500.0], "B");
+    place(&mut s, "PLAIN", [100.0, 500.0], "C");
+    s.execute("csd.unplaced.add", &json!({ "product": "PLAIN", "qty": 1 })).unwrap();
+    let got = |s: &mut Session, o: &str| {
+        let v = s.execute("csd.patch", &json!({ "order": o })).unwrap();
+        v["rows"].as_array().unwrap().iter().map(|r| format!("{}:{}", r["label"].as_str().unwrap(), r["page"])).collect::<Vec<_>>()
+    };
+    assert_eq!(got(&mut s, "drawing"), ["A:2", "B:1", "C:1", "PLAIN:null"]);
+    assert_eq!(got(&mut s, "name"), ["B:1", "C:1", "A:2", "PLAIN:null"]);
+    assert_eq!(got(&mut s, "position"), ["C:1", "B:1", "A:2", "PLAIN:null"]);
+}
