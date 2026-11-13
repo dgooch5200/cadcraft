@@ -18,7 +18,7 @@ mod tests;
 /// Header variable holding the unplaced list as JSON `[[product id, qty], ...]`.
 const VAR: &str = "CSDUNPLACED";
 const MAX_ROWS: usize = 1000;
-const MAX_QTY: u64 = 100_000;
+pub(super) const MAX_QTY: u64 = 100_000;
 
 /// What the lists show of a product.
 struct Prod {
@@ -154,7 +154,7 @@ pub(super) fn run_schedule(s: &mut Session, _p: &Value) -> Result<Value> {
 
 pub(super) fn read(d: &Drawing) -> Vec<(String, u64)> {
     let rows: Vec<(String, u64)> = d.header.get(VAR).and_then(HVal::as_str).and_then(|t| serde_json::from_str(t).ok()).unwrap_or_default();
-    rows.into_iter().take(MAX_ROWS).collect()
+    rows.into_iter().take(MAX_ROWS).map(|(id, q)| (id, q.min(MAX_QTY))).collect()
 }
 
 fn write(d: &mut Drawing, rows: &[(String, u64)]) {
@@ -214,7 +214,7 @@ pub(super) fn run_unplaced_add(s: &mut Session, p: &Value) -> Result<Value> {
     let index = match rows.iter().position(|(r, _)| *r == id) {
         Some(i) => {
             if let Some(r) = rows.get_mut(i) {
-                r.1 = (r.1 + qty).min(MAX_QTY);
+                r.1 = r.1.saturating_add(qty).min(MAX_QTY);
             }
             i
         }
@@ -270,7 +270,7 @@ fn bom(s: &Session) -> Result<Vec<Line>> {
     let mut by_id: BTreeMap<String, Line> = BTreeMap::new();
     let mut add = |prod: Prod, qty: u64, label: &str| {
         let line = by_id.entry(prod.id.clone()).or_insert_with(|| Line { prod, qty: 0, labels: Vec::new() });
-        line.qty += qty;
+        line.qty = line.qty.saturating_add(qty);
         let label = label.trim();
         if !label.is_empty() && !line.labels.iter().any(|l| l == label) {
             line.labels.push(label.to_string());

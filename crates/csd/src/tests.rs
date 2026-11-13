@@ -408,6 +408,28 @@ fn waypoints_label_and_name_round_trip_and_old_wires_still_read() {
 }
 
 #[test]
+fn waypoints_beyond_the_coordinate_bound_are_dropped() {
+    let mut x = link(1, 2, Protocol::Network).to_xdata();
+    x.extend(["pt:1e308,0", "pt:0,-1e8", "pt:10,20"].map(|v| RawTag { code: 1000, value: v.into() }));
+    let read = WireLink::from_xdata(&x).unwrap();
+    assert_eq!(read.points, [Vec2 { x: 10.0, y: 20.0 }]);
+}
+
+#[test]
+fn long_poe_and_rule_walks_stay_fast() {
+    let net = [(Protocol::Network, 0, 4)];
+    let supply = Product { poe_port_watts: 6000.0, ..prod(&net) };
+    let lamp = Product { poe_watts: 0.001, ..prod(&net) };
+    let n = 30_000u64;
+    let devs: Vec<(Handle, &Product)> = (1..=n).map(|i| (Handle(i), if i == 1 { &supply } else { &lamp })).collect();
+    let links: Vec<WireLink> = (1..n).map(|i| link(i, i + 1, Protocol::Network)).collect();
+    let start = std::time::Instant::now();
+    let _ = poe_verdict(&devs, &links, Handle(n), Handle(n - 1), 0.0);
+    let _ = can_connect(&devs, &links, &link(n - 1, n, Protocol::Network));
+    assert!(start.elapsed().as_secs() < 5, "{:?}", start.elapsed());
+}
+
+#[test]
 fn routes_pass_through_waypoints_in_both_modes() {
     let (a, b) = (Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 100.0, y: 70.0 });
     let via = [Vec2 { x: 40.0, y: 120.0 }, Vec2 { x: 60.0, y: -50.0 }];

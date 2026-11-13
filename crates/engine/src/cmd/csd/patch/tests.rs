@@ -221,3 +221,38 @@ fn the_patch_order_and_addressing_switch_are_saved_with_the_drawing() {
     s.execute("csd.patch.setup", &json!({ "order": "drawing", "addressing": true })).unwrap();
     assert_eq!(s.doc().unwrap().header.get("CSDPATCHORDER"), None);
 }
+
+#[test]
+fn huge_quantities_are_clamped_and_never_expanded_past_the_row_cap() {
+    let mut s = session();
+    let h = place(&mut s, "FIX", [0.0, 0.0], "A");
+    let accs: Vec<(&str, u64)> = (0..10).map(|_| ("PLAIN", 100_000)).collect();
+    s.doc_mut()
+        .unwrap()
+        .modify_entity(h, |e| {
+            if let EntityKind::Insert(i) = &mut e.kind {
+                crate::cmd::csd::put_attr(i, "ACCS", serde_json::to_string(&accs).unwrap_or_default());
+            }
+        })
+        .unwrap();
+    let unplaced: Vec<(&str, u64)> = vec![("PLAIN", u64::MAX); 5];
+    s.doc_mut().unwrap().header.set_str("CSDUNPLACED", &serde_json::to_string(&unplaced).unwrap_or_default());
+    assert!(schedule::read(s.doc().unwrap()).iter().all(|r| r.1 <= schedule::MAX_QTY));
+    assert!(entries(&s).unwrap().iter().map(|e| e.accessories.len()).sum::<usize>() <= MAX_ROWS);
+    assert!(rows(&mut s).len() <= MAX_ROWS);
+}
+
+#[test]
+fn unplaced_add_onto_a_saturated_row_does_not_overflow() {
+    let mut s = session();
+    s.doc_mut().unwrap().header.set_str("CSDUNPLACED", &format!("[[\"PLAIN\",{}]]", u64::MAX));
+    s.execute("csd.unplaced.add", &json!({ "product": "PLAIN", "qty": 5 })).unwrap();
+    assert_eq!(schedule::read(s.doc().unwrap()), [("PLAIN".to_string(), schedule::MAX_QTY)]);
+}
+
+#[test]
+fn mode_channels_are_capped_and_csv_quotes_carriage_returns() {
+    let p = prod("X", "X", "Big:4000000000", 0, 0);
+    assert_eq!(parse_modes(&p), [("Big".to_string(), MAX_MODE_CHANNELS)]);
+    assert_eq!(quoted("a\rb".into()), "\"a\rb\"");
+}

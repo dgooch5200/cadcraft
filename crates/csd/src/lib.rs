@@ -214,6 +214,8 @@ pub fn used(links: &[WireLink], dev: Handle, p: Protocol) -> usize {
 
 /// The most waypoints a wire keeps; more in a file are dropped.
 pub const MAX_WIRE_POINTS: usize = 64;
+/// The largest coordinate a waypoint may take; beyond it the wire geometry overflows to NaN.
+pub const MAX_COORD: f64 = 1.0e7;
 const MAX_NAME_CHARS: usize = 120;
 
 /// A wire's two ends and its hand-set shape, stored in the polyline's xdata. The ends come first
@@ -268,7 +270,7 @@ impl WireLink {
         for t in v {
             if let Some(pt) = t.strip_prefix("pt:") {
                 let parsed = pt.split_once(',').and_then(|(x, y)| Some((x.parse::<f64>().ok()?, y.parse::<f64>().ok()?)));
-                if let Some((x, y)) = parsed.filter(|(x, y)| x.is_finite() && y.is_finite())
+                if let Some((x, y)) = parsed.filter(|(x, y)| x.abs() <= MAX_COORD && y.abs() <= MAX_COORD)
                     && link.points.len() < MAX_WIRE_POINTS
                 {
                     link.points.push(Vec2 { x, y });

@@ -719,6 +719,7 @@ fn run_replace(s: &mut Session, p: &Value) -> Result<Value> {
     let name = ensure_device_block(s, product, false)?;
     let two_name = ensure_device_block(s, product, true)?;
     let d = s.doc_mut()?;
+    let (blk, two_blk) = (d.block(&name).cloned(), d.block(&two_name).cloned());
     let mut replaced = 0;
     for h in hs {
         d.modify_entity(h, |e| {
@@ -731,6 +732,11 @@ fn run_replace(s: &mut Session, p: &Value) -> Result<Value> {
                     put_attr(i, "TWOLINE", String::new());
                 }
                 i.block = if two { two_name.clone() } else { name.clone() };
+                let label = strip_text(product, two, attr(i, "NAME"));
+                put_attr(i, "LABEL", label);
+                if let Some(blk) = if two { &two_blk } else { &blk } {
+                    fit_attribs(blk, i);
+                }
                 replaced += 1;
             }
         })?;
@@ -766,7 +772,7 @@ const MAX_ACCESSORY_QTY: u64 = 100_000;
 /// The accessories a device carries, as `(product id, qty)`; the `ACCS` attribute holds JSON `[[id, qty], ...]`.
 fn accessories_of(i: &Insert) -> Vec<(String, u64)> {
     let rows: Vec<(String, u64)> = serde_json::from_str(attr(i, "ACCS")).unwrap_or_default();
-    rows.into_iter().filter(|r| r.1 > 0).take(MAX_ACCESSORY_LINES).collect()
+    rows.into_iter().filter(|r| r.1 > 0).take(MAX_ACCESSORY_LINES).map(|(id, q)| (id, q.min(schedule::MAX_QTY))).collect()
 }
 
 const MAX_LINK_PAGE_CHARS: usize = 120;

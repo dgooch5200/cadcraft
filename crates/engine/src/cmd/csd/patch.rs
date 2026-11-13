@@ -24,6 +24,8 @@ const ADDRESSING_VAR: &str = "CSDADDRESSING";
 const ORDERS: [&str; 4] = ["drawing", "name", "product", "position"];
 /// Accessory and unplaced quantities are user-sized; this bounds the rows they expand to.
 const MAX_ROWS: usize = 20_000;
+/// Matches the library loader's channel cap.
+const MAX_MODE_CHANNELS: u32 = 1_000_000;
 
 /// A product's modes from its `modes` cell (`17ch:17, 34ch:34`): the last colon splits name from
 /// channels, and an entry with no name or no positive whole number is dropped.
@@ -32,7 +34,7 @@ fn parse_modes(p: &Product) -> Vec<(String, u32)> {
         .split(',')
         .filter_map(|e| {
             let (name, n) = e.rsplit_once(':')?;
-            let n = n.trim().parse::<u32>().ok().filter(|&n| n > 0)?;
+            let n = n.trim().parse::<u32>().ok().filter(|&n| n > 0)?.min(MAX_MODE_CHANNELS);
             let name = name.trim();
             (!name.is_empty()).then(|| (name.to_string(), n))
         })
@@ -70,6 +72,7 @@ impl Entry {
 fn entries(s: &Session) -> Result<Vec<Entry>> {
     let d = s.doc()?;
     let store = d.space(&s.space()).ok_or_else(|| EngineError::Other("no such space".into()))?;
+    let mut left = MAX_ROWS;
     Ok(store
         .iter()
         .filter_map(|e| {
@@ -84,7 +87,9 @@ fn entries(s: &Session) -> Result<Vec<Entry>> {
                 let part = resolve(&s.csd_library, &id).into_owned();
                 if !is_builtin(&part.id) {
                     let a = Entry { carried_by: Some(label.clone()), ..entry(None, part.code.clone(), part, "", dev.at) };
-                    dev.accessories.extend(std::iter::repeat_n(a, units(qty)));
+                    let n = units(qty).min(left);
+                    left -= n;
+                    dev.accessories.extend(std::iter::repeat_n(a, n));
                 }
             }
             Some(dev)
@@ -209,7 +214,7 @@ fn plan(s: &Session, by: &str, cmd: &str) -> Result<Plan> {
     for (id, qty) in schedule::read(s.doc()?) {
         let part = resolve(&s.csd_library, &id).into_owned();
         if !is_builtin(&part.id) {
-            all.extend(std::iter::repeat_n(entry(None, part.code.clone(), part, "", [0.0, 0.0]), units(qty)));
+            all.extend(std::iter::repeat_n(entry(None, part.code.clone(), part, "", [0.0, 0.0]), units(qty).min(MAX_ROWS.saturating_sub(all.len()))));
         }
     }
     all.truncate(MAX_ROWS);
@@ -312,7 +317,7 @@ fn ascii(t: &str) -> String {
 }
 
 fn quoted(t: String) -> String {
-    if t.contains([',', '"', '\n']) { format!("\"{}\"", t.replace('"', "\"\"")) } else { t }
+    if t.contains([',', '"', '\n', '\r']) { format!("\"{}\"", t.replace('"', "\"\"")) } else { t }
 }
 
 /// MagicQ's Fixture Patch CSV: every field but the last is followed by a space before its comma,
@@ -419,7 +424,7 @@ fn pdf(s: &Session, p: &Value, plan: &Plan) -> Result<Vec<u8>> {
         .iter()
         .enumerate()
         .map(|(n, (e, u, a))| {
-            let last = (a + e.channels).saturating_sub(1).min(UNIVERSE_SIZE);
+            let last = a.saturating_add(e.channels).saturating_sub(1).min(UNIVERSE_SIZE);
             let carried = e.carried_by.as_ref().map(|c| format!(" (accessory of {c})")).unwrap_or_default();
             vec![
                 format!("{u}-{a}"),

@@ -1,7 +1,7 @@
 //! Cable waypoints, straightening, label position and names. Each command edits the wire's
 //! [`WireLink`]; the post-command pass re-routes the polyline and moves the pill.
 
-use cadcraft_csd::{MAX_WIRE_POINTS, WireLink, fraction_near, nearest_leg};
+use cadcraft_csd::{MAX_COORD, MAX_WIRE_POINTS, WireLink, fraction_near, nearest_leg};
 use cadcraft_doc::Handle;
 use cadcraft_geom::Vec2;
 use serde_json::{Value, json};
@@ -58,6 +58,15 @@ fn snapped(s: &Session, at: Vec2) -> Vec2 {
     if s.settings.snapmode { Vec2::new(round(at.x, unit.x), round(at.y, unit.y)) } else { at }
 }
 
+/// A waypoint parameter; a coordinate past `MAX_COORD` would overflow the wire geometry.
+fn waypoint(s: &Session, cmd: &str, p: &Value, key: &str) -> Result<Vec2> {
+    let v = point_req(cmd, p, key)?;
+    if v.x.abs() > MAX_COORD || v.y.abs() > MAX_COORD {
+        return Err(bad(cmd, format!("`{key}` must be within {MAX_COORD} of the origin")));
+    }
+    Ok(snapped(s, v))
+}
+
 fn index_param(cmd: &str, p: &Value, link: &WireLink) -> Result<usize> {
     let i = p.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok());
     i.filter(|i| *i < link.points.len()).ok_or_else(|| bad(cmd, "`index` is not a waypoint of this wire"))
@@ -91,7 +100,7 @@ fn run_hit(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_add(s: &mut Session, p: &Value) -> Result<Value> {
     let (h, mut link) = wire_param(s, "csd.wire.point.add", p)?;
-    let at = snapped(s, point_req("csd.wire.point.add", p, "at")?);
+    let at = waypoint(s, "csd.wire.point.add", p, "at")?;
     if link.points.len() >= MAX_WIRE_POINTS {
         return Err(bad("csd.wire.point.add", format!("a wire keeps at most {MAX_WIRE_POINTS} waypoints")));
     }
@@ -126,7 +135,7 @@ fn run_remove(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_move(s: &mut Session, p: &Value) -> Result<Value> {
     let (h, mut link) = wire_param(s, "csd.wire.point.move", p)?;
     let index = index_param("csd.wire.point.move", p, &link)?;
-    let to = snapped(s, point_req("csd.wire.point.move", p, "to")?);
+    let to = waypoint(s, "csd.wire.point.move", p, "to")?;
     if let Some(pt) = link.points.get_mut(index) {
         *pt = to;
     }
@@ -137,7 +146,7 @@ fn run_move(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_route(s: &mut Session, p: &Value) -> Result<Value> {
     let (h, mut link) = wire_param(s, "csd.wire.route", p)?;
     let index = index_param("csd.wire.route", p, &link)?;
-    let to = snapped(s, point_req("csd.wire.route", p, "to")?);
+    let to = waypoint(s, "csd.wire.route", p, "to")?;
     if let Some(pt) = link.points.get_mut(index) {
         *pt = to;
     }

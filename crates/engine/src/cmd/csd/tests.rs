@@ -659,6 +659,37 @@ fn size_resizes_every_listed_device_and_the_wire_follows() {
 }
 
 #[test]
+fn waypoints_past_the_coordinate_bound_are_refused() {
+    let (mut s, _, _, w) = setup();
+    wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [100, 150] }));
+    for id in ["csd.wire.point.add", "csd.wire.point.move", "csd.wire.route"] {
+        let p = json!({ "wire": w.hex(), "at": [1e308, 0], "to": [0, 1e308], "index": 0 });
+        assert!(s.execute(id, &p).is_err(), "{id}");
+    }
+    assert!(verts(&s, w).iter().all(|v| v.x.is_finite() && v.y.is_finite()));
+}
+
+#[test]
+fn replace_refits_the_label_to_the_new_card() {
+    let mut s = Session::new();
+    let mut lib = (*s.csd_library).clone();
+    let node = lib.iter().find(|p| p.id == NODE).unwrap().clone();
+    let mut wide = cadcraft_csd::Product { id: "wide".into(), ..node };
+    wide.extra.insert("iconW".into(), json!(400));
+    lib.push(wide);
+    s.csd_library = std::sync::Arc::new(lib);
+    let long = "A very long device label that cannot fit";
+    let label = |s: &Session, h: Handle| crate::cmd::csd::attr(&insert(s, h), "LABEL").to_string();
+    let place = |s: &mut Session, p: &str| handle(&s.execute("csd.place", &json!({ "product": p, "at": [0, 0], "label": long })).unwrap());
+    let (a, b) = (place(&mut s, NODE), place(&mut s, "wide"));
+    let (want_a, want_b) = (label(&s, a), label(&s, b));
+    assert_ne!(want_a, want_b, "the two cards must differ in width for this test");
+    s.execute("csd.replace", &json!({ "product": "wide", "handles": [a.hex()] })).unwrap();
+    s.execute("csd.replace", &json!({ "product": NODE, "handles": [b.hex()] })).unwrap();
+    assert_eq!((label(&s, a), label(&s, b)), (want_b, want_a));
+}
+
+#[test]
 fn replace_swaps_the_product_on_the_selection_and_skips_the_same_one() {
     let (mut s, a, b, _) = setup();
     s.set_selection(vec![a, b]);
