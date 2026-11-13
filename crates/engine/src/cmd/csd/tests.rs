@@ -158,7 +158,7 @@ fn hostile_xdata_is_left_alone() {
     let tag = |code, v: &str| RawTag { code, value: v.into() };
     let bad_sets = [
         vec![tag(1001, "CSD"), tag(1000, "zz"), tag(1000, "garbage"), tag(1000, "")],
-        WireLink { from: ghost, from_side: Side::Top, to: ghost, to_side: Side::Left, protocol: cadcraft_csd::Protocol::Dmx }.to_xdata(),
+        WireLink::new(ghost, Side::Top, ghost, Side::Left, cadcraft_csd::Protocol::Dmx).to_xdata(),
         vec![tag(1001, "CSD")],
     ];
     for xdata in bad_sets {
@@ -879,4 +879,146 @@ fn device_at_finds_the_card_under_a_point() {
     let hit = |s: &mut Session, x: f64, y: f64| s.execute("csd.device.at", &json!({ "at": [x, y] })).unwrap()["handle"].clone();
     assert_eq!(hit(&mut s, 30.0, 30.0), json!(a.hex()));
     assert_eq!(hit(&mut s, 90.0, 0.0), json!(null));
+}
+
+fn link_of(s: &Session, w: Handle) -> WireLink {
+    WireLink::from_xdata(&s.doc().unwrap().entity(w).unwrap().common.xdata).unwrap()
+}
+
+fn wire_cmd(s: &mut Session, id: &str, p: Value) -> Value {
+    s.execute(id, &p).unwrap()
+}
+
+fn passes_through(v: &[Vec2], at: Vec2) -> bool {
+    v.iter().any(|p| p.near(at, 1e-6))
+}
+
+fn xy(v: Vec2) -> [f64; 2] {
+    [v.x, v.y]
+}
+
+#[test]
+fn waypoints_add_move_remove_and_straighten_in_ortho() {
+    let (mut s, _, _, w) = setup();
+    let straight = verts(&s, w);
+    let r = wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [100, 150] }));
+    assert_eq!(r["index"], 0);
+    assert_eq!(link_of(&s, w).points, [Vec2::new(100.0, 150.0)]);
+    assert!(passes_through(&verts(&s, w), Vec2::new(100.0, 150.0)));
+    assert_orthogonal(&verts(&s, w));
+    assert_eq!(wire_cmd(&mut s, "csd.wire.bent", json!({}))["count"], 1);
+
+    // A second point near the far end lands after the first.
+    assert_eq!(wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [180, 150] }))["index"], 1);
+    wire_cmd(&mut s, "csd.wire.point.move", json!({ "wire": w.hex(), "index": 0, "to": [90, -80] }));
+    assert!(passes_through(&verts(&s, w), Vec2::new(90.0, -80.0)));
+    wire_cmd(&mut s, "csd.wire.point.remove", json!({ "wire": w.hex(), "at": [181, 149] }));
+    assert_eq!(link_of(&s, w).points, [Vec2::new(90.0, -80.0)]);
+    wire_cmd(&mut s, "csd.wire.point.remove", json!({ "wire": w.hex(), "index": 0 }));
+    assert_eq!(verts(&s, w), straight);
+
+    wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [100, 150] }));
+    assert_eq!(wire_cmd(&mut s, "csd.wire.straighten", json!({}))["count"], 1);
+    assert_eq!(verts(&s, w), straight);
+    assert_eq!(wire_cmd(&mut s, "csd.wire.bent", json!({}))["count"], 0);
+    s.execute("undo", &json!({})).unwrap();
+    assert_eq!(link_of(&s, w).points.len(), 1, "straighten is one undo step");
+}
+
+#[test]
+fn waypoint_errors_change_nothing() {
+    let (mut s, _, _, w) = setup();
+    for (id, p) in [
+        ("csd.wire.point.move", json!({ "wire": w.hex(), "index": 0, "to": [1, 1] })),
+        ("csd.wire.point.remove", json!({ "wire": w.hex(), "index": 3 })),
+        ("csd.wire.point.remove", json!({ "wire": w.hex(), "at": [5, 5] })),
+        ("csd.wire.point.add", json!({ "wire": "FFFF", "at": [5, 5] })),
+        ("csd.wire.label", json!({ "wire": w.hex(), "mode": "segment" })),
+    ] {
+        assert!(s.execute(id, &p).is_err(), "{id}");
+    }
+    assert!(link_of(&s, w).points.is_empty());
+}
+
+#[test]
+fn smooth_wires_pass_through_their_waypoints() {
+    let mut s = Session::new();
+    let a = handle(&s.execute("csd.place", &json!({ "product": CONSOLE, "at": [0, 0] })).unwrap());
+    let b = handle(&s.execute("csd.place", &json!({ "product": NODE, "at": [200, 60] })).unwrap());
+    let w = connect(&mut s, a, b).unwrap();
+    let plain = polyline(&s, w);
+    wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [100, 150] }));
+    let bent = polyline(&s, w);
+    assert!(passes_through(&bent.iter().map(|v| v.0).collect::<Vec<_>>(), Vec2::new(100.0, 150.0)));
+    assert!(bent.len() > plain.len() && bent.iter().all(|v| v.1 == 0.0));
+    assert_eq!(bent[0], plain[0]);
+    assert_eq!(bent.last(), plain.last());
+}
+
+#[test]
+fn waypoints_follow_when_both_ends_move_together_only() {
+    let (mut s, a, b, w) = setup();
+    wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [100, 150] }));
+    mv(&mut s, b, [0.0, 30.0]);
+    assert_eq!(link_of(&s, w).points, [Vec2::new(100.0, 150.0)], "one end moving leaves the point");
+    s.execute("move", &json!({ "handles": [a.hex(), b.hex()], "delta": [10, 20] })).unwrap();
+    assert_eq!(link_of(&s, w).points, [Vec2::new(110.0, 170.0)]);
+    assert!(passes_through(&verts(&s, w), Vec2::new(110.0, 170.0)));
+    s.execute("undo", &json!({})).unwrap();
+    assert_eq!(link_of(&s, w).points, [Vec2::new(100.0, 150.0)]);
+}
+
+#[test]
+fn waypoints_snap_to_the_grid_when_snap_is_on() {
+    let (mut s, _, _, w) = setup();
+    s.settings.snapmode = true;
+    s.settings.snapunit = Vec2::new(10.0, 10.0);
+    wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [103, 148] }));
+    assert_eq!(link_of(&s, w).points, [Vec2::new(100.0, 150.0)]);
+}
+
+#[test]
+fn hit_prefers_a_waypoint_over_the_line() {
+    let (mut s, _, _, w) = setup();
+    let miss = wire_cmd(&mut s, "csd.wire.hit", json!({ "at": [100, 300] }));
+    assert_eq!(miss, json!({ "wire": null, "point": null, "points": 0 }));
+    let start = verts(&s, w)[0];
+    let on_line = wire_cmd(&mut s, "csd.wire.hit", json!({ "at": [start.x + 3.0, start.y + 2.0] }));
+    assert_eq!((on_line["wire"].as_str(), on_line["point"].is_null()), (Some(w.hex().as_str()), true));
+    wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [100, 150] }));
+    let hit = wire_cmd(&mut s, "csd.wire.hit", json!({ "at": [104, 146] }));
+    assert_eq!((hit["wire"].as_str(), hit["point"].as_u64(), hit["points"].as_u64()), (Some(w.hex().as_str()), Some(0), Some(1)));
+    assert!(wire_cmd(&mut s, "csd.wire.hit", json!({ "at": [104, 146], "tolerance": 2 }))["point"].is_null());
+}
+
+#[test]
+fn label_position_rename_and_dxf_round_trip() {
+    let (mut s, _, _, w) = setup();
+    let pill = |s: &Session| decos(s).into_iter().find(|d| d.2 == Deco::Pill).unwrap().3.insert.xy();
+    let default = pill(&s);
+    let start = verts(&s, w)[0];
+    let at_start = wire_cmd(&mut s, "csd.wire.label", json!({ "wire": w.hex(), "at": xy(start) }));
+    assert_eq!(at_start["labelT"], 0.0);
+    assert!(pill(&s).near(start, 1e-6));
+    let seg = wire_cmd(&mut s, "csd.wire.label", json!({ "wire": w.hex(), "mode": "segment", "at": xy(start) }));
+    let t = seg["labelT"].as_f64().unwrap();
+    assert!(t > 0.0 && t < 0.5);
+    wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [100, 150] }));
+    wire_cmd(&mut s, "csd.wire.set", json!({ "wire": w.hex(), "name": "  Stage left  " }));
+    let saved = link_of(&s, w);
+    assert_eq!((saved.name.as_deref(), saved.label_t, saved.points.len()), (Some("Stage left"), Some(t), 1));
+
+    let imported = cadcraft_io::read_dxf(cadcraft_io::write_dxf(s.doc().unwrap()).as_bytes()).unwrap();
+    let mut u = Session::empty();
+    u.execute("ortho", &json!({ "on": true })).unwrap();
+    u.open_drawing(imported, "Imported", None);
+    assert_eq!(link_of(&u, w), saved);
+    assert_eq!(verts(&u, w), verts(&s, w));
+
+    wire_cmd(&mut s, "csd.wire.label", json!({ "wire": w.hex() }));
+    wire_cmd(&mut s, "csd.wire.set", json!({ "wire": w.hex(), "name": "" }));
+    wire_cmd(&mut s, "csd.wire.straighten", json!({}));
+    let cleared = link_of(&s, w);
+    assert_eq!((cleared.name, cleared.label_t, cleared.points.len()), (None, None, 0));
+    assert!(pill(&s).near(default, 1e-6));
 }

@@ -29,7 +29,7 @@ fn accessories_fit_the_fixture_family() {
 }
 
 fn link(a: u64, b: u64, protocol: Protocol) -> WireLink {
-    WireLink { from: Handle(a), from_side: Side::Right, to: Handle(b), to_side: Side::Left, protocol }
+    WireLink::new(Handle(a), Side::Right, Handle(b), Side::Left, protocol)
 }
 
 fn code(devs: &[(u64, &Product)], links: &[WireLink], l: &WireLink) -> Option<&'static str> {
@@ -83,7 +83,7 @@ fn rj45_pool_is_asymmetric() {
 
 #[test]
 fn xdata_round_trip_and_hostile() {
-    let w = WireLink { from: Handle(0xAB), from_side: Side::Top, to: Handle(0x1F), to_side: Side::Bottom, protocol: Protocol::Scene10 };
+    let w = WireLink::new(Handle(0xAB), Side::Top, Handle(0x1F), Side::Bottom, Protocol::Scene10);
     let x = w.to_xdata();
     assert_eq!(WireLink::from_xdata(&x), Some(w.clone()));
 
@@ -136,7 +136,7 @@ fn smooth_route_is_anchored_leaves_perpendicular_and_is_not_orthogonal() {
     // Leaves the right port along +x and enters the left port along +x.
     assert!(r[1].x > a.x && (r[1].y - a.y).abs() < 0.1 * (r[1].x - a.x));
     assert!(b.x > r[23].x && (b.y - r[23].y).abs() < 0.1 * (b.x - r[23].x));
-    assert_eq!(deco_points(&r, false).map(|d| d[2].1), r.get(12).copied());
+    assert_eq!(deco_points(&r, false, None).map(|d| d[2].1), r.get(12).copied());
 }
 
 #[test]
@@ -295,4 +295,59 @@ fn legible_darkens_light_brand_colours_only() {
     for light in [0x65edfa, 0xf7ae41, 0xffffff] {
         assert!((0.3..0.46).contains(&luma(legible(light))), "{light:x}");
     }
+}
+
+#[test]
+fn waypoints_label_and_name_round_trip_and_old_wires_still_read() {
+    let mut w = WireLink::new(Handle(0xAB), Side::Top, Handle(0x1F), Side::Bottom, Protocol::Dmx);
+    w.points = vec![Vec2 { x: 1.5, y: -2.25 }, Vec2 { x: 1e-3, y: 4e5 }];
+    w.label_t = Some(0.25);
+    w.name = Some("Rack: 1, left".into());
+    assert_eq!(WireLink::from_xdata(&w.to_xdata()), Some(w.clone()));
+
+    // A wire saved before these existed carries only the five ends.
+    let old = WireLink::new(Handle(0xAB), Side::Top, Handle(0x1F), Side::Bottom, Protocol::Dmx);
+    assert_eq!(WireLink::from_xdata(&old.to_xdata()[..6]), Some(old));
+
+    // Hostile extras: bad numbers are refused or dropped, the count is capped, t is clamped.
+    let mut x = w.to_xdata();
+    x.truncate(6);
+    let tag = |v: String| RawTag { code: 1000, value: v };
+    x.extend((0..MAX_WIRE_POINTS + 10).map(|i| tag(format!("pt:{i},0"))));
+    x.extend([tag("lt:9".into()), tag("unknown".into())]);
+    let read = WireLink::from_xdata(&x).unwrap();
+    assert_eq!((read.points.len(), read.label_t), (MAX_WIRE_POINTS, Some(1.0)));
+    for bad in ["pt:nan,1", "pt:inf,1", "pt:oops"] {
+        let mut b = w.to_xdata();
+        b.push(tag(bad.into()));
+        assert_eq!(WireLink::from_xdata(&b).map(|l| l.points.len()), Some(2), "{bad}");
+    }
+}
+
+#[test]
+fn routes_pass_through_waypoints_in_both_modes() {
+    let (a, b) = (Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 100.0, y: 70.0 });
+    let via = [Vec2 { x: 40.0, y: 120.0 }, Vec2 { x: 60.0, y: -50.0 }];
+    for ortho in [true, false] {
+        let r = route_via(a, Side::Right, Slot::SOLO, b, Side::Left, Slot::SOLO, &via, ortho);
+        assert_eq!((r.first(), r.last()), (Some(&a), Some(&b)));
+        assert!(via.iter().all(|v| r.iter().any(|p| p.near(*v, 1e-6))), "ortho={ortho} {r:?}");
+        if ortho {
+            assert!(r.windows(2).all(|w| w[0].x == w[1].x || w[0].y == w[1].y));
+        }
+    }
+    assert_eq!(
+        route_via(a, Side::Right, Slot::SOLO, b, Side::Left, Slot::SOLO, &[], true),
+        route(a, Side::Right, Slot::SOLO, b, Side::Left, Slot::SOLO, true)
+    );
+}
+
+#[test]
+fn positions_along_a_path() {
+    let p = [Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 10.0, y: 0.0 }, Vec2 { x: 10.0, y: 30.0 }];
+    assert!(point_at(&p, 0.25).unwrap().near(Vec2 { x: 10.0, y: 0.0 }, 1e-9));
+    assert!(point_at(&p, 1.0).unwrap().near(p[2], 1e-9));
+    assert!((fraction_near(&p, Vec2 { x: 12.0, y: 15.0 }, false).unwrap() - 0.625).abs() < 1e-9);
+    assert!((fraction_near(&p, Vec2 { x: 12.0, y: 15.0 }, true).unwrap() - 0.625).abs() < 1e-9);
+    assert!((fraction_near(&p, Vec2 { x: 5.0, y: 1.0 }, true).unwrap() - 0.125).abs() < 1e-9);
 }

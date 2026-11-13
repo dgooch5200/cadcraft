@@ -7,6 +7,7 @@ use cadcraft_doc::{
 };
 use cadcraft_geom::{PolyVertex, Vec2};
 
+use crate::wire::{point_at, smooth};
 use crate::{Deco, Product, Protocol, Side};
 
 /// Card size in drawing units; the insertion point is the card centre. The body is the picture
@@ -153,7 +154,17 @@ const CURVE_MIN: f64 = 25.0;
 /// port along its side's outward direction, flattened to `CURVE_SEGMENTS` segments.
 /// ponytail: naive route, no obstacle avoidance; port the real wireRoute when overlaps matter.
 pub fn route(from: Vec2, from_side: Side, from_slot: Slot, to: Vec2, to_side: Side, to_slot: Slot, ortho: bool) -> Vec<Vec2> {
+    route_via(from, from_side, from_slot, to, to_side, to_slot, &[], ortho)
+}
+
+/// [`route`] through the waypoints `via`: right angles between them with `ortho`, otherwise a
+/// smooth curve through each.
+#[allow(clippy::too_many_arguments)]
+pub fn route_via(from: Vec2, from_side: Side, from_slot: Slot, to: Vec2, to_side: Side, to_slot: Slot, via: &[Vec2], ortho: bool) -> Vec<Vec2> {
     let (d1, d2) = (from_side.dir(), to_side.dir());
+    if !ortho && !via.is_empty() {
+        return smooth(from, d1, via, to, d2);
+    }
     if !ortho {
         let pull = (from.dist(to) * CURVE_PULL).max(CURVE_MIN);
         let c1 = from + d1 * (pull + from_slot.lane as f64 * LANE);
@@ -169,9 +180,19 @@ pub fn route(from: Vec2, from_side: Side, from_slot: Slot, to: Vec2, to_side: Si
     }
     let a = from + d1 * from_slot.stub();
     let b = to + d2 * to_slot.stub();
-    let corner = if d1.x == 0.0 { Vec2 { x: b.x, y: a.y } } else { Vec2 { x: a.x, y: b.y } };
-    let mut pts = vec![from, a, corner, b, to];
+    // Each leg turns once; the stub leaves along one axis, so the first leg starts across it.
+    let mut pts = vec![from, a];
+    let (mut cur, mut horizontal) = (a, d1.x == 0.0);
+    for &next in via.iter().chain(std::iter::once(&b)) {
+        pts.push(if horizontal { Vec2 { x: next.x, y: cur.y } } else { Vec2 { x: cur.x, y: next.y } });
+        pts.push(next);
+        (cur, horizontal) = (next, !horizontal);
+    }
+    pts.push(to);
     pts.dedup_by(|p, q| p.near(*q, 1e-9));
+    if !via.is_empty() {
+        return pts; // a waypoint the user placed stays, even where the wire doubles back
+    }
     // Facing stubs that overlap would run past a turn and double back; cut that spur.
     let mut out: Vec<Vec2> = Vec::with_capacity(pts.len());
     for p in pts {
@@ -441,10 +462,14 @@ pub fn deco_block(protocol: Protocol, deco: Deco, mut new_handle: impl FnMut() -
 /// Where a wire's decorations go: its end dots on the ports,
 /// and its pill on the middle of the longest segment (the first, when several tie), or the middle
 /// of a smooth (not `ortho`) curve.
-/// ponytail: no user-set pill position (the TS labelT) and no pill on the router's free segment.
-pub fn deco_points(path: &[Vec2], ortho: bool) -> Option<[(Deco, Vec2); 3]> {
+/// A `label_t` puts the pill that fraction of the way along the path instead.
+/// ponytail: no pill on the router's free segment.
+pub fn deco_points(path: &[Vec2], ortho: bool, label_t: Option<f64>) -> Option<[(Deco, Vec2); 3]> {
     let (a, b) = (*path.first()?, *path.get(1)?);
     let z = *path.last()?;
+    if let Some(t) = label_t {
+        return Some([(Deco::Start, a), (Deco::End, z), (Deco::Pill, point_at(path, t)?)]);
+    }
     if !ortho {
         return Some([(Deco::Start, a), (Deco::End, z), (Deco::Pill, *path.get(path.len() / 2)?)]);
     }

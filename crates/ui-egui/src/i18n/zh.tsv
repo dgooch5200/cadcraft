@@ -1491,6 +1491,14 @@ menu	View	视图
 	Set Device Properties	设置设备属性
 	Delete Devices	删除设备
 	Size Devices	设备尺寸
+	Find Wire Point	查找线缆点
+	Add Wire Point	添加线缆点
+	Remove Wire Point	删除线缆点
+	Move Wire Point	移动线缆点
+	Straighten Wires	拉直线缆
+	Bent Wires	折弯线缆
+	Wire Label Position	线缆标签位置
+	Rename Wire	重命名线缆
 	Product Library	产品库
 	Save Product Library	保存产品库
 	Set Product Library	设置产品库

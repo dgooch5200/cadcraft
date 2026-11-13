@@ -10,9 +10,11 @@ use cadcraft_geom::Vec2;
 
 mod card;
 mod library;
+mod wire;
 
 pub use card::*;
 pub use library::*;
+pub use wire::*;
 
 /// The xdata application name of wires.
 const XDATA_APP: &str = "CSD";
@@ -202,40 +204,74 @@ pub fn used(links: &[WireLink], dev: Handle, p: Protocol) -> usize {
     links.iter().filter(|l| (l.from == dev || l.to == dev) && (l.protocol == p || (pooled && l.protocol == Protocol::Network))).count()
 }
 
-/// A wire's two ends, stored in the polyline's xdata.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The most waypoints a wire keeps; more in a file are dropped.
+pub const MAX_WIRE_POINTS: usize = 64;
+const MAX_NAME_CHARS: usize = 120;
+
+/// A wire's two ends and its hand-set shape, stored in the polyline's xdata. The ends come first
+/// as plain strings; the optional rest are prefixed (`pt:x,y`, `lt:t`, `nm:name`) so older files
+/// without them still read.
+#[derive(Clone, Debug, PartialEq)]
 pub struct WireLink {
     pub from: Handle,
     pub from_side: Side,
     pub to: Handle,
     pub to_side: Side,
     pub protocol: Protocol,
+    /// Waypoints the cable is routed through, in world coordinates, from `from` to `to`.
+    pub points: Vec<Vec2>,
+    /// Where the pill sits as a fraction (0..=1) of the path length; `None` is the default spot.
+    pub label_t: Option<f64>,
+    pub name: Option<String>,
 }
 
 impl WireLink {
+    pub fn new(from: Handle, from_side: Side, to: Handle, to_side: Side, protocol: Protocol) -> WireLink {
+        WireLink { from, from_side, to, to_side, protocol, points: Vec::new(), label_t: None, name: None }
+    }
+
     pub fn to_xdata(&self) -> Vec<RawTag> {
         let tag = |code, value: &str| RawTag { code, value: value.into() };
-        vec![
+        let mut v = vec![
             tag(1001, XDATA_APP),
             tag(1000, &self.from.hex()),
             tag(1000, self.from_side.id()),
             tag(1000, &self.to.hex()),
             tag(1000, self.to_side.id()),
             tag(1000, self.protocol.id()),
-        ]
+        ];
+        v.extend(self.points.iter().take(MAX_WIRE_POINTS).map(|p| tag(1000, &format!("pt:{},{}", p.x, p.y))));
+        v.extend(self.label_t.map(|t| tag(1000, &format!("lt:{t}"))));
+        v.extend(self.name.iter().map(|n| tag(1000, &format!("nm:{}", n.chars().take(MAX_NAME_CHARS).collect::<String>()))));
+        v
     }
 
     /// Finds the `CSD` application among other applications' groups; `None` if absent or malformed.
     pub fn from_xdata(tags: &[RawTag]) -> Option<WireLink> {
         let start = tags.iter().position(|t| t.code == 1001 && t.value == XDATA_APP)?;
         let mut v = tags.get(start + 1..)?.iter().take_while(|t| t.code != 1001).filter(|t| t.code == 1000).map(|t| t.value.as_str());
-        Some(WireLink {
-            from: Handle::parse_hex(v.next()?)?,
-            from_side: Side::from_id(v.next()?)?,
-            to: Handle::parse_hex(v.next()?)?,
-            to_side: Side::from_id(v.next()?)?,
-            protocol: Protocol::from_id(v.next()?)?,
-        })
+        let mut link = WireLink::new(
+            Handle::parse_hex(v.next()?)?,
+            Side::from_id(v.next()?)?,
+            Handle::parse_hex(v.next()?)?,
+            Side::from_id(v.next()?)?,
+            Protocol::from_id(v.next()?)?,
+        );
+        for t in v {
+            if let Some(pt) = t.strip_prefix("pt:") {
+                let parsed = pt.split_once(',').and_then(|(x, y)| Some((x.parse::<f64>().ok()?, y.parse::<f64>().ok()?)));
+                if let Some((x, y)) = parsed.filter(|(x, y)| x.is_finite() && y.is_finite())
+                    && link.points.len() < MAX_WIRE_POINTS
+                {
+                    link.points.push(Vec2 { x, y });
+                }
+            } else if let Some(lt) = t.strip_prefix("lt:") {
+                link.label_t = lt.parse::<f64>().ok().filter(|t| t.is_finite()).map(|t| t.clamp(0.0, 1.0));
+            } else if let Some(n) = t.strip_prefix("nm:") {
+                link.name = Some(n.chars().take(MAX_NAME_CHARS).collect());
+            }
+        }
+        Some(link)
     }
 }
 

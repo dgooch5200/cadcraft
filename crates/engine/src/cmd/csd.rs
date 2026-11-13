@@ -9,7 +9,7 @@ use std::sync::Arc;
 use cadcraft_csd::{
     BOLD_STYLE, CARD_H, CARD_W, Deco, Product, Protocol, Side, Slot, WIRE_W, WireLink, accessory_products, block_name, bold_style, can_connect,
     deco_block, deco_block_name, deco_from_xdata, deco_points, deco_xdata, device_block, edge_frame, fan_order, library_json, parse_library,
-    parse_products, port_point, product_record, route, truncate_label, used, world_side,
+    parse_products, port_point, product_record, route_via, truncate_label, used, world_side,
 };
 use cadcraft_doc::color::{Color, Rgb};
 use cadcraft_doc::{Common, Drawing, Entity, EntityKind, EntityStore, Handle, Insert, Layer, LwPolyline, Space};
@@ -21,10 +21,17 @@ use super::curves::handle_param;
 mod arrange;
 mod connect;
 mod place;
+mod wire;
 use super::{CommandSpec, always, bad, point_req, str_param, targets};
 use crate::{EngineError, Result, Session};
 
 pub fn specs() -> Vec<CommandSpec> {
+    let mut all = own_specs();
+    all.extend(wire::specs());
+    all
+}
+
+fn own_specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("csd.place", "Place Device", run_place)
             .params("{product: id of a library product, at: [x,y], label? (default the product code)} → {handle}; interactive: places the armed product at each point")
@@ -182,25 +189,36 @@ fn same(a: &[PolyVertex], b: &[PolyVertex]) -> bool {
         && a.iter().zip(b).all(|(p, q)| p.p.near(q.p, 1e-9) && p.bulge == q.bulge && p.start_width == q.start_width && p.end_width == q.end_width)
 }
 
+/// A wire's computed route and what the pass should write back to its link.
+struct Laid {
+    wire: Handle,
+    link: WireLink,
+    path: Vec<Vec2>,
+    /// The link's waypoints after moving with both ends, if they did.
+    moved: Option<Vec<Vec2>>,
+}
+
 /// The path of every linked wire in `store` whose two devices exist. Each device edge's wires
 /// are dealt slots in fan order, so a wire's route depends on its neighbours on both edges.
-fn layout(store: &EntityStore, ortho: bool) -> Vec<(Handle, Protocol, Vec<Vec2>)> {
+fn layout(store: &EntityStore, ortho: bool) -> Vec<Laid> {
     let device = |h| match store.get(h).map(|x| &x.kind) {
         Some(EntityKind::Insert(i)) if is_device_block(i) => Some(i),
         _ => None,
     };
-    let wires: Vec<(Handle, WireLink, &Insert, &Insert)> = store
+    let wires: Vec<(Handle, WireLink, &Insert, &Insert, Option<(Vec2, Vec2)>)> = store
         .iter()
         .filter(|e| !e.common.xdata.is_empty() && matches!(e.kind, EntityKind::LwPolyline(_)))
         .filter_map(|e| {
             let link = WireLink::from_xdata(&e.common.xdata)?;
             let (a, b) = (device(link.from)?, device(link.to)?);
-            Some((e.handle, link, a, b))
+            let EntityKind::LwPolyline(pl) = &e.kind else { return None };
+            let was = pl.vertices.first().zip(pl.vertices.last()).map(|(f, l)| (f.p, l.p));
+            Some((e.handle, link, a, b, was))
         })
         .collect();
     // Per device edge: each wire end with the far device's centre; `true` is the wire's `from` end.
     let mut edges: HashMap<(Handle, Side), Vec<((Handle, bool), Vec2)>> = HashMap::new();
-    for (w, l, a, b) in &wires {
+    for (w, l, a, b, _) in &wires {
         edges.entry((l.from, l.from_side)).or_default().push(((*w, true), b.insert.xy()));
         edges.entry((l.to, l.to_side)).or_default().push(((*w, false), a.insert.xy()));
     }
@@ -215,11 +233,16 @@ fn layout(store: &EntityStore, ortho: bool) -> Vec<(Handle, Protocol, Vec<Vec2>)
         (port_point(i.insert.xy(), i.rotation, scale, side, slot), world_side(side, i.rotation, scale))
     };
     wires
-        .iter()
-        .map(|(w, l, a, b)| {
-            let (sa, sb) = (slots.get(&(*w, true)).copied().unwrap_or(Slot::SOLO), slots.get(&(*w, false)).copied().unwrap_or(Slot::SOLO));
+        .into_iter()
+        .map(|(w, l, a, b, was)| {
+            let (sa, sb) = (slots.get(&(w, true)).copied().unwrap_or(Slot::SOLO), slots.get(&(w, false)).copied().unwrap_or(Slot::SOLO));
             let ((p, side_p), (q, side_q)) = (end(a, l.from_side, sa), end(b, l.to_side, sb));
-            (*w, l.protocol, route(p, side_p, sa, q, side_q, sb, ortho))
+            // Both ends shifted by one vector (the devices were moved together): the waypoints go along.
+            let shift = was.map(|(f, t)| (p - f, q - t)).filter(|(d, e)| d.len() > 1e-9 && d.near(*e, 1e-6)).map(|(d, _)| d);
+            let moved = shift.filter(|_| !l.points.is_empty()).map(|d| l.points.iter().map(|&pt| pt + d).collect::<Vec<_>>());
+            let points = moved.as_ref().unwrap_or(&l.points);
+            let path = route_via(p, side_p, sa, q, side_q, sb, points, ortho);
+            Laid { wire: w, link: l, path, moved }
         })
         .collect()
 }
@@ -253,11 +276,12 @@ struct Plan {
     set: Vec<(Handle, Want)>,
     add: Vec<Want>,
     lift: Vec<Handle>,
+    links: Vec<(Handle, WireLink)>,
 }
 
 impl Plan {
     fn is_empty(&self) -> bool {
-        self.routes.is_empty() && self.erase.is_empty() && self.set.is_empty() && self.add.is_empty() && self.lift.is_empty()
+        self.routes.is_empty() && self.links.is_empty() && self.erase.is_empty() && self.set.is_empty() && self.add.is_empty() && self.lift.is_empty()
     }
 }
 
@@ -283,13 +307,17 @@ fn plan(store: &EntityStore, ortho: bool) -> Plan {
         }
     }
     plan.lift = decos.iter().filter(|(i, _)| last_other.is_some_and(|l| *i < l)).map(|(_, h)| *h).collect();
-    for (wire, protocol, path) in layout(store, ortho) {
+    for Laid { wire, link, path, moved } in layout(store, ortho) {
+        let protocol = link.protocol;
+        if let Some(points) = moved {
+            plan.links.push((wire, WireLink { points, ..link.clone() }));
+        }
         let vs = vertices(&path, ortho);
         if !matches!(store.get(wire).map(|e| &e.kind), Some(EntityKind::LwPolyline(pl)) if same(&pl.vertices, &vs)) {
             plan.routes.push((wire, vs));
         }
         let layer = store.get(wire).map(|e| e.common.layer.clone()).unwrap_or_default();
-        for (deco, at) in deco_points(&path, ortho).into_iter().flatten() {
+        for (deco, at) in deco_points(&path, ortho, link.label_t).into_iter().flatten() {
             let insert = Insert { block: deco_block_name(protocol, deco), insert: at.to3(0.0), ..Insert::default() };
             let want = Want { wire, deco, protocol, layer: layer.clone(), insert };
             match have.get(&(wire, deco)) {
@@ -316,6 +344,9 @@ fn apply(doc: &mut Arc<Drawing>, space: &Space, plan: Plan) {
                 pl.vertices = vs;
             }
         });
+    }
+    for (h, link) in plan.links {
+        let _ = d.modify_entity(h, |e| e.common.xdata = link.to_xdata());
     }
     for (h, w) in plan.set {
         let _ = d.modify_entity(h, |e| {
@@ -662,13 +693,13 @@ fn run_device_delete(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_connect(s: &mut Session, p: &Value) -> Result<Value> {
     let handle = |key| handle_param(p, key).ok_or_else(|| bad("csd.connect", format!("`{key}` (object handle) is required")));
-    let link = WireLink {
-        from: handle("from")?,
-        from_side: side_param(p, "fromSide")?,
-        to: handle("to")?,
-        to_side: side_param(p, "toSide")?,
-        protocol: str_param(p, "protocol").and_then(Protocol::from_id).ok_or_else(|| bad("csd.connect", "`protocol` is not a known protocol id"))?,
-    };
+    let link = WireLink::new(
+        handle("from")?,
+        side_param(p, "fromSide")?,
+        handle("to")?,
+        side_param(p, "toSide")?,
+        str_param(p, "protocol").and_then(Protocol::from_id).ok_or_else(|| bad("csd.connect", "`protocol` is not a known protocol id"))?,
+    );
     let products = s.csd_library.clone();
     {
         let d = s.doc()?;
