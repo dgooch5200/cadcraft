@@ -254,6 +254,11 @@ struct Laid {
 /// The path of every linked wire in `store` whose two devices exist. Each device edge's wires
 /// are dealt slots in fan order, so a wire's route depends on its neighbours on both edges.
 fn layout(store: &EntityStore, ortho: bool) -> Vec<Laid> {
+    layout_with(store, ortho, None)
+}
+
+/// [`layout`] with one wire's waypoints replaced, to preview an edit.
+fn layout_with(store: &EntityStore, ortho: bool, over: Option<(Handle, &[Vec2])>) -> Vec<Laid> {
     let device = |h| match store.get(h).map(|x| &x.kind) {
         Some(EntityKind::Insert(i)) if is_device_block(i) => Some(i),
         _ => None,
@@ -262,7 +267,10 @@ fn layout(store: &EntityStore, ortho: bool) -> Vec<Laid> {
         .iter()
         .filter(|e| !e.common.xdata.is_empty() && matches!(e.kind, EntityKind::LwPolyline(_)))
         .filter_map(|e| {
-            let link = WireLink::from_xdata(&e.common.xdata)?;
+            let mut link = WireLink::from_xdata(&e.common.xdata)?;
+            if let Some((_, points)) = over.filter(|(h, _)| *h == e.handle) {
+                link.points = points.to_vec();
+            }
             let (a, b) = (device(link.from)?, device(link.to)?);
             let EntityKind::LwPolyline(pl) = &e.kind else { return None };
             let was = pl.vertices.first().zip(pl.vertices.last()).map(|(f, l)| (f.p, l.p));

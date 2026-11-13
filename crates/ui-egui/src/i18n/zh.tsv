@@ -1486,6 +1486,17 @@ menu	View	视图
 	List Products	列出产品
 	Load Product Library	加载产品库
 	Place Device	放置设备
+	Place Device Grid	放置设备阵列
+	Clear Drawing	清除图纸
+	Card Display	卡片显示
+	Preview Wire Route	预览线缆路径
+	Place grid here...	在此放置阵列...
+	Place grid	放置阵列
+	Rows	行数
+	Columns	列数
+	Clear drawing	清除图纸
+	Codes only	仅显示代码
+	Straighten cable (1 point)	拉直线缆（1 个点）
 	Replace Devices	替换设备
 	Device Info	设备信息
 	Set Device Properties	设置设备属性

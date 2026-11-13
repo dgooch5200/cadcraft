@@ -1218,6 +1218,19 @@ fn codes_only_hides_labels_on_every_card_old_and_new_and_survives_a_save() {
 }
 
 #[test]
+fn route_preview_matches_the_move_and_changes_nothing() {
+    let (mut s, _, _, w) = setup();
+    wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [100, 150] }));
+    let before = verts(&s, w);
+    let r = wire_cmd(&mut s, "csd.wire.route", json!({ "wire": w.hex(), "index": 0, "to": [90, -80] }));
+    let path: Vec<Vec2> = r["path"].as_array().unwrap().iter().map(|p| Vec2::new(p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).collect();
+    assert_eq!(verts(&s, w), before);
+    wire_cmd(&mut s, "csd.wire.point.move", json!({ "wire": w.hex(), "index": 0, "to": [90, -80] }));
+    assert_eq!(verts(&s, w), path);
+    assert!(s.execute("csd.wire.route", &json!({ "wire": w.hex(), "index": 5, "to": [0, 0] })).is_err());
+}
+
+#[test]
 fn moving_a_waypoint_snaps_to_the_grid_when_snap_is_on() {
     let (mut s, _, _, w) = setup();
     wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [100, 150] }));

@@ -188,6 +188,8 @@ pub struct CanvasState {
     pub menu_world: Option<Vec2>,
     /// The cable waypoint being dragged: (cable, index, where the pointer is in drawing units).
     wire_drag: Option<(Handle, usize, Vec2)>,
+    /// The cable's route with that waypoint where the pointer is.
+    wire_preview: Vec<Vec2>,
     /// Tab was pressed over a snap marker: show the next candidate ([`SnapCycle`]).
     pub snap_tab: bool,
     pub snap_cycle: Option<SnapCycle>,

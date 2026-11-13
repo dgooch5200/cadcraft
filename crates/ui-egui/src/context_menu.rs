@@ -64,6 +64,8 @@ pub const TYPE: &str = "type:";
 pub const KEYWORD: &str = "keyword:";
 /// Opens the cable rename window ([`crate::wirename`]) for the handle that follows.
 pub const WIRE_NAME: &str = "wirename:";
+/// Opens the Place Grid window ([`crate::placegrid`]) for the `x,y` that follows.
+pub const PLACE_GRID: &str = "placegrid:";
 /// An object snap menu item ([`choose_snap`]).
 pub const SNAP: &str = "snap:";
 
@@ -190,15 +192,27 @@ fn csd_entries(app: &CadApp) -> Vec<Vec<Entry>> {
         if !used {
             return groups;
         }
-        let place = armed.zip(app.canvas.menu_world).and_then(|(p, w)| run("Place one here", "csd.place", json!({ "product": p, "at": [w.x, w.y] })));
-        push(&mut groups, place.into_iter().collect());
+        let mut place: Vec<Entry> = Vec::new();
+        if let Some((p, w)) = armed.zip(app.canvas.menu_world) {
+            place.extend(run("Place one here", "csd.place", json!({ "product": p, "at": [w.x, w.y] })));
+            place.push(Entry::Item { label: "Place grid here...".into(), id: format!("{PLACE_GRID}{},{}", w.x, w.y), shortcut: None, enabled: true });
+        }
+        push(&mut groups, place);
         let bent = app.session.doc().map_or(0, |d| d.model.iter().filter(|e| wire_link(e).is_some_and(|l| !l.points.is_empty())).count());
         if bent > 0 {
             push(&mut groups, run(&crate::tf!("Straighten {n} bent cables", n = bent), "csd.wire.straighten", json!({})).into_iter().collect());
         }
-        let mut canvas = items(app, &["selectall", "pasteclip"]);
+        let mut canvas = items(app, &["selectall"]);
+        // Paste lands its base point under the cursor.
+        canvas.extend(item(app, "pasteclip", None).map(|e| match (e, app.canvas.menu_world) {
+            (Entry::Item { label, shortcut, enabled, .. }, Some(w)) => {
+                Entry::Item { label, id: format!("run:pasteclip:{}", json!({ "at": [w.x, w.y] })), shortcut, enabled }
+            }
+            (e, _) => e,
+        }));
         canvas.extend(item(app, "zoom.extents", Some("Zoom to fit")));
         push(&mut groups, canvas);
+        push(&mut groups, run("Clear drawing", "csd.clear", json!({})).into_iter().collect());
         return groups;
     }
     let hexes: Vec<String> = devs.iter().map(|h| h.hex()).collect();
@@ -244,7 +258,10 @@ fn wire_entries(app: &CadApp, hex: String, link: &cadcraft_csd::WireLink) -> Vec
         _ => {}
     }
     if !link.points.is_empty() {
-        let label = crate::tf!("Straighten cable ({n} points)", n = link.points.len());
+        let label = match link.points.len() {
+            1 => crate::tl!("Straighten cable (1 point)").to_string(),
+            n => crate::tf!("Straighten cable ({n} points)", n = n),
+        };
         points.extend(run(&label, "csd.wire.straighten", json!({ "wires": [hex] })));
     }
     push(&mut groups, points);
@@ -375,7 +392,7 @@ pub fn choose(app: &mut CadApp, id: &str) {
         choose_snap(app, s);
     } else if id.starts_with("run:") {
         crate::shortcut_menus::run_item(app, id);
-    } else if id.starts_with("textedit:") || id.starts_with(WIRE_NAME) {
+    } else if id.starts_with("textedit:") || id.starts_with(WIRE_NAME) || id.starts_with(PLACE_GRID) {
         // The Edit Text window of the single selected text object; the id carries the handle.
         app.ui.dialog = Some(id.to_string());
     } else {

@@ -29,6 +29,10 @@ pub(super) fn point_at(app: &CadApp, xf: &Xf, hover: Option<Pos2>) -> Option<(Ha
 
 pub(super) fn draw(app: &CadApp, painter: &egui::Painter, xf: &Xf, rect: Rect, t: &crate::theme::Tokens) {
     let Some((h, pts)) = selected(app) else { return };
+    if app.canvas.wire_drag.is_some() && app.canvas.wire_preview.len() > 1 {
+        let line: Vec<Pos2> = app.canvas.wire_preview.iter().map(|p| xf.to_screen(*p)).collect();
+        painter.add(egui::Shape::line(line, egui::Stroke::new(2.0, t.grip_hot)));
+    }
     for (i, p) in pts.iter().enumerate() {
         let drag = app.canvas.wire_drag.filter(|d| d.0 == h && d.1 == i);
         let sp = xf.to_screen(drag.map_or(*p, |d| d.2));
@@ -59,6 +63,7 @@ pub(super) fn interact(app: &mut CadApp, ui: &egui::Ui, resp: &egui::Response, x
     let pos = ui.input(|i| i.pointer.interact_pos()).map(|p| xf.to_world(p));
     if resp.drag_stopped_by(primary) {
         app.canvas.wire_drag = None;
+        app.canvas.wire_preview.clear();
         if let Some(to) = pos
             && let Err(e) = app.run("csd.wire.point.move", json!({ "wire": w.hex(), "index": i, "to": [to.x, to.y] }))
         {
@@ -66,5 +71,12 @@ pub(super) fn interact(app: &mut CadApp, ui: &egui::Ui, resp: &egui::Response, x
         }
     } else if let Some(to) = pos {
         app.canvas.wire_drag = Some((w, i, to));
+        // ponytail: re-routes every wire per frame while dragging; cache the layout if drawings get large.
+        let path = app.run("csd.wire.route", json!({ "wire": w.hex(), "index": i, "to": [to.x, to.y] })).ok();
+        app.canvas.wire_preview = path
+            .as_ref()
+            .and_then(|r| r["path"].as_array())
+            .map(|a| a.iter().filter_map(|p| Some(Vec2::new(p[0].as_f64()?, p[1].as_f64()?))).collect())
+            .unwrap_or_default();
     }
 }

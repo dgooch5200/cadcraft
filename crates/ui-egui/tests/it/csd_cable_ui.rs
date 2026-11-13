@@ -65,7 +65,7 @@ fn cable_menu_offers_point_label_name_and_delete_items() {
     assert_eq!(app.session.selection(), vec![w]);
     for want in [
         "Remove point",
-        "Straighten cable (1 points)",
+        "Straighten cable (1 point)",
         "Move label here",
         "Align label to middle of segment",
         "Centre label",
@@ -79,7 +79,7 @@ fn cable_menu_offers_point_label_name_and_delete_items() {
     app.canvas.menu_world = Some(Vec2::new(300.0, 300.0));
     assert!(has(&app, "Add point here") && !has(&app, "Remove point"));
 
-    let straighten = id_of(&app, "Straighten cable (1 points)");
+    let straighten = id_of(&app, "Straighten cable (1 point)");
     context_menu::choose(&mut app, &straighten);
     assert!(points(&app, w).is_empty());
 
@@ -96,6 +96,51 @@ fn cable_menu_offers_point_label_name_and_delete_items() {
     let delete = id_of(&app, "Delete cable");
     context_menu::choose(&mut app, &delete);
     assert!(app.session.doc().unwrap().entity(w).is_none());
+}
+
+fn device_count(app: &mut CadApp) -> usize {
+    app.run("csd.netlist", json!({})).unwrap()["devices"].as_array().unwrap().len()
+}
+
+#[test]
+fn canvas_menu_places_a_grid_pastes_at_the_cursor_and_clears_the_drawing() {
+    let (mut app, _) = app_with_cable();
+    app.session.set_selection(Vec::new());
+    app.canvas.menu_world = Some(Vec2::new(500.0, 0.0));
+    assert!(!has(&app, "Place grid here..."), "nothing armed");
+    app.run("csd.arm", json!({ "product": "epix-flex-drive" })).unwrap();
+    assert!(has(&app, "Place one here") && has(&app, "Place grid here..."));
+    let grid = id_of(&app, "Place grid here...");
+    context_menu::choose(&mut app, &grid);
+    assert_eq!(app.ui.dialog.as_deref(), Some("placegrid:500,0"));
+
+    // Enter in the window places the default 2 x 2 block at the click.
+    let ctx = egui::Context::default();
+    let mut open = true;
+    let enter = Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    let mut out = ctx.run_ui(egui::RawInput { events: vec![enter], ..Default::default() }, |ui| {
+        cadcraft_ui_egui::placegrid::dialog(&mut app, ui.ctx(), "placegrid:500,0", &mut open);
+    });
+    out.textures_delta.clear();
+    assert!(!open);
+    assert_eq!(device_count(&mut app), 6);
+
+    // Paste puts the copy under the cursor, not on the original.
+    let a = app.run("csd.device.at", json!({ "at": [0, 0] })).unwrap()["handle"].as_str().unwrap().to_string();
+    app.run("copyclip", json!({ "handles": [a] })).unwrap();
+    app.canvas.menu_world = Some(Vec2::new(900.0, 0.0));
+    let paste = id_of(&app, "Paste");
+    assert!(paste.starts_with("run:pasteclip:") && paste.contains("900"), "{paste}");
+    context_menu::choose(&mut app, &paste);
+    assert_eq!(device_count(&mut app), 7);
+    assert!(app.run("csd.device.at", json!({ "at": [935, 36] })).unwrap()["handle"].is_string());
+
+    app.session.set_selection(Vec::new());
+    let clear = id_of(&app, "Clear drawing");
+    context_menu::choose(&mut app, &clear);
+    assert_eq!(device_count(&mut app), 0);
+    app.session.undo().unwrap();
+    assert_eq!(device_count(&mut app), 7);
 }
 
 #[test]

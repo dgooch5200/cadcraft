@@ -34,6 +34,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "stylesmanager" => crate::plotstyles::dialog(app, ctx, &mut open),
         o if o == "options" || o.starts_with("options:") => crate::options::dialog(app, ctx, o, &mut open),
         o if o.starts_with(crate::context_menu::WIRE_NAME) => crate::wirename::dialog(app, ctx, o, &mut open),
+        o if o.starts_with(crate::context_menu::PLACE_GRID) => crate::placegrid::dialog(app, ctx, o, &mut open),
         o if o.starts_with("textedit:") => crate::textdlg::dialog(app, ctx, o, &mut open),
         other => crate::managers::dialog(app, ctx, other, &mut open),
     }

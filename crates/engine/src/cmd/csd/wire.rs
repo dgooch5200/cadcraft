@@ -6,7 +6,7 @@ use cadcraft_doc::Handle;
 use cadcraft_geom::Vec2;
 use serde_json::{Value, json};
 
-use super::{Laid, layout, wires};
+use super::{Laid, layout, layout_with, wires};
 use crate::cmd::curves::handle_param;
 use crate::cmd::{CommandSpec, bad, point_param, point_req, str_param};
 use crate::{Result, Session};
@@ -24,6 +24,9 @@ pub(super) fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("csd.wire.point.remove", "Remove Wire Point", run_remove)
             .params("{wire: handle, index? | at?: [x,y] (nearest waypoint within 9)} → {points: count}"),
         CommandSpec::new("csd.wire.point.move", "Move Wire Point", run_move).params("{wire: handle, index, to: [x,y]} → {index}; dropped on the snap grid if SNAPMODE is on"),
+        CommandSpec::new("csd.wire.route", "Preview Wire Route", run_route)
+            .params("{wire: handle, index, to: [x,y]} → {path: [[x,y]]}; the route the wire would take with that waypoint moved (snapped as a move would be); changes nothing")
+            .noundo(),
         CommandSpec::new("csd.wire.straighten", "Straighten Wires", run_straighten)
             .params("{wires?: [handle]} (default every bent wire) → {count}; clears the waypoints"),
         CommandSpec::new("csd.wire.bent", "Bent Wires", run_bent).params("{} → {count}; wires that have waypoints").noundo(),
@@ -129,6 +132,19 @@ fn run_move(s: &mut Session, p: &Value) -> Result<Value> {
     }
     store_link(s, h, &link)?;
     Ok(json!({ "index": index }))
+}
+
+fn run_route(s: &mut Session, p: &Value) -> Result<Value> {
+    let (h, mut link) = wire_param(s, "csd.wire.route", p)?;
+    let index = index_param("csd.wire.route", p, &link)?;
+    let to = snapped(s, point_req("csd.wire.route", p, "to")?);
+    if let Some(pt) = link.points.get_mut(index) {
+        *pt = to;
+    }
+    let store = s.doc()?.space(&s.space()).ok_or_else(|| bad("csd.wire.route", "no such space"))?;
+    let path =
+        layout_with(store, s.settings.orthomode, Some((h, &link.points))).into_iter().find(|l| l.wire == h).map(|l| l.path).unwrap_or_default();
+    Ok(json!({ "path": path.iter().map(|v| [v.x, v.y]).collect::<Vec<_>>() }))
 }
 
 fn run_straighten(s: &mut Session, p: &Value) -> Result<Value> {

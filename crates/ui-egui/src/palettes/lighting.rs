@@ -157,11 +157,17 @@ fn grid_size(app: &mut CadApp, ui: &mut egui::Ui, st: &cadcraft_engine::Settings
                 .response
                 .accessible_name(crate::tl!("Snap grid size"));
         });
-        let w = (ui.available_width() - 8.0 - 4.0) / 2.0;
+        let w = (ui.available_width() - 8.0 - 8.0) / 3.0;
         for (label, cmd) in [("Title block", "csd.titleblock"), ("Legend", "csd.legend")] {
-            if ui.add_sized(vec2(w, 20.0), egui::Button::new(crate::i18n::t(label))).clicked() {
+            if ui.add_sized(vec2(w, 20.0), egui::Button::new(crate::i18n::t(label)).truncate()).clicked() {
                 sheet = Some(cmd);
             }
+        }
+        let codes = app.session.doc().is_ok_and(|d| d.header.i64("CSDCODESONLY", 0) != 0);
+        let resp = ui.add_sized(vec2(w, 20.0), egui::Button::new(crate::tl!("Codes only")).selected(codes).truncate());
+        crate::icons::describe_control(ui, &resp, "Codes only", Some(codes), false);
+        if resp.clicked() {
+            let _ = app.run("csd.display", json!({ "codesOnly": !codes }));
         }
     });
     if let Some(h) =
