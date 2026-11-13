@@ -8,7 +8,7 @@ use cadcraft_doc::{Common, Drawing, EntityKind, HAlign, HVal, Handle, Space, Tex
 use cadcraft_geom::Vec3;
 use serde_json::{Value, json};
 
-use super::{attr, bad, find_product, port_usage, product_attr, resolve, str_param, wires};
+use super::{accessories_of, attr, bad, find_product, mount_of, port_usage, product_attr, resolve, str_param, supplied_by_others, wires};
 use crate::cmd::file::io;
 use crate::{EngineError, Result, Session};
 
@@ -71,6 +71,9 @@ struct Placed {
     prod: Prod,
     label: String,
     notes: String,
+    mount: String,
+    accessories: Vec<(Prod, u64)>,
+    by_others: bool,
     ports: Vec<(Protocol, usize, u64)>,
     conns: usize,
     poe: f64,
@@ -94,6 +97,14 @@ fn placed(s: &Session) -> Result<Vec<Placed>> {
                 prod: Prod::of(&product),
                 label: attr(i, "NAME").to_string(),
                 notes: attr(i, "NOTES").to_string(),
+                mount: mount_of(store, i)
+                    .and_then(|m| match store.get(m).map(|e| &e.kind) {
+                        Some(EntityKind::Insert(p)) => Some(attr(p, "NAME").to_string()),
+                        _ => None,
+                    })
+                    .unwrap_or_default(),
+                accessories: accessories_of(i).into_iter().map(|(id, q)| (Prod::of(&resolve(&s.csd_library, &id)), q)).collect(),
+                by_others: supplied_by_others(i),
                 ports,
                 conns,
                 poe: 0.0,
@@ -121,6 +132,8 @@ pub(super) fn run_schedule(s: &mut Session, _p: &Value) -> Result<Value> {
         .map(|d| {
             json!({
                 "handle": d.handle.hex(), "product": d.prod.id, "name": d.prod.name, "category": d.prod.cat, "code": d.prod.code, "label": d.label, "notes": d.notes,
+                "mountedIn": d.mount, "supplyByOthers": d.by_others,
+                "accessories": d.accessories.iter().map(|(a, q)| json!({ "product": a.id, "code": a.code, "name": a.name, "qty": q })).collect::<Vec<_>>(),
                 "portsInUse": ports_text(&d.ports), "connections": d.conns, "poeLoad": d.poe, "controlGear": d.prod.control,
             })
         })
@@ -237,8 +250,8 @@ struct Line {
 }
 
 /// Placed and unplaced products totalled per product: control-gear categories first, then by
-/// category, and by model id within one. ponytail: device accessories and "supply by others"
-/// have no counterpart in CADCraft yet.
+/// category, and by model id within one. Accessories are totalled under their own product; a
+/// device supplied by others is left out with its accessories.
 fn bom(s: &Session) -> Result<Vec<Line>> {
     let mut by_id: BTreeMap<String, Line> = BTreeMap::new();
     let mut add = |prod: Prod, qty: u64, label: &str| {
@@ -250,7 +263,13 @@ fn bom(s: &Session) -> Result<Vec<Line>> {
         }
     };
     for p in placed(s)? {
+        if p.by_others {
+            continue;
+        }
         add(p.prod, 1, &p.label);
+        for (a, q) in p.accessories {
+            add(a, q, "");
+        }
     }
     for (id, qty) in read(s.doc()?) {
         add(Prod::of(&resolve(&s.csd_library, &id)), qty, "");

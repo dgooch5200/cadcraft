@@ -109,3 +109,67 @@ fn bom_totals_placed_and_unplaced_by_product_and_exports_csv() {
     assert_eq!(lines.nth(1), Some("5,epix-flex-drive,N1; N2,Sample,EPIX Flex Drive,EPIX FLEX DRIVE,,"));
     assert!(s.execute("csd.bom.export", &json!({ "path": "x", "format": "xls" })).is_err());
 }
+
+fn info(s: &mut Session, h: Handle) -> serde_json::Value {
+    s.execute("csd.device.info", &json!({ "handle": h.hex() })).unwrap()
+}
+
+fn set(s: &mut Session, h: Handle, mut p: serde_json::Value) -> crate::Result<serde_json::Value> {
+    p["handle"] = json!(h.hex());
+    s.execute("csd.device.set", &p)
+}
+
+#[test]
+fn mounting_accessories_and_supply_by_others_round_trip_through_a_dxf() {
+    let mut s = Session::new();
+    let rack = place(&mut s, CONSOLE, [0.0, 0.0]);
+    let node = place(&mut s, NODE, [300.0, 0.0]);
+    let before = info(&mut s, node);
+    assert!(before["mount"].is_null() && before["accessories"] == json!([]) && before["supplyByOthers"] == json!(false));
+    let accs = json!([{ "product": "b565fc", "qty": 2 }, { "product": "b565fc", "qty": 1 }, { "product": "x", "qty": 0 }]);
+    set(&mut s, node, json!({ "mount": rack.hex(), "accessories": accs, "supplyByOthers": true })).unwrap();
+    let i = info(&mut s, node);
+    assert_eq!(i["mount"]["handle"], json!(rack.hex()));
+    assert_eq!((i["accessories"].as_array().unwrap().len(), i["accessories"][0]["qty"].clone()), (1, json!(3)));
+    assert_eq!(i["supplyByOthers"], json!(true));
+
+    let text = cadcraft_io::write_dxf(s.doc().unwrap());
+    let mut t = Session::empty();
+    t.open_drawing(cadcraft_io::read_dxf(text.as_bytes()).unwrap(), "Imported", None);
+    assert_eq!(info(&mut t, node), i);
+
+    set(&mut s, node, json!({ "mount": "", "accessories": [], "supplyByOthers": false })).unwrap();
+    assert_eq!(info(&mut s, node), before);
+}
+
+#[test]
+fn mounting_refuses_itself_cycles_and_bad_input() {
+    let mut s = Session::new();
+    let (a, b) = (place(&mut s, CONSOLE, [0.0, 0.0]), place(&mut s, NODE, [300.0, 0.0]));
+    assert!(set(&mut s, a, json!({ "mount": a.hex() })).is_err());
+    set(&mut s, b, json!({ "mount": a.hex() })).unwrap();
+    assert!(set(&mut s, a, json!({ "mount": b.hex() })).is_err());
+    assert!(set(&mut s, a, json!({ "mount": "FFFFF" })).is_err());
+    assert!(set(&mut s, a, json!({ "accessories": [{ "product": "p", "qty": -1 }] })).is_err());
+    assert!(set(&mut s, a, json!({ "supplyByOthers": "yes" })).is_err());
+}
+
+#[test]
+fn bom_lists_accessories_and_leaves_out_supply_by_others() {
+    let mut s = Session::new();
+    let a = place(&mut s, NODE, [0.0, 0.0]);
+    let b = place(&mut s, NODE, [300.0, 0.0]);
+    set(&mut s, a, json!({ "accessories": [{ "product": "b565fc", "qty": 2 }] })).unwrap();
+    set(&mut s, b, json!({ "accessories": [{ "product": "b565fc", "qty": 5 }] })).unwrap();
+    let rows = |s: &mut Session| -> Vec<(String, u64)> {
+        let r = s.execute("csd.bom", &json!({})).unwrap();
+        r["rows"].as_array().unwrap().iter().map(|r| (r["product"].as_str().unwrap().into(), r["qty"].as_u64().unwrap())).collect()
+    };
+    let all = rows(&mut s);
+    assert!(all.contains(&("b565fc".into(), 7)) && all.contains(&(NODE.into(), 2)));
+    set(&mut s, b, json!({ "supplyByOthers": true })).unwrap();
+    let left = rows(&mut s);
+    assert!(left.contains(&("b565fc".into(), 2)) && left.contains(&(NODE.into(), 1)));
+    let sched = s.execute("csd.schedule", &json!({})).unwrap();
+    assert!(sched["devices"].as_array().unwrap().iter().any(|d| d["supplyByOthers"] == json!(true)));
+}

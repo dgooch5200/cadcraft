@@ -43,11 +43,11 @@ fn own_specs() -> Vec<CommandSpec> {
         CommandSpec::new("csd.replace", "Replace Devices", run_replace)
             .params("{product: id of a library product, handles? (default the selection), allOfProduct?: bool (default false: also every other device on the drawing with the same product as a target)} → {replaced}; devices already that product are skipped"),
         CommandSpec::new("csd.device.info", "Device Info", run_device_info)
-            .params("{handle? (default the single selected device)} → {handle, product: {id, name, code, brand, cat, color: 0xRRGGBB number}, known, label, notes, ports: [{protocol, label, used, capacity, pooled}], connections: [{wire, protocol, dir: out|in, other: {handle, label}}], sameProduct, at: [x,y], size: [w,h], libSize: [w,h]}")
+            .params("{handle? (default the single selected device)} → {handle, product: {id, name, code, brand, cat, color: 0xRRGGBB number}, known, label, notes, mount: null | {handle, label} (the device this one is mounted in; layout only), accessories: [{product, name, code, category, qty}], supplyByOthers: bool, ports: [{protocol, label, used, capacity, pooled}], connections: [{wire, protocol, dir: out|in, other: {handle, label}}], sameProduct, at: [x,y], size: [w,h], libSize: [w,h]}")
             .noundo()
             .enabled(always),
         CommandSpec::new("csd.device.set", "Set Device Properties", run_device_set)
-            .params("{handle? (default the single selected device), label?: text (empty = the product code), notes?: text} → {handle}"),
+            .params("{handle? (default the single selected device), label?: text (empty = the product code), notes?: text, mount?: handle of the device to mount in (\"\" = unmount; not itself or anything mounted in it), accessories?: [{product: id, qty}] (replaces the list; qty 0 drops a line), supplyByOthers?: bool (left off the bill of materials, accessories included)} → {handle}"),
         CommandSpec::new("csd.device.delete", "Delete Devices", run_device_delete)
             .params("{handles? (default the selection)} → {deleted, wires}; also removes every wire linked to them and the wires' decorations"),
         CommandSpec::new("csd.select.product", "Select All of This Product", arrange::run_select_product)
@@ -62,7 +62,7 @@ fn own_specs() -> Vec<CommandSpec> {
         CommandSpec::new("csd.distribute", "Distribute Devices", arrange::run_distribute)
             .params("{axis: x|y, handles? (default the selection)} → {moved}; equal gaps between cards, the outer two stay put (needs 3+)"),
         CommandSpec::new("csd.schedule", "Placed Devices", schedule::run_schedule)
-            .params("{} → {devices: [{handle, product, name, category, code, label, notes, portsInUse: text like \"PoE 1/3, DMX 2/2\", connections: wire count, poeLoad: watts the device's PoE outlets feed, controlGear}]}; control gear first")
+            .params("{} → {devices: [{handle, product, name, category, code, label, notes, mountedIn: label of the device it is mounted in, supplyByOthers, accessories: [{product, code, name, qty}], portsInUse: text like \"PoE 1/3, DMX 2/2\", connections: wire count, poeLoad: watts the device's PoE outlets feed, controlGear}]}; control gear first")
             .noundo(),
         CommandSpec::new("csd.unplaced.list", "Unplaced Items", schedule::run_unplaced_list)
             .params("{} → {items: [{index, product, qty, code, category, name}]}; saved with the drawing")
@@ -75,7 +75,7 @@ fn own_specs() -> Vec<CommandSpec> {
             .params("{index} → {product}; arms the row's product like csd.arm. Placing a product (csd.place) takes one off its row")
             .noundo(),
         CommandSpec::new("csd.bom", "Bill of Materials", schedule::run_bom)
-            .params("{} → {rows: [{qty, product, code, category, name, labels, notes, brand}]}: placed and unplaced, by category (control gear first) then model id")
+            .params("{} → {rows: [{qty, product, code, category, name, labels, notes, brand}]}: placed and unplaced plus device accessories, by category (control gear first) then model id; devices supplied by others and their accessories are left out")
             .noundo(),
         CommandSpec::new("csd.bom.export", "Export Bill of Materials", schedule::run_bom_export)
             .params("{path, format: csv|pdf, footer?: [lines printed under the PDF table] (default the title block's project, venue, drawn by, date and rev)} → {path, rows}")
@@ -623,6 +623,68 @@ fn attr<'a>(i: &'a Insert, tag: &str) -> &'a str {
     i.attribs.iter().find(|a| a.tag == tag).map(|a| a.text.value.as_str()).unwrap_or_default()
 }
 
+const MAX_ACCESSORY_LINES: usize = 200;
+const MAX_ACCESSORY_QTY: u64 = 100_000;
+
+/// The accessories a device carries, as `(product id, qty)`; the `ACCS` attribute holds JSON `[[id, qty], ...]`.
+fn accessories_of(i: &Insert) -> Vec<(String, u64)> {
+    let rows: Vec<(String, u64)> = serde_json::from_str(attr(i, "ACCS")).unwrap_or_default();
+    rows.into_iter().filter(|r| r.1 > 0).take(MAX_ACCESSORY_LINES).collect()
+}
+
+fn supplied_by_others(i: &Insert) -> bool {
+    attr(i, "SUPPLY") == "1"
+}
+
+/// The device `i` is mounted in, if it is still on the drawing.
+fn mount_of(store: &EntityStore, i: &Insert) -> Option<Handle> {
+    let h = Handle::parse_hex(attr(i, "MOUNT"))?;
+    matches!(store.get(h).map(|e| &e.kind), Some(EntityKind::Insert(p)) if product_attr(p).is_some()).then_some(h)
+}
+
+/// Whether mounting `h` in `parent` would put a device inside itself; the walk is bounded so a
+/// hand-edited cycle cannot spin it.
+fn mount_cycles(store: &EntityStore, h: Handle, parent: Handle) -> bool {
+    let mut at = parent;
+    for _ in 0..=store.iter().count() {
+        if at == h {
+            return true;
+        }
+        match store.get(at).map(|e| &e.kind) {
+            Some(EntityKind::Insert(i)) => match mount_of(store, i) {
+                Some(next) => at = next,
+                None => return false,
+            },
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// The accessory lines of a `csd.device.set` call: duplicates merged, zero quantities dropped.
+fn accessory_param(v: &Value) -> Result<Vec<(String, u64)>> {
+    let cmd = "csd.device.set";
+    let rows = v.as_array().ok_or_else(|| bad(cmd, "`accessories` must be a list of {product, qty}"))?;
+    if rows.len() > MAX_ACCESSORY_LINES {
+        return Err(bad(cmd, format!("at most {MAX_ACCESSORY_LINES} accessory lines")));
+    }
+    let mut out: Vec<(String, u64)> = Vec::new();
+    for r in rows {
+        let id = str_param(r, "product").filter(|t| !t.is_empty()).ok_or_else(|| bad(cmd, "each accessory needs a `product` id"))?;
+        let qty = r
+            .get("qty")
+            .and_then(Value::as_u64)
+            .filter(|q| *q <= MAX_ACCESSORY_QTY)
+            .ok_or_else(|| bad(cmd, "`qty` must be a whole number up to 100000"))?;
+        match out.iter_mut().find(|o| o.0 == id) {
+            Some(o) => o.1 = (o.1 + qty).min(MAX_ACCESSORY_QTY),
+            None => out.push((id.to_string(), qty)),
+        }
+    }
+    out.retain(|o| o.1 > 0);
+    Ok(out)
+}
+
 /// The one device `handle` (default: the selection) names.
 fn one_device(s: &Session, cmd: &str, p: &Value) -> Result<Handle> {
     match device_handles(s, &targets(s, p)?)?.as_slice() {
@@ -676,6 +738,12 @@ fn run_device_info(s: &mut Session, p: &Value) -> Result<Value> {
         "known": !product.missing,
         "label": attr(i, "NAME"),
         "notes": attr(i, "NOTES"),
+        "mount": mount_of(store, i).map(|m| json!({ "handle": m.hex(), "label": name_of(m) })),
+        "accessories": accessories_of(i).iter().map(|(id, qty)| {
+            let a = resolve(&products, id);
+            json!({ "product": a.id, "name": a.name, "code": a.code, "category": a.cat, "qty": qty })
+        }).collect::<Vec<_>>(),
+        "supplyByOthers": supplied_by_others(i),
         "ports": ports,
         "connections": connections,
         "sameProduct": same,
@@ -693,6 +761,28 @@ fn run_device_set(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => Err(bad("csd.device.set", format!("`{key}` must be text"))),
     };
     let (label, notes) = (text("label")?, text("notes")?);
+    let mount = match text("mount")? {
+        None => None,
+        Some(t) if t.is_empty() => Some(String::new()),
+        Some(t) => {
+            let parent = Handle::parse_hex(&t).ok_or_else(|| bad("csd.device.set", "`mount` must be a device handle"))?;
+            let d = s.doc()?;
+            let store = d.space(&s.space()).ok_or_else(|| EngineError::Other("no such space".into()))?;
+            if !matches!(store.get(parent).map(|e| &e.kind), Some(EntityKind::Insert(i)) if product_attr(i).is_some()) {
+                return Err(bad("csd.device.set", "`mount` is not a device on this drawing"));
+            }
+            if mount_cycles(store, h, parent) {
+                return Err(bad("csd.device.set", "a device cannot be mounted in itself or in something mounted in it"));
+            }
+            Some(parent.hex())
+        }
+    };
+    let accessories = p.get("accessories").filter(|v| !v.is_null()).map(accessory_param).transpose()?;
+    let supply = match p.get("supplyByOthers") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(b)) => Some(*b),
+        Some(_) => return Err(bad("csd.device.set", "`supplyByOthers` must be true or false")),
+    };
     let products = s.csd_library.clone();
     s.doc_mut()?.modify_entity(h, |e| {
         let EntityKind::Insert(i) = &mut e.kind else { return };
@@ -714,6 +804,15 @@ fn run_device_set(s: &mut Session, p: &Value) -> Result<Value> {
         }
         if let Some(n) = notes {
             put("NOTES", n);
+        }
+        if let Some(m) = mount {
+            put("MOUNT", m);
+        }
+        if let Some(a) = accessories {
+            put("ACCS", if a.is_empty() { String::new() } else { serde_json::to_string(&a).unwrap_or_default() });
+        }
+        if let Some(b) = supply {
+            put("SUPPLY", if b { "1".into() } else { String::new() });
         }
     })?;
     Ok(json!({ "handle": h.hex() }))

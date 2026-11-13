@@ -49,7 +49,27 @@ struct Connection {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
+struct Mount {
+    handle: String,
+    label: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct Accessory {
+    product: String,
+    name: String,
+    code: String,
+    qty: u64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
 struct Info {
+    mount: Option<Mount>,
+    accessories: Vec<Accessory>,
+    #[serde(rename = "supplyByOthers")]
+    supply_by_others: bool,
     known: bool,
     product: Product,
     label: String,
@@ -66,6 +86,16 @@ struct Info {
 
 fn parse_info(v: Value) -> Option<Info> {
     serde_json::from_value::<Info>(v).ok()
+}
+
+/// The `csd.device.set` accessory list with line `i` changed to `qty` (0 drops it), or `add` appended.
+fn accessory_lines(list: &[Accessory], change: Option<(usize, u64)>, add: Option<&str>) -> Value {
+    let mut lines: Vec<Value> =
+        list.iter().enumerate().map(|(n, a)| json!({ "product": a.product, "qty": change.filter(|c| c.0 == n).map_or(a.qty, |c| c.1) })).collect();
+    if let Some(id) = add {
+        lines.push(json!({ "product": id, "qty": 1 }));
+    }
+    Value::Array(lines)
 }
 
 fn is_full(p: &Port) -> bool {
@@ -239,6 +269,13 @@ pub(super) fn show(app: &mut CadApp, ui: &mut egui::Ui, sel: &[Handle]) {
                 cmd = Some(("csd.device.set", json!({ "handle": hex, "notes": v })));
             }
         });
+        let mut supply = i.supply_by_others;
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            if ui.checkbox(&mut supply, crate::tl!("Supplied by others")).changed() {
+                cmd = Some(("csd.device.set", json!({ "handle": hex, "supplyByOthers": supply })));
+            }
+        });
         let all_id = sid.with("all");
         let mut all = ui.data(|d| d.get_temp::<bool>(all_id)).unwrap_or(false);
         prop_row(ui, "Replace with", |ui| {
@@ -272,6 +309,66 @@ pub(super) fn show(app: &mut CadApp, ui: &mut egui::Ui, sel: &[Handle]) {
                 .small()
                 .color(t.text_dim),
             );
+        });
+    });
+
+    category(app, ui, "Mounting", |app, ui| {
+        prop_row(ui, "Mounted in", |ui| {
+            let now = i.mount.as_ref().map_or_else(|| crate::tl!("Not mounted").to_string(), |m| m.label.clone());
+            craft_ui::ComboBox::from_id_salt(sid.with("mount")).selected_text(now).width(ui.available_width() - 10.0).show_ui(ui, |ui| {
+                if ui.selectable_label(i.mount.is_none(), crate::tl!("Not mounted")).clicked() {
+                    cmd = Some(("csd.device.set", json!({ "handle": hex, "mount": "" })));
+                }
+                let others = app.session.execute("csd.schedule", &json!({})).unwrap_or_default();
+                for d in others["devices"].as_array().into_iter().flatten() {
+                    let (dh, name) = (d["handle"].as_str().unwrap_or_default(), d["label"].as_str().unwrap_or_default());
+                    let name = if name.is_empty() { d["code"].as_str().unwrap_or_default() } else { name };
+                    if dh != hex && ui.selectable_label(i.mount.as_ref().is_some_and(|m| m.handle == dh), name).clicked() {
+                        cmd = Some(("csd.device.set", json!({ "handle": hex, "mount": dh })));
+                    }
+                }
+            });
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new(crate::tl!("Mounting is layout only: ports, cables and the bill of materials do not change."))
+                    .small()
+                    .color(t.text_dim),
+            );
+        });
+    });
+
+    category(app, ui, "Accessories", |app, ui| {
+        for (n, a) in i.accessories.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.add_space(8.0);
+                let mut q = a.qty;
+                if ui.add(egui::DragValue::new(&mut q).range(1..=9999)).changed() {
+                    cmd = Some(("csd.device.set", json!({ "handle": hex, "accessories": accessory_lines(&i.accessories, Some((n, q)), None) })));
+                }
+                ui.label(if a.code.is_empty() { &a.name } else { &a.code }).on_hover_text(&a.name);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(8.0);
+                    if icons::button(ui, Icon::Erase, 20.0, "Remove accessory", false).clicked() {
+                        cmd = Some(("csd.device.set", json!({ "handle": hex, "accessories": accessory_lines(&i.accessories, Some((n, 0)), None) })));
+                    }
+                });
+            });
+        }
+        prop_row(ui, "Add accessory", |ui| {
+            craft_ui::ComboBox::from_id_salt(sid.with("accessory"))
+                .selected_text(crate::tl!("Choose an accessory"))
+                .width(ui.available_width() - 10.0)
+                .show_ui(ui, |ui| {
+                    let r = app.session.execute("csd.library.list", &json!({ "accessoriesFor": [p.id] })).unwrap_or_default();
+                    for q in r["products"].as_array().into_iter().flatten() {
+                        let id = q["id"].as_str().unwrap_or_default();
+                        if ui.selectable_label(false, q["name"].as_str().unwrap_or(id)).clicked() {
+                            cmd = Some(("csd.device.set", json!({ "handle": hex, "accessories": accessory_lines(&i.accessories, None, Some(id)) })));
+                        }
+                    }
+                });
         });
     });
 
@@ -395,6 +492,20 @@ mod tests {
         assert_eq!(connection_text(&i.connections[0]), "PoE ← Bay");
         assert!(!parse_info(json!({"known": false, "product": {"id": "X"}})).unwrap().known);
         assert!(parse_info(json!("nope")).is_none());
+    }
+
+    #[test]
+    fn accessory_lines_change_drop_and_append() {
+        let a = |p: &str, qty| Accessory { product: p.into(), qty, ..Accessory::default() };
+        let list = [a("x", 2), a("y", 1)];
+        assert_eq!(accessory_lines(&list, Some((0, 5)), None), json!([{"product": "x", "qty": 5}, {"product": "y", "qty": 1}]));
+        assert_eq!(
+            accessory_lines(&list, Some((1, 0)), Some("z")),
+            json!([{"product": "x", "qty": 2}, {"product": "y", "qty": 0}, {"product": "z", "qty": 1}])
+        );
+        let i = parse_info(json!({"mount": {"handle": "1A", "label": "Rack"}, "accessories": [{"product": "x", "qty": 2}], "supplyByOthers": true}))
+            .unwrap();
+        assert!(i.supply_by_others && i.mount.is_some_and(|m| m.label == "Rack") && i.accessories[0].qty == 2);
     }
 
     #[test]
