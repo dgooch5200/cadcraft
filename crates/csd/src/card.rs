@@ -276,25 +276,33 @@ pub fn is_two_line_block(block: &str) -> bool {
     block.ends_with(TWO_LINE_SUFFIX)
 }
 
+/// Estimated width of `c` in the web app's 9px bold type.
+/// ponytail: per character class, not measured.
+fn char_w(c: char) -> f64 {
+    match c {
+        'W' => 8.5,
+        'M' => 7.5,
+        c if c.is_lowercase() => 5.2,
+        c if c.is_whitespace() => 3.0,
+        _ => 6.6,
+    }
+}
+
+/// `height`, or less where `value` would be wider than the strip of a card `card_w` wide.
+fn fit_height(value: &str, card_w: f64, height: f64) -> f64 {
+    let max = card_w - (CARD_W - LABEL_W);
+    height.min(max * 9.0 / value.chars().map(char_w).sum::<f64>().max(1.0))
+}
+
 /// `label` cut with "..." to fit the strip of a card `card_w` wide.
-/// ponytail: widths are per character class, in the web app's 9px bold type, not measured.
 pub fn truncate_label(label: &str, card_w: f64) -> String {
     let max = card_w - (CARD_W - LABEL_W);
-    let width = |c: char| {
-        if c.is_lowercase() {
-            5.2
-        } else if c.is_whitespace() {
-            3.0
-        } else {
-            6.6
-        }
-    };
-    if label.chars().map(width).sum::<f64>() <= max {
+    if label.chars().map(char_w).sum::<f64>() <= max {
         return label.into();
     }
     let (mut used, mut out) = (8.0, String::new());
     for c in label.chars() {
-        used += width(c);
+        used += char_w(c);
         if used > max {
             break;
         }
@@ -461,13 +469,14 @@ pub fn device_block(product: &Product, two_line: bool, mut new_handle: impl FnMu
         let (rx, ry) = (hw + BORDER / 2.0, BORDER / 2.0);
         p.add(fill(round_rect(-rx, strip_top - ry, rx, strip_top + ry, [0.0; 4])), product.color);
 
+        let code = canvas_code(product);
         if two_line {
             let rule = -hh + STRIP_H;
             p.add(fill(round_rect(-rx, rule - ry, rx, rule + ry, [0.0; 4])), product.color);
-            p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: rule + STRIP_H / 2.0 }, LABEL_H, &truncate_label(&canvas_code(product), size.x))), INK);
+            p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: rule + STRIP_H / 2.0 }, fit_height(&code, size.x, LABEL_H), &code)), INK);
         } else {
             let body_mid = (hh + strip_top) / 2.0;
-            p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: body_mid }, CODE_H, &canvas_code(product))), INK);
+            p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: body_mid }, fit_height(&code, size.x, CODE_H), &code)), INK);
         }
         -hh + STRIP_H / 2.0
     };
@@ -565,4 +574,22 @@ pub fn deco_points(path: &[Vec2], ortho: bool, label_t: Option<f64>) -> Option<[
         }
     }
     Some([(Deco::Start, a), (Deco::End, z), (Deco::Pill, (longest.0 + longest.1) * 0.5)])
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+
+    #[test]
+    fn a_ten_character_code_is_not_cut_off() {
+        for code in ["WWWWWWWWWW", "EpixFLXDRV", "MMMMMMMMMM"] {
+            for h in [CODE_H, LABEL_H] {
+                let fit = fit_height(code, CARD_W, h);
+                let w: f64 = code.chars().map(char_w).sum::<f64>() * fit / 9.0;
+                assert!(w <= LABEL_W + 1e-9, "{code} at {h}: {w}");
+            }
+        }
+        // The old strip cut this with an ellipsis though its 6 high text fits.
+        assert_eq!(fit_height("EpixFLXDRV", CARD_W, LABEL_H), LABEL_H);
+    }
 }
