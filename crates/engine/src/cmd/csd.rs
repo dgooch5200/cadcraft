@@ -25,6 +25,7 @@ mod cpsd;
 mod cpsd_out;
 mod group;
 mod library_csv;
+mod mount;
 mod new;
 mod patch;
 mod place;
@@ -1298,6 +1299,7 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
         && (restyled || before.is_some_and(|b| !Arc::ptr_eq(b, &st.doc)))
     {
         if let Some(b) = before {
+            mount::auto_mount(b, &mut st.doc, &library);
             carry_mounted(b, &mut st.doc);
         }
         refresh(&mut st.doc, &library, ortho);

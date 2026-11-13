@@ -194,6 +194,25 @@ fn moving_a_rack_carries_what_is_mounted_in_it_once() {
 }
 
 #[test]
+fn moving_a_device_wholly_into_a_card_mounts_it_and_out_unmounts() {
+    let mut s = Session::new();
+    let rack = place(&mut s, CONSOLE, [0.0, 0.0]);
+    let inner = place(&mut s, NODE, [600.0, 0.0]);
+    s.execute("csd.size", &json!({ "handles": [rack.hex()], "w": 1000, "h": 1000 })).unwrap();
+    let mount = |s: &mut Session| info(s, inner)["mount"]["handle"].as_str().map(str::to_string);
+    // Clipping the edge is only passing over.
+    s.execute("move", &json!({ "handles": [inner.hex()], "from": [600, 0], "to": [480, 0] })).unwrap();
+    assert_eq!(mount(&mut s), None);
+    s.execute("move", &json!({ "handles": [inner.hex()], "from": [480, 0], "to": [10, 0] })).unwrap();
+    assert_eq!(mount(&mut s), Some(rack.hex()));
+    s.undo().unwrap();
+    assert_eq!(mount(&mut s), None);
+    s.redo().unwrap();
+    s.execute("move", &json!({ "handles": [inner.hex()], "from": [10, 0], "to": [900, 0] })).unwrap();
+    assert_eq!(mount(&mut s), None);
+}
+
+#[test]
 fn builtin_blocks_place_but_are_on_no_list() {
     let mut s = Session::new();
     let node = place(&mut s, NODE, [0.0, 0.0]);
