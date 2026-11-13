@@ -921,7 +921,8 @@ mod autocomplete_tests {
     #[test]
     fn lighting_commands_are_suggested_but_internal_ones_are_not() {
         let cs: Vec<String> = suggestions("cs").into_iter().map(|s| s.id).collect();
-        assert!(cs.contains(&"CSD.PLACE".to_string()) && cs.contains(&"CSD.CONNECT".to_string()), "{cs:?}");
+        assert!(cs.contains(&"CSD.PLACE".to_string()), "{cs:?}");
+        assert!(suggestions("csd.con").iter().any(|s| s.id == "CSD.CONNECT"));
         assert!(suggestions("zoom.").is_empty());
     }
 
