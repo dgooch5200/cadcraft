@@ -11,7 +11,9 @@ use cadcraft_geom::{PolyVertex, Vec2};
 use crate::wire::{point_at, smooth};
 use crate::{Deco, OFF_PAGE_ID, Product, Protocol, Side, is_builtin};
 
+mod canvas;
 mod sheet;
+pub use canvas::*;
 pub use sheet::*;
 
 /// Default card size in drawing units; the insertion point is the card centre. The body is the
@@ -33,11 +35,9 @@ const LANE: f64 = 6.0;
 pub const TERM_R: f64 = 4.5;
 pub const WIRE_W: f64 = 2.5;
 const PILL_H: f64 = 14.0;
-const CODE_H: f64 = 7.0;
+/// Text height of the body's code: [`CANVAS_CODE_MAX`] bold characters fit the 70 wide card.
+const CODE_H: f64 = 9.0;
 const LABEL_H: f64 = 6.0;
-/// Characters of the code on one line of the body, and lines kept.
-const CODE_CHARS: usize = 9;
-const CODE_LINES: usize = 3;
 /// Width the strip text may use, in the estimate of `truncate_label`.
 const LABEL_W: f64 = 60.0;
 /// Space kept clear inside a built-in box on each side of its wrapped label.
@@ -276,25 +276,6 @@ pub fn is_two_line_block(block: &str) -> bool {
     block.ends_with(TWO_LINE_SUFFIX)
 }
 
-/// The code as the body shows it: wrapped at words, or inside a long word, to `CODE_CHARS` a line.
-pub fn wrap_code(code: &str) -> Vec<String> {
-    let mut lines: Vec<String> = Vec::new();
-    for word in code.split_whitespace() {
-        for chunk in word.chars().collect::<Vec<_>>().chunks(CODE_CHARS) {
-            let chunk: String = chunk.iter().collect();
-            match lines.last_mut() {
-                Some(l) if l.chars().count() + 1 + chunk.chars().count() <= CODE_CHARS => {
-                    l.push(' ');
-                    l.push_str(&chunk);
-                }
-                _ => lines.push(chunk),
-            }
-        }
-    }
-    lines.truncate(CODE_LINES);
-    lines
-}
-
 /// `label` cut with "..." to fit the strip of a card `card_w` wide.
 /// ponytail: widths are per character class, in the web app's 9px bold type, not measured.
 pub fn truncate_label(label: &str, card_w: f64) -> String {
@@ -483,14 +464,10 @@ pub fn device_block(product: &Product, two_line: bool, mut new_handle: impl FnMu
         if two_line {
             let rule = -hh + STRIP_H;
             p.add(fill(round_rect(-rx, rule - ry, rx, rule + ry, [0.0; 4])), product.color);
-            p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: rule + STRIP_H / 2.0 }, LABEL_H, &truncate_label(&product.code, size.x))), INK);
+            p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: rule + STRIP_H / 2.0 }, LABEL_H, &truncate_label(&canvas_code(product), size.x))), INK);
         } else {
-            let lines = wrap_code(&product.code);
             let body_mid = (hh + strip_top) / 2.0;
-            let first = body_mid + (lines.len() as f64 - 1.0) / 2.0 * (CODE_H + 3.0);
-            for (i, line) in lines.iter().enumerate() {
-                p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: first - i as f64 * (CODE_H + 3.0) }, CODE_H, line)), INK);
-            }
+            p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: body_mid }, CODE_H, &canvas_code(product))), INK);
         }
         -hh + STRIP_H / 2.0
     };
