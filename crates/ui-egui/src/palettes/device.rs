@@ -139,7 +139,7 @@ fn is_device(app: &CadApp, h: Handle) -> bool {
 }
 
 /// A collapsible category; `body` runs while it is open.
-fn category(app: &mut CadApp, ui: &mut egui::Ui, name: &str, body: impl FnOnce(&mut CadApp, &mut egui::Ui)) {
+pub(super) fn category(app: &mut CadApp, ui: &mut egui::Ui, name: &str, body: impl FnOnce(&mut CadApp, &mut egui::Ui)) {
     let collapsed = app.ui.collapsed_groups.iter().any(|g| g == name);
     let (_, resp) = group_title(ui, name, collapsed);
     icons::describe_control(ui, &resp, name, Some(!collapsed), false);

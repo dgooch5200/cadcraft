@@ -55,6 +55,24 @@ struct Device {
     poe: f64,
     #[serde(rename = "controlGear")]
     control: bool,
+    #[serde(rename = "mountedIn")]
+    mounted_in: String,
+    #[serde(rename = "supplyByOthers")]
+    by_others: bool,
+    accessories: Vec<Accessory>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct Accessory {
+    code: String,
+    qty: u64,
+}
+
+impl Device {
+    fn accessory_count(&self) -> u64 {
+        self.accessories.iter().map(|a| a.qty).sum()
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -177,6 +195,7 @@ fn compare(a: &Device, b: &Device, col: usize) -> Ordering {
             4 => &d.label,
             5 => &d.ports,
             8 => &d.notes,
+            9 => &d.mounted_in,
             _ => &d.handle,
         }
         .to_lowercase()
@@ -184,6 +203,8 @@ fn compare(a: &Device, b: &Device, col: usize) -> Ordering {
     match col {
         6 => a.connections.cmp(&b.connections),
         7 => a.poe.total_cmp(&b.poe),
+        10 => a.by_others.cmp(&b.by_others),
+        11 => a.accessory_count().cmp(&b.accessory_count()),
         _ => text(a).cmp(&text(b)),
     }
 }
@@ -221,9 +242,24 @@ fn placed_tab(ui: &mut egui::Ui, st: &mut State, l: &Lists, act: &mut Option<Act
     if let Some((c, asc)) = st.sort {
         view.sort_by(|a, b| (!a.control).cmp(&!b.control).then_with(|| if asc { compare(a, b, c) } else { compare(a, b, c).reverse() }));
     }
-    const LABELS: [&str; 10] = ["#", "Product", "Category", "Code", "Label", "Ports in use", "Conns", "PoE load", "Notes", "Actions"];
+    const LABELS: [&str; 13] = [
+        "#",
+        "Product",
+        "Category",
+        "Code",
+        "Label",
+        "Ports in use",
+        "Conns",
+        "PoE load",
+        "Notes",
+        "Mounted in",
+        "By others",
+        "Accessories",
+        "Actions",
+    ];
+    const LAST: usize = LABELS.len() - 1;
     let row_h = ui.text_style_height(&egui::TextStyle::Body) + 6.0;
-    builder(ui, &[30.0, 200.0, 120.0, 90.0, 110.0, 150.0, 50.0, 70.0, 160.0, 150.0])
+    builder(ui, &[30.0, 200.0, 120.0, 90.0, 110.0, 150.0, 50.0, 70.0, 160.0, 120.0, 70.0, 90.0, 150.0])
         .header(row_h + 4.0, |mut h| {
             for (i, label) in LABELS.iter().enumerate() {
                 h.col(|ui| {
@@ -233,13 +269,13 @@ fn placed_tab(ui: &mut egui::Ui, st: &mut State, l: &Lists, act: &mut Option<Act
                         _ => "",
                     };
                     let text = RichText::new(format!("{}{arrow}", crate::i18n::t(label))).strong();
-                    if i > 0 && i < 9 && ui.add(egui::Label::new(text).sense(egui::Sense::click())).clicked() {
+                    if i > 0 && i < LAST && ui.add(egui::Label::new(text).sense(egui::Sense::click())).clicked() {
                         st.sort = match st.sort {
                             Some((c, true)) if c == i => Some((i, false)),
                             Some((c, false)) if c == i => None,
                             _ => Some((i, true)),
                         };
-                    } else if i == 0 || i == 9 {
+                    } else if i == 0 || i == LAST {
                         ui.label(RichText::new(crate::i18n::t(label)).strong());
                     }
                 });
@@ -254,6 +290,15 @@ fn placed_tab(ui: &mut egui::Ui, st: &mut State, l: &Lists, act: &mut Option<Act
                 for t in [&d.name, &d.category, &d.code, &d.label, &d.ports, &d.connections.to_string(), &poe, &d.notes] {
                     cell(&mut r, t);
                 }
+                cell(&mut r, &d.mounted_in);
+                cell(&mut r, if d.by_others { "✓" } else { "" });
+                r.col(|ui| {
+                    if d.accessories.is_empty() {
+                        return;
+                    }
+                    let names = d.accessories.iter().map(|a| format!("{} x {}", a.qty, a.code)).collect::<Vec<_>>().join("\n");
+                    ui.label(d.accessory_count().to_string()).on_hover_text(names);
+                });
                 r.col(|ui| {
                     if ui.small_button(crate::tl!("Locate")).clicked() {
                         *act = Some(Act::Locate(d.handle.clone()));
@@ -569,6 +614,22 @@ mod tests {
 
     fn app() -> CadApp {
         CadApp::new(cadcraft_engine::Session::new(), crate::Services::default())
+    }
+
+    #[test]
+    fn placed_rows_carry_mounting_supply_and_accessories() {
+        let mut app = app();
+        let rack = app.run("csd.place", json!({ "product": "CHAMMQ50", "at": [0, 0] })).unwrap();
+        let node = app.run("csd.place", json!({ "product": "epix-flex-drive", "at": [300, 0] })).unwrap();
+        app.run("csd.device.set", json!({ "handle": rack["handle"], "label": "Rack" })).unwrap();
+        app.run(
+            "csd.device.set",
+            json!({ "handle": node["handle"], "mount": rack["handle"], "supplyByOthers": true, "accessories": [{ "product": "b565fc", "qty": 2 }] }),
+        )
+        .unwrap();
+        let l = lists(&mut app);
+        let d = l.devices.iter().find(|d| d.by_others).expect("the supplied device");
+        assert_eq!((d.mounted_in.as_str(), d.accessory_count()), ("Rack", 2));
     }
 
     #[test]
