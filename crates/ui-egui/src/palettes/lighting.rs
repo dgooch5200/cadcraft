@@ -198,25 +198,24 @@ pub(super) fn body(app: &mut CadApp, ui: &mut egui::Ui) {
     }
     toolbar(app, ui, &t);
     ui.add_space(4.0);
+    // The file actions share the search row: a row of their own pushes the Tool Sets below down.
+    let mut file = None;
     ui.horizontal(|ui| {
         ui.add_space(8.0);
-        let w = (ui.available_width() - 16.0) / 3.0;
-        if ui.add_sized(vec2(w, 20.0), egui::Button::new(crate::tl!("Import .cpsd…")).truncate()).clicked() {
-            let _ = app.run("csd.import.cpsd", serde_json::Value::Null);
-        }
-        if ui.add_sized(vec2(w, 20.0), egui::Button::new(crate::tl!("Print sheet…")).truncate()).clicked() {
-            let _ = app.run("csd.print", serde_json::Value::Null);
-        }
-        if ui.add_sized(vec2(w, 20.0), egui::Button::new(crate::tl!("Export .cpsd…")).truncate()).clicked() {
-            let _ = app.run("csd.export.cpsd", serde_json::Value::Null);
-        }
-    });
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.add_space(8.0);
-        ui.add(egui::TextEdit::singleline(&mut f.query).hint_text(crate::tl!("Search products")).desired_width(ui.available_width() - 8.0))
+        ui.add(egui::TextEdit::singleline(&mut f.query).hint_text(crate::tl!("Search products")).desired_width(ui.available_width() - 60.0))
             .accessible_name(crate::tl!("Search products"));
+        ui.menu_button(crate::tl!("File"), |ui| {
+            for (label, cmd) in [("Import .cpsd…", "csd.import.cpsd"), ("Export .cpsd…", "csd.export.cpsd"), ("Print sheet…", "csd.print")] {
+                if ui.button(crate::i18n::t(label)).clicked() {
+                    file = Some(cmd);
+                    ui.close();
+                }
+            }
+        });
     });
+    if let Some(cmd) = file {
+        let _ = app.run(cmd, serde_json::Value::Null);
+    }
     ui.add_space(3.0);
     ui.horizontal(|ui| {
         ui.add_space(8.0);
