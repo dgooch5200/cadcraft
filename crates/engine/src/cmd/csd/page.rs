@@ -126,6 +126,30 @@ pub(super) fn refresh_labels(doc: &mut Arc<Drawing>) {
     }
 }
 
+/// A warning naming the devices that moved between `before` and `doc` and now sit on no sheet,
+/// when their space has two or more pages (a device's page is where it lies).
+pub(super) fn off_sheet_warning(before: &Drawing, doc: &Drawing) -> Option<String> {
+    const NAMED: usize = 3;
+    let mut off: Vec<String> = Vec::new();
+    for space in super::spaces(doc) {
+        let (Some(store), Some(old)) = (doc.space(&space), before.space(&space)) else { continue };
+        let ps = pages_in(store);
+        if ps.len() < 2 {
+            continue;
+        }
+        for e in store.iter() {
+            let EntityKind::Insert(i) = &e.kind else { continue };
+            let Some(EntityKind::Insert(was)) = old.get(e.handle).map(|o| &o.kind) else { continue };
+            if product_attr(i).is_some() && !was.insert.xy().near(i.insert.xy(), 1e-9) && page_of(doc, &ps, i.insert.xy()).is_none() {
+                off.push(attr(i, "NAME").to_string());
+            }
+        }
+    }
+    let named = off.iter().take(NAMED).map(String::as_str).collect::<Vec<_>>().join(", ");
+    let more = if off.len() > NAMED { ", ..." } else { "" };
+    (!off.is_empty()).then(|| format!("Warning: {} device(s) are off every sheet ({named}{more}); they will not print.", off.len()))
+}
+
 pub(super) fn run_pages(s: &mut Session, _: &Value) -> Result<Value> {
     let list: Vec<Value> = pages(s).iter().enumerate().map(|(n, g)| json!({ "index": n + 1, "name": g.name(n), "handle": g.handle.hex() })).collect();
     Ok(json!({ "pages": list }))
@@ -275,6 +299,22 @@ mod tests {
         assert_eq!(r["pages"], 1);
         assert_eq!(sheet_fields(&s, SHEET_TAG), [""]);
         assert!(s.execute("csd.page.remove", &json!({ "page": 1 })).is_err(), "the last page stays");
+    }
+
+    #[test]
+    fn moving_a_device_off_every_sheet_warns_only_with_two_pages() {
+        let mut s = Session::new();
+        let h = place(&mut s, PRODUCT, [100.0, 500.0]);
+        let mv = |s: &mut Session, to: f64| s.execute("move", &json!({ "handles": [h], "delta": [to, 0] })).unwrap();
+        let warned = |s: &Session| s.log.iter().any(|m| m.contains("off every sheet"));
+        s.execute("csd.titleblock", &json!({})).unwrap();
+        mv(&mut s, 1650.0);
+        assert!(!warned(&s), "a single page has no other sheet to be on");
+        s.execute("csd.page.add", &json!({})).unwrap();
+        mv(&mut s, 100.0);
+        assert!(!warned(&s), "still on a sheet");
+        mv(&mut s, -2000.0);
+        assert!(warned(&s));
     }
 
     #[test]

@@ -126,7 +126,7 @@ fn own_specs() -> Vec<CommandSpec> {
         CommandSpec::new("csd.device.mode", "Set Device DMX Mode", patch::run_device_mode)
             .params("{handles? (default the selection), mode: a mode name the product offers (empty or null = the product's largest)} → {changed}"),
         CommandSpec::new("csd.patch", "DMX Patch", patch::run_patch)
-            .params("{order?: drawing|name|product|position (default: the drawing's saved order)} → {order: the saved order, addressing: bool, rows: [{handle: null for an unplaced product, carriedBy: the device an accessory rides on or null, label, product, name, mode: chosen mode or null, assumedMode, modes: [names], channels, universe, address}], universes: {used, budget, over}}; devices that take channels (each with its accessories after it, one row per unit, and the unplaced products last) packed into 512-channel universes in order, none straddling a universe; budget is the universes the placed controllers originate")
+            .params("{order?: drawing|name|product|position (default: the drawing's saved order)} → {order: the saved order, addressing: bool, rows: [{handle: null for an unplaced product, carriedBy: the device an accessory rides on or null, label, product, name, mode: chosen mode or null, assumedMode, modes: [names], channels, page: 1-based sheet or null (unplaced or off every sheet), universe, address}], universes: {used, budget, over}}; devices that take channels (each with its accessories after it, one row per unit, and the unplaced products last) packed into 512-channel universes in order, none straddling a universe; budget is the universes the placed controllers originate")
             .noundo(),
         CommandSpec::new("csd.patch.setup", "DMX Patch Setup", patch::run_patch_setup)
             .params("{order?: drawing|name|product|position, addressing?: bool} → {order, addressing}; saves the patch order and the addressing switch with the drawing (csd.patch and its export use them; addressing off patches nothing)"),
@@ -1327,6 +1327,7 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
     let ortho = s.settings.orthomode;
     let restyled = std::mem::replace(&mut s.csd_ortho, ortho) != ortho;
     let library = s.csd_library.clone();
+    let mut warning = None;
     if let Ok(st) = s.state_mut()
         && (restyled || before.is_some_and(|b| !Arc::ptr_eq(b, &st.doc)))
     {
@@ -1335,8 +1336,13 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
             mount::stack(&mut st.doc);
             mount::lift_wires(b, &mut st.doc);
             carry_mounted(b, &mut st.doc);
+            warning = page::off_sheet_warning(b, &st.doc);
         }
         refresh(&mut st.doc, &library, ortho);
+    }
+    // Only the command line carries it: a command's own result is built before this pass.
+    if let Some(w) = warning {
+        s.echo(w);
     }
 }
 
