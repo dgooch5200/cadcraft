@@ -117,9 +117,11 @@ fn own_specs() -> Vec<CommandSpec> {
             .params("{} → {devices: [{handle, product, label, at}], wires: [{handle, from, fromSide, to, toSide, protocol}]}")
             .noundo(),
         CommandSpec::new("csd.titleblock", "Title Block", sheet::run_titleblock)
-            .params("{at?: [x,y] the page's lower-left corner (default 0,0)} → {handle}; inserts the CSD_TITLEBLOCK sheet frame and title block if the drawing has none, else returns the existing one"),
+            .params("{at?: [x,y] the page's lower-left corner (default 0,0), paper?: tabloid|letter (default tabloid; an existing title block is resized when given)} → {handle, paper}; inserts the CSD_TITLEBLOCK sheet frame and title block if the drawing has none, else returns the existing one"),
+        CommandSpec::new("csd.paper", "Paper Size", sheet::run_paper)
+            .params("{paper: tabloid|letter} → {handle, paper}; redraws the title block and line key for 11x17 or 8.5x11 landscape, keeping the field values; needs a title block"),
         CommandSpec::new("csd.project", "Project Info", sheet::run_project)
-            .params("{} → {fields: {brand, project, venue, location, drawnBy, date, sheet, rev, title, meta}, exists, handle, devices}; the title block's attributes, empty text when there is no title block")
+            .params("{} → {fields: {brand, project, venue, location, drawnBy, date, sheet, rev, title, meta}, exists, paper, handle, devices}; the title block's attributes, empty text when there is no title block")
             .noundo()
             .enabled(always),
         CommandSpec::new("csd.project.set", "Set Project Info", sheet::run_project_set)

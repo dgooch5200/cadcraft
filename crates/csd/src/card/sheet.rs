@@ -1,4 +1,4 @@
-//! The sheet: a 1632 x 1056 page frame with the title block along its bottom edge, and the line
+//! The sheet: a page frame (tabloid 1632 x 1056 or letter 1056 x 816) with the title block along its bottom edge, and the line
 //! key that lists the protocols a drawing uses. Dimensions follow the web app's sheet; the block
 //! origin is the page's lower-left corner.
 
@@ -10,8 +10,48 @@ use super::{
 pub const TITLEBLOCK: &str = "CSD_TITLEBLOCK";
 pub const LEGEND: &str = "CSD_LEGEND";
 
-pub const PAGE_W: f64 = 1632.0;
-pub const PAGE_H: f64 = 1056.0;
+/// A print size, in the web app's 96 dpi pixels (11x17in and 11x8.5in landscape).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Paper {
+    #[default]
+    Tabloid,
+    Letter,
+}
+
+impl Paper {
+    pub fn id(self) -> &'static str {
+        match self {
+            Paper::Tabloid => "tabloid",
+            Paper::Letter => "letter",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Paper> {
+        [Paper::Tabloid, Paper::Letter].into_iter().find(|p| p.id() == id)
+    }
+
+    /// Page (width, height).
+    pub fn size(self) -> (f64, f64) {
+        match self {
+            Paper::Tabloid => (1632.0, 1056.0),
+            Paper::Letter => (1056.0, 816.0),
+        }
+    }
+
+    /// The paper a title block or legend definition was drawn for, read from its widest vertex.
+    pub fn of_block(block: &Block) -> Paper {
+        let right = block
+            .entities
+            .iter()
+            .filter_map(|e| match &e.kind {
+                EntityKind::LwPolyline(p) => Some(p.vertices.iter().map(|v| v.p.x).fold(0.0, f64::max)),
+                _ => None,
+            })
+            .fold(0.0, f64::max);
+        let letter = Paper::Letter.size().0;
+        if (right - (letter - MARGIN)).abs() < 1.0 || (right - (letter - MARGIN * 2.0)).abs() < 1.0 { Paper::Letter } else { Paper::Tabloid }
+    }
+}
 pub const MARGIN: f64 = 22.0;
 pub const TITLE_H: f64 = 70.0;
 /// Height of the line key, and of the power note under it; the legend's origin is the note's bottom.
@@ -90,10 +130,11 @@ fn ink<F: FnMut() -> Handle>(p: &mut Painter<'_, F>, kind: EntityKind) {
 
 /// The page frame and the title block, with an attribute definition for each of [`TITLE_FIELDS`]
 /// (all empty but the brand).
-pub fn titleblock_block(mut new_handle: impl FnMut() -> Handle) -> Block {
+pub fn titleblock_block(paper: Paper, mut new_handle: impl FnMut() -> Handle) -> Block {
     let mut p = Painter { block: Block::new(TITLEBLOCK), new_handle: &mut new_handle };
-    let (x0, y0, x1, top) = (MARGIN, MARGIN, PAGE_W - MARGIN, MARGIN + TITLE_H);
-    p.add(outline(rect(x0, y0, x1, PAGE_H - MARGIN), 0.75), 0xcccccc);
+    let (page_w, page_h) = paper.size();
+    let (x0, y0, x1, top) = (MARGIN, MARGIN, page_w - MARGIN, MARGIN + TITLE_H);
+    p.add(outline(rect(x0, y0, x1, page_h - MARGIN), 0.75), 0xcccccc);
     ink(&mut p, outline(rect(x0, y0, x1, top), 1.5));
     let (fx, row) = (x0 + BRAND_W, top - ROW1_H);
     ink(&mut p, line(fx, y0, fx, top, 1.0));
@@ -135,9 +176,9 @@ pub fn legend_protocols(block: &Block) -> Vec<Protocol> {
 /// The line key listing `used` (in [`Protocol::ALL`] order), each as a 28 unit line in its colour,
 /// dashed where the protocol is; with the power note when `used` has power. `dash_scale` is the
 /// linetype scale of the dashed ones.
-pub fn legend_block(used: &[Protocol], dash_scale: f64, mut new_handle: impl FnMut() -> Handle) -> Block {
+pub fn legend_block(paper: Paper, used: &[Protocol], dash_scale: f64, mut new_handle: impl FnMut() -> Handle) -> Block {
     let mut p = Painter { block: Block::new(LEGEND), new_handle: &mut new_handle };
-    let w = PAGE_W - MARGIN * 2.0;
+    let w = paper.size().0 - MARGIN * 2.0;
     p.add(outline(rect(0.0, NOTE_H, w, NOTE_H + KEY_H), 0.5), RULE);
     let mid = NOTE_H + KEY_H / 2.0;
     p.add(EntityKind::Text(label(5.0, mid, 5.0, "LINE KEY:")), FAINT);

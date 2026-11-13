@@ -216,6 +216,19 @@ fn show_title_block(app: &mut CadApp, ui: &mut egui::Ui, sel: &[Handle]) {
                 }
             });
         }
+        if tb.is_some() {
+            let now = info["paper"].as_str().unwrap_or("tabloid");
+            let name = |id| if id == "letter" { crate::tl!("Letter (8.5×11)") } else { crate::tl!("Tabloid (11×17)") };
+            prop_row(ui, "Paper size", |ui| {
+                craft_ui::ComboBox::from_id_salt(sid.with("paper")).selected_text(name(now)).width(ui.available_width() - 10.0).show_ui(ui, |ui| {
+                    for id in ["tabloid", "letter"] {
+                        if ui.selectable_label(id == now, name(id)).clicked() {
+                            cmd = Some(("csd.paper", json!({ "paper": id })));
+                        }
+                    }
+                });
+            });
+        }
         if tb.is_none() {
             ui.horizontal(|ui| {
                 ui.add_space(8.0);

@@ -1046,6 +1046,48 @@ fn titleblock_is_inserted_once_and_fields_are_set_and_undone() {
     assert_eq!(fields(&mut s)["project"], "");
 }
 
+fn block_right(s: &Session, name: &str) -> f64 {
+    let b = s.doc().unwrap().block(name).unwrap();
+    b.entities
+        .iter()
+        .filter_map(|e| if let EntityKind::LwPolyline(p) = &e.kind { Some(p.vertices.iter().map(|v| v.p.x).fold(0.0, f64::max)) } else { None })
+        .fold(0.0, f64::max)
+}
+
+#[test]
+fn paper_sizes_the_sheet_and_legend_and_keeps_fields() {
+    let mut s = Session::new();
+    assert!(s.execute("csd.paper", &json!({ "paper": "letter" })).is_err(), "needs a title block");
+    assert!(s.execute("csd.titleblock", &json!({ "paper": "a4" })).is_err());
+    assert_eq!(s.execute("csd.titleblock", &json!({})).unwrap()["paper"], "tabloid");
+    assert_eq!(block_right(&s, "CSD_TITLEBLOCK"), 1632.0 - 22.0);
+    s.execute("csd.project.set", &json!({ "fields": { "project": "Arena" } })).unwrap();
+    s.execute("csd.legend", &json!({})).unwrap();
+    assert_eq!(block_right(&s, "CSD_LEGEND"), 1632.0 - 44.0);
+
+    assert_eq!(s.execute("csd.paper", &json!({ "paper": "letter" })).unwrap()["paper"], "letter");
+    assert_eq!(block_right(&s, "CSD_TITLEBLOCK"), 1056.0 - 22.0);
+    assert_eq!(block_right(&s, "CSD_LEGEND"), 1056.0 - 44.0);
+    assert_eq!(fields(&mut s)["project"], "Arena");
+    assert_eq!(s.execute("csd.project", &json!({})).unwrap()["paper"], "letter");
+    // An existing title block is resized when the paper is given, and left alone when not.
+    s.execute("csd.titleblock", &json!({})).unwrap();
+    assert_eq!(block_right(&s, "CSD_TITLEBLOCK"), 1056.0 - 22.0);
+    s.execute("csd.titleblock", &json!({ "paper": "tabloid" })).unwrap();
+    assert_eq!(block_right(&s, "CSD_TITLEBLOCK"), 1632.0 - 22.0);
+    s.undo().unwrap();
+    assert_eq!(block_right(&s, "CSD_TITLEBLOCK"), 1056.0 - 22.0);
+}
+
+#[test]
+fn a_new_letter_titleblock_is_letter_sized() {
+    let mut s = Session::new();
+    s.execute("csd.titleblock", &json!({ "paper": "letter" })).unwrap();
+    assert_eq!(block_right(&s, "CSD_TITLEBLOCK"), 1056.0 - 22.0);
+    s.execute("csd.legend", &json!({})).unwrap();
+    assert_eq!(block_right(&s, "CSD_LEGEND"), 1056.0 - 44.0);
+}
+
 #[test]
 fn project_set_inserts_the_titleblock_when_missing_in_one_undo_step() {
     let mut s = Session::new();

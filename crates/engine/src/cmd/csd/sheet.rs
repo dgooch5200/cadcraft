@@ -4,7 +4,7 @@ use super::{
     Arc, DASH_LEN, Drawing, EntityKind, Handle, HashSet, Insert, Map, Protocol, Result, Session, Value, Vec2, attr, bad, dashed_scale, ensure_bold,
     json, product_attr, spaces, wires,
 };
-use cadcraft_csd::{LEGEND, MARGIN, TITLE_FIELDS, TITLE_H, TITLEBLOCK, legend_block, legend_protocols, titleblock_block};
+use cadcraft_csd::{LEGEND, MARGIN, Paper, TITLE_FIELDS, TITLE_H, TITLEBLOCK, legend_block, legend_protocols, titleblock_block};
 
 use crate::cmd::point_param;
 
@@ -16,14 +16,26 @@ fn find(s: &Session, name: &str) -> Option<(Handle, Insert)> {
     })
 }
 
-fn ensure_titleblock(s: &mut Session, at: Vec2) -> Result<Handle> {
+fn paper_param(cmd: &str, p: &Value) -> Result<Option<Paper>> {
+    match p.get("paper") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_str().and_then(Paper::from_id).map(Some).ok_or_else(|| bad(cmd, "`paper` must be \"tabloid\" or \"letter\"")),
+    }
+}
+
+/// The paper the drawing's title block was drawn for; tabloid without one.
+fn paper_of(doc: &Drawing) -> Paper {
+    doc.block(TITLEBLOCK).map_or(Paper::Tabloid, |b| Paper::of_block(b))
+}
+
+fn ensure_titleblock(s: &mut Session, at: Vec2, paper: Paper) -> Result<Handle> {
     if let Some((h, _)) = find(s, TITLEBLOCK) {
         return Ok(h);
     }
     let d = s.doc_mut()?;
     ensure_bold(d);
     if d.block(TITLEBLOCK).is_none() {
-        let block = titleblock_block(|| d.new_handle());
+        let block = titleblock_block(paper, || d.new_handle());
         d.blocks.insert(TITLEBLOCK.into(), Arc::new(block));
     }
     crate::cmd::blocks::insert(s, TITLEBLOCK, at, 1.0, 0.0, &Map::new())
@@ -31,7 +43,32 @@ fn ensure_titleblock(s: &mut Session, at: Vec2) -> Result<Handle> {
 
 pub(super) fn run_titleblock(s: &mut Session, p: &Value) -> Result<Value> {
     let at = point_param(p, "at").unwrap_or(Vec2::ZERO);
-    Ok(json!({ "handle": ensure_titleblock(s, at)?.hex() }))
+    let paper = paper_param("csd.titleblock", p)?;
+    let h = ensure_titleblock(s, at, paper.unwrap_or_default())?;
+    if let Some(paper) = paper {
+        set_paper(s, paper)?;
+    }
+    Ok(json!({ "handle": h.hex(), "paper": paper_of(s.doc()?).id() }))
+}
+
+/// Redraws the title block (field values live on its insert and stay) and the legend for `paper`.
+fn set_paper(s: &mut Session, paper: Paper) -> Result<()> {
+    if paper_of(s.doc()?) == paper {
+        return Ok(());
+    }
+    let d = s.doc_mut()?;
+    let block = titleblock_block(paper, || d.new_handle());
+    d.blocks.insert(TITLEBLOCK.into(), Arc::new(block));
+    sync_legend(&mut s.state_mut()?.doc);
+    Ok(())
+}
+
+pub(super) fn run_paper(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "csd.paper";
+    let paper = paper_param(cmd, p)?.ok_or_else(|| bad(cmd, "`paper` (tabloid|letter) is required"))?;
+    let h = find(s, TITLEBLOCK).map(|(h, _)| h).ok_or_else(|| bad(cmd, "the drawing has no title block; run csd.titleblock first"))?;
+    set_paper(s, paper)?;
+    Ok(json!({ "handle": h.hex(), "paper": paper.id() }))
 }
 
 pub(super) fn run_project(s: &mut Session, _: &Value) -> Result<Value> {
@@ -42,7 +79,9 @@ pub(super) fn run_project(s: &mut Session, _: &Value) -> Result<Value> {
         .doc()?
         .space(&s.space())
         .map_or(0, |st| st.iter().filter(|e| matches!(&e.kind, EntityKind::Insert(i) if product_attr(i).is_some())).count());
-    Ok(json!({ "fields": fields, "exists": found.is_some(), "handle": found.map(|(h, _)| h.hex()), "devices": devices }))
+    Ok(
+        json!({ "fields": fields, "exists": found.is_some(), "paper": paper_of(s.doc()?).id(), "handle": found.map(|(h, _)| h.hex()), "devices": devices }),
+    )
 }
 
 /// The bill of materials footer: the title block's filled-in project fields on one line.
@@ -64,7 +103,7 @@ pub(super) fn run_project_set(s: &mut Session, p: &Value) -> Result<Value> {
         let text = value.as_str().ok_or_else(|| bad(cmd, format!("`{key}` must be text")))?;
         edits.push((*tag, text.to_string()));
     }
-    let h = ensure_titleblock(s, Vec2::ZERO)?;
+    let h = ensure_titleblock(s, Vec2::ZERO, Paper::default())?;
     s.doc_mut()?.modify_entity(h, |e| {
         let EntityKind::Insert(i) = &mut e.kind else { return };
         for (tag, text) in edits {
@@ -85,13 +124,14 @@ fn used_protocols(doc: &Drawing) -> Vec<Protocol> {
 /// Redefines the legend block when the protocols in use differ from the ones it lists.
 fn sync_legend(doc: &mut Arc<Drawing>) {
     let used = used_protocols(doc);
-    if doc.block(LEGEND).is_some_and(|b| legend_protocols(b) == used) {
+    let paper = paper_of(doc);
+    if doc.block(LEGEND).is_some_and(|b| legend_protocols(b) == used && Paper::of_block(b) == paper) {
         return;
     }
     let d = Arc::make_mut(doc);
     ensure_bold(d);
     let dash = dashed_scale(d, DASH_LEN);
-    let block = legend_block(&used, dash, || d.new_handle());
+    let block = legend_block(paper, &used, dash, || d.new_handle());
     d.blocks.insert(LEGEND.into(), Arc::new(block));
 }
 
