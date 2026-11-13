@@ -103,7 +103,9 @@ pub(super) fn run_titleblock_fit(s: &mut Session, _: &Value) -> Result<Value> {
     if b.is_empty() || inside(k0) {
         return Ok(json!({ "handle": tb.hex(), "scale": k0, "changed": false }));
     }
-    let k = ((b.width() / aw).max(b.height() / ah).max(k0) * 100.0).ceil() / 100.0;
+    // A tenth of the frame left clear around the drawing.
+    let k = ((b.width() / aw).max(b.height() / ah) * 1.1).max(k0);
+    let k = (k * 100.0).ceil() / 100.0;
     let to = Vec2::new(b.min.x - (aw * k - b.width()) / 2.0 - MARGIN * k, b.min.y - (ah * k - b.height()) / 2.0 - (MARGIN + TITLE_H) * k);
     let m = cadcraft_geom::Mat3::scale_about(origin, k / k0).then(cadcraft_geom::Mat3::translate(to - origin));
     crate::cmd::modify::transform_entities(s, &sheet, &m, false)?;
