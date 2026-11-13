@@ -5,7 +5,7 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
-use cadcraft_csd::{Product, product_record};
+use cadcraft_csd::{Product, product_key, product_record};
 use egui::{Color32, RichText};
 use egui_extras::{Column, TableBuilder};
 use serde_json::{Value, json};
@@ -24,12 +24,16 @@ pub struct State {
     sel: Option<usize>,
     sort: Option<(usize, bool)>,
     msg: Option<(bool, String)>,
+    /// Products this person hides from the Lighting palette, by `product_key`. A view preference, not
+    /// a product field: it is never applied, saved or exported, and placing by command ignores it.
+    pub(crate) hidden: HashSet<String>,
     /// (drawings open, active drawing): a change means a drawing tab took over.
     seen: (usize, usize),
 }
 
 #[derive(Clone, Copy, PartialEq)]
 enum Col {
+    Show,
     Id,
     Name,
     Code,
@@ -49,6 +53,7 @@ const PROTOCOLS: [&str; 10] = ["PoE", "Net", "10S", "DMX", "0-10V", "Cont", "PWR
 
 fn columns() -> Vec<(String, f32, Col)> {
     let mut c: Vec<(String, f32, Col)> = vec![
+        ("Hidden".into(), 56.0, Col::Show),
         ("Model ID".into(), 110.0, Col::Id),
         ("Product name".into(), 190.0, Col::Name),
         ("Code".into(), 80.0, Col::Code),
@@ -344,6 +349,18 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                 for (_, _, col) in &cols {
                     r.col(|ui| {
                         let Some(p) = st.rows.get_mut(ri) else { return };
+                        if *col == Col::Show {
+                            let mut hide = st.hidden.contains(&product_key(&p.id));
+                            if ui.checkbox(&mut hide, "").on_hover_text("Hide from the Lighting palette").changed() {
+                                let key = product_key(&p.id);
+                                if hide {
+                                    st.hidden.insert(key)
+                                } else {
+                                    st.hidden.remove(&key)
+                                };
+                            }
+                            return;
+                        }
                         if cell(ui, p, *col, ri, bad_rows.contains(&ri)) {
                             st.dirty = true;
                         }
@@ -385,6 +402,7 @@ fn cell(ui: &mut egui::Ui, p: &mut Product, col: Col, row: usize, flagged: bool)
         ui.add(e).changed()
     };
     match col {
+        Col::Show => false,
         Col::Id => text(ui, &mut p.id, flagged),
         Col::Name => {
             let empty = p.name.trim().is_empty();

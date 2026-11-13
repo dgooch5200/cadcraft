@@ -607,3 +607,11 @@ fn poe_budget_warns_over_the_port_and_refuses_over_the_cap() {
     assert_eq!(port_overload(&devs, &on_port, Handle(1)), None);
     assert_eq!(max_supply_watts(&[supply.clone(), a.clone()]), 60.0);
 }
+
+#[test]
+fn product_key_collapses_whitespace_and_keeps_case() {
+    assert_eq!(product_key("Rogue  R2 \t Wash"), "Rogue_R2_Wash");
+    assert_eq!(product_key("a b"), product_key("a  b"));
+    assert_ne!(product_key("MQ50"), product_key("mq50"));
+    assert_eq!(product_key(""), "");
+}

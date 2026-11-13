@@ -1,7 +1,9 @@
 //! The Lighting group of the Drafting tool set: the product library as a searchable list. Clicking
 //! a product arms it and starts the interactive `csd.place`, which keeps placing until Enter or Esc.
 
-use cadcraft_csd::{Product, Protocol, builtin_products};
+use std::collections::HashSet;
+
+use cadcraft_csd::{Product, Protocol, builtin_products, product_key};
 use egui::{Color32, Rect, Sense, Stroke, pos2, vec2};
 use serde_json::json;
 
@@ -22,6 +24,11 @@ struct Filter {
 fn matches(p: &Product, f: &Filter, needle: &str) -> bool {
     (f.category.is_empty() || p.cat == f.category)
         && (needle.is_empty() || [&p.id, &p.name, &p.code].iter().any(|s| s.to_lowercase().contains(needle)))
+}
+
+/// The products the palette offers: the library, then the built-ins (in no library), minus the hidden.
+fn listed<'a>(library: &'a [Product], hidden: &HashSet<String>) -> Vec<&'a Product> {
+    library.iter().chain(builtin_products()).filter(|p| !hidden.contains(&product_key(&p.id))).collect()
 }
 
 /// "DMX 1 in / 1 out, PoE 2 out".
@@ -189,7 +196,7 @@ pub(super) fn body(app: &mut CadApp, ui: &mut egui::Ui) {
     let mut f = ui.ctx().data_mut(|d| d.get_temp::<Filter>(id)).unwrap_or_default();
     let library = app.session.csd_library.clone();
     // The built-ins are in no library, so they are listed after it.
-    let all: Vec<&Product> = library.iter().chain(builtin_products()).collect();
+    let all = listed(&library, &app.ui.csd_lib.hidden);
     let mut cats: Vec<&str> = Vec::new();
     for p in &all {
         if !cats.contains(&p.cat.as_str()) {
@@ -297,6 +304,16 @@ mod tests {
         assert!(hit(&first.id, &first.cat) >= 1);
         assert_eq!(hit(&first.id, "no such category"), 0);
         assert_eq!(hit("zzzz-nothing", ""), 0);
+    }
+
+    #[test]
+    fn hidden_products_are_not_listed() {
+        let lib = cadcraft_csd::sample_products();
+        let all = listed(&lib, &HashSet::new()).len();
+        let hidden = HashSet::from([product_key(&lib[0].id)]);
+        let shown = listed(&lib, &hidden);
+        assert_eq!(shown.len(), all - 1);
+        assert!(shown.iter().all(|p| p.id != lib[0].id));
     }
 
     #[test]

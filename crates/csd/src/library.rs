@@ -229,3 +229,21 @@ pub fn is_builtin(id: &str) -> bool {
 pub fn lookup<'a>(library: &'a [Product], id: &str) -> Option<&'a Product> {
     builtin_products().iter().chain(library).find(|p| p.id == id)
 }
+
+/// The identity two libraries are compared on: the id with each run of whitespace turned into `_`
+/// (the web app's `productKey`). Case-sensitive.
+pub fn product_key(id: &str) -> String {
+    let mut out = String::with_capacity(id.len());
+    let mut gap = false;
+    for c in id.chars() {
+        if c.is_whitespace() {
+            if !std::mem::replace(&mut gap, true) {
+                out.push('_');
+            }
+        } else {
+            gap = false;
+            out.push(c);
+        }
+    }
+    out
+}
