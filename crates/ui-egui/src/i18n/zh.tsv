@@ -1481,6 +1481,7 @@ menu	View	视图
 	Advanced	高级
 	Arm Product	预选产品
 	Connect Devices	连接设备
+	Wire Protocol	线缆类型
 	Device Netlist	设备网表
 	List Products	列出产品
 	Load Product Library	加载产品库

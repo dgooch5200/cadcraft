@@ -118,7 +118,7 @@ fn port_point_honours_rotation_and_scale() {
 fn route_is_orthogonal_and_anchored() {
     let (a, b) = (Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 100.0, y: 70.0 });
     for (s1, s2) in [(Side::Right, Side::Left), (Side::Top, Side::Left), (Side::Right, Side::Bottom), (Side::Left, Side::Left)] {
-        let r = route(a, s1, Slot::SOLO, b, s2, Slot { index: 1, total: 3, lane: 1 });
+        let r = route(a, s1, Slot::SOLO, b, s2, Slot { index: 1, total: 3, lane: 1 }, true);
         assert_eq!((r.first(), r.last()), (Some(&a), Some(&b)));
         for w in r.windows(2) {
             assert!(w[0].x == w[1].x || w[0].y == w[1].y, "{s1:?} {s2:?} {r:?}");
@@ -127,12 +127,25 @@ fn route_is_orthogonal_and_anchored() {
 }
 
 #[test]
+fn smooth_route_is_anchored_leaves_perpendicular_and_is_not_orthogonal() {
+    let (a, b) = (Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: 100.0, y: 70.0 });
+    let r = route(a, Side::Right, Slot::SOLO, b, Side::Left, Slot::SOLO, false);
+    assert_eq!((r.first(), r.last()), (Some(&a), Some(&b)));
+    assert_eq!(r.len(), 25);
+    assert!(r.windows(2).any(|w| w[0].x != w[1].x && w[0].y != w[1].y));
+    // Leaves the right port along +x and enters the left port along +x.
+    assert!(r[1].x > a.x && (r[1].y - a.y).abs() < 0.1 * (r[1].x - a.x));
+    assert!(b.x > r[23].x && (b.y - r[23].y).abs() < 0.1 * (b.x - r[23].x));
+    assert_eq!(deco_points(&r, false).map(|d| d[2].1), r.get(12).copied());
+}
+
+#[test]
 fn facing_stubs_never_double_back() {
     // Bottom of one card to the top of one below and to the left, outer lane: the source stub
     // reaches past the target's stub end.
     let (a, b) = (Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: -150.0, y: -40.0 });
     for (dx, lane) in [(-150.0, 2), (0.0, 0)] {
-        let r = route(a, Side::Bottom, Slot { index: 0, total: 3, lane }, Vec2 { x: dx, ..b }, Side::Top, Slot::SOLO);
+        let r = route(a, Side::Bottom, Slot { index: 0, total: 3, lane }, Vec2 { x: dx, ..b }, Side::Top, Slot::SOLO, true);
         for w in r.windows(3) {
             let (u, v) = (w[1] - w[0], w[2] - w[1]);
             assert!(u.dot(v) >= 0.0, "doubles back: {r:?}");
@@ -190,7 +203,9 @@ fn three_wires_on_a_side_are_spread_and_ordered_by_far_end() {
     assert_eq!(lanes, [0, 0, 0]);
     let first_legs: Vec<Vec2> = order
         .iter()
-        .map(|(_, s)| route(port_point(at, 0.0, one, Side::Bottom, *s), Side::Bottom, *s, Vec2 { x: 500.0, y: -500.0 }, Side::Top, Slot::SOLO)[1])
+        .map(|(_, s)| {
+            route(port_point(at, 0.0, one, Side::Bottom, *s), Side::Bottom, *s, Vec2 { x: 500.0, y: -500.0 }, Side::Top, Slot::SOLO, true)[1]
+        })
         .collect();
     assert!(first_legs.windows(2).all(|w| !w[0].near(w[1], 1e-9)));
 }
