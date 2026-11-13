@@ -50,6 +50,8 @@ const HEADER_VARS: &[(&str, i32)] = &[
     // record below repeats it). Written so a drawing opened on its saved view saves it back.
     ("VIEWCTR", -2),
     ("VIEWSIZE", 40),
+    // The lighting designer's list of products not yet drawn (JSON text).
+    ("CSDUNPLACED", 1),
 ];
 
 /// The current dimension style's variables as header variables (`$DIMTXT`, `$DIMDEC`…), after

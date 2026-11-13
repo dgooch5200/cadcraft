@@ -21,6 +21,7 @@ use super::curves::handle_param;
 mod arrange;
 mod connect;
 mod place;
+mod schedule;
 mod sheet;
 mod wire;
 use super::{CommandSpec, always, bad, point_req, str_param, targets};
@@ -60,6 +61,25 @@ fn own_specs() -> Vec<CommandSpec> {
             .params("{mode: left|top|right|bottom, handles? (default the selection)} → {moved}; aligns card edges"),
         CommandSpec::new("csd.distribute", "Distribute Devices", arrange::run_distribute)
             .params("{axis: x|y, handles? (default the selection)} → {moved}; equal gaps between cards, the outer two stay put (needs 3+)"),
+        CommandSpec::new("csd.schedule", "Placed Devices", schedule::run_schedule)
+            .params("{} → {devices: [{handle, product, category, code, label, notes, portsInUse: text like \"PoE 1/3, DMX 2/2\", connections: wire count, poeLoad: watts the device's PoE outlets feed, controlGear}]}; control gear first")
+            .noundo(),
+        CommandSpec::new("csd.unplaced.list", "Unplaced Items", schedule::run_unplaced_list)
+            .params("{} → {items: [{index, product, qty, code, category, name}]}; saved with the drawing")
+            .noundo(),
+        CommandSpec::new("csd.unplaced.add", "Add Unplaced Item", schedule::run_unplaced_add)
+            .params("{product: id of a library product, qty? (default 1; adds to the product's row)} → {index}"),
+        CommandSpec::new("csd.unplaced.set", "Set Unplaced Quantity", schedule::run_unplaced_set).params("{index, qty: >= 1} → {index}"),
+        CommandSpec::new("csd.unplaced.remove", "Remove Unplaced Item", schedule::run_unplaced_remove).params("{index} → {removed}"),
+        CommandSpec::new("csd.unplaced.place", "Place Unplaced Item", schedule::run_unplaced_place)
+            .params("{index} → {product}; arms the row's product like csd.arm. Placing a product (csd.place) takes one off its row")
+            .noundo(),
+        CommandSpec::new("csd.bom", "Bill of Materials", schedule::run_bom)
+            .params("{} → {rows: [{qty, product, code, category, name, labels, notes, brand}]}: placed and unplaced, by category (control gear first) then model id")
+            .noundo(),
+        CommandSpec::new("csd.bom.export", "Export Bill of Materials", schedule::run_bom_export)
+            .params("{path, format: csv|pdf, footer?: [lines printed under the PDF table]} → {path, rows}")
+            .noundo(),
         CommandSpec::new("csd.arm", "Arm Product", place::run_arm).params("{product: id of a library product} → {product}").noundo(),
         CommandSpec::new("csd.protocol", "Wire Protocol", run_protocol)
             .params("{protocol: network|netdata|10scene|dmx|0-10v|contact|power|midi|epix3p|epix4p} → {protocol}; the wire type csd.connect draws next")
@@ -488,6 +508,7 @@ fn run_place(s: &mut Session, p: &Value) -> Result<Value> {
     values.insert("NAME".into(), json!(label));
     values.insert("LABEL".into(), json!(truncate_label(label)));
     let h = super::blocks::insert(s, &name, at, 1.0, 0.0, &values)?;
+    schedule::consume(s.doc_mut()?, &product.id);
     Ok(json!({ "handle": h.hex() }))
 }
 
@@ -610,6 +631,17 @@ fn one_device(s: &Session, cmd: &str, p: &Value) -> Result<Handle> {
     }
 }
 
+/// (protocol, connections used, capacity) of every protocol `product` has ports for or `h` is wired with.
+fn port_usage(product: &Product, links: &[WireLink], h: Handle) -> Vec<(Protocol, usize, u64)> {
+    Protocol::ALL
+        .iter()
+        .filter_map(|&pr| {
+            let (n, cap) = (used(links, h, pr), product.effective_capacity(pr));
+            (!product.missing && (n > 0 || cap > 0)).then_some((pr, n, cap))
+        })
+        .collect()
+}
+
 fn run_device_info(s: &mut Session, p: &Value) -> Result<Value> {
     let h = one_device(s, "csd.device.info", p)?;
     let products = s.csd_library.clone();
@@ -620,13 +652,9 @@ fn run_device_info(s: &mut Session, p: &Value) -> Result<Value> {
     let product = resolve(&products, id);
     let links = wires(store);
     let only: Vec<WireLink> = links.iter().map(|(_, l)| l.clone()).collect();
-    let ports: Vec<Value> = Protocol::ALL
-        .iter()
-        .filter_map(|&pr| {
-            let (used, cap) = (used(&only, h, pr), product.effective_capacity(pr));
-            (!product.missing && (used > 0 || cap > 0))
-                .then(|| json!({ "protocol": pr.id(), "label": pr.label(), "used": used, "capacity": cap, "pooled": pr == Protocol::NetData }))
-        })
+    let ports: Vec<Value> = port_usage(&product, &only, h)
+        .into_iter()
+        .map(|(pr, used, cap)| json!({ "protocol": pr.id(), "label": pr.label(), "used": used, "capacity": cap, "pooled": pr == Protocol::NetData }))
         .collect();
     let name_of = |o: Handle| match store.get(o).map(|e| &e.kind) {
         Some(EntityKind::Insert(oi)) => attr(oi, "NAME").to_string(),
