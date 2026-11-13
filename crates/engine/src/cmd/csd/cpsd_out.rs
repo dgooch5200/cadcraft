@@ -114,15 +114,20 @@ pub(super) fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     for (theirs, ours) in TITLE_MAP {
         title.insert(theirs.into(), json!(project["fields"][ours].as_str().unwrap_or_default()));
     }
+    let (shapes, skipped_shapes) = super::shapes::export(store);
+    let skipped: Vec<String> = (skipped_shapes > 0)
+        .then(|| format!("{skipped_shapes} x entity on CSD_SHAPES that is not a line, rectangle, ellipse or text"))
+        .into_iter()
+        .collect();
     let file = json!({
         "_app": "ChamSys System Designer", "_format": FORMAT, "_ext": ".cpsd", "ortho": false,
         "titleBlock": title,
         "pages": [{ "id": "page-1", "name": "Canvas 1" }],
-        "products": products, "nodes": nodes, "conns": conns, "shapes": [],
+        "products": products, "nodes": nodes, "conns": conns, "shapes": shapes,
     });
     let bytes = serde_json::to_vec_pretty(&file).map_err(|e| bad(CMD, e.to_string()))?;
     write_library(path, &bytes).map_err(|e| bad(CMD, format!("{path}: {e}")))?;
-    Ok(json!({ "path": path, "devices": devs.len(), "wires": conns.len(), "unplaced": unplaced }))
+    Ok(json!({ "path": path, "devices": devs.len(), "wires": conns.len(), "unplaced": unplaced, "shapes": shapes.len(), "skipped": skipped }))
 }
 
 #[cfg(test)]
@@ -235,5 +240,40 @@ mod tests {
         let _ = std::fs::remove_file(path);
         assert_eq!(r["skipped"], json!([]), "{r}");
         assert_eq!(device_info(&mut t, "Desk")["twoLine"], json!(true));
+    }
+
+    #[test]
+    fn shapes_survive_the_round_trip_and_strangers_are_counted() {
+        let file = json!({ "shapes": [
+            { "type": "line", "x1": 40, "y1": 50, "x2": 130, "y2": 90, "color": "#ff0000" },
+            { "type": "rect", "x1": 30, "y1": 30, "x2": 130, "y2": 80 },
+            { "type": "ellipse", "x1": 30, "y1": 30, "x2": 50, "y2": 90 },
+            { "type": "text", "x1": 30, "y1": 30, "x2": 130, "y2": 46, "text": "Hello", "fontSize": 16, "textColor": "#0000ff" },
+        ] });
+        let dir = std::env::temp_dir();
+        let (a, b) =
+            (dir.join(format!("cadcraft-shp-in-{}.cpsd", std::process::id())), dir.join(format!("cadcraft-shp-out-{}.cpsd", std::process::id())));
+        std::fs::write(&a, file.to_string()).unwrap();
+        let mut s = Session::new();
+        s.execute("csd.import.cpsd", &json!({ "path": a.to_str().unwrap() })).unwrap();
+        let r = s.execute("csd.export.cpsd", &json!({ "path": b.to_str().unwrap() })).unwrap();
+        let stray = s.add_entity(cadcraft_doc::EntityKind::Point(cadcraft_doc::Point { p: cadcraft_geom::Vec3::ZERO, angle: 0.0 })).unwrap();
+        s.doc_mut().unwrap().modify_entity(stray, |e| e.common.layer = "CSD_SHAPES".into()).unwrap();
+        let r2 = s.execute("csd.export.cpsd", &json!({ "path": dir.join("cadcraft-shp-x.cpsd").to_str().unwrap() })).unwrap();
+        let _ = std::fs::remove_file(dir.join("cadcraft-shp-x.cpsd"));
+        let out: Value = serde_json::from_slice(&std::fs::read(&b).unwrap()).unwrap();
+        let _ = (std::fs::remove_file(&a), std::fs::remove_file(&b));
+        assert_eq!((r["shapes"].clone(), r["skipped"].clone()), (json!(4), json!([])), "{r}");
+        assert_eq!(r2["shapes"], 4);
+        assert_eq!(r2["skipped"].as_array().map(Vec::len), Some(1), "{r2}");
+        let (got, want) = (out["shapes"].as_array().unwrap(), file["shapes"].as_array().unwrap());
+        assert_eq!(got.len(), 4);
+        for (g, w) in got.iter().zip(want) {
+            assert_eq!(g["type"], w["type"]);
+            for k in ["x1", "y1", "x2", "y2"] {
+                assert!((g[k].as_f64().unwrap() - w[k].as_f64().unwrap()).abs() < 1e-6, "{k}: {g} vs {w}");
+            }
+        }
+        assert_eq!((&got[0]["color"], &got[3]["text"], &got[3]["textColor"]), (&json!("#ff0000"), &json!("Hello"), &json!("#0000ff")));
     }
 }

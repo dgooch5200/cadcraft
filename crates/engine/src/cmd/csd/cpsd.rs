@@ -32,7 +32,7 @@ fn read(_: &str) -> std::io::Result<Vec<u8>> {
     Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "files are not available on the web"))
 }
 
-fn text(v: &Value, key: &str) -> String {
+pub(super) fn text(v: &Value, key: &str) -> String {
     match v.get(key) {
         Some(Value::String(t)) => t.clone(),
         Some(Value::Number(n)) => n.to_string(),
@@ -40,7 +40,7 @@ fn text(v: &Value, key: &str) -> String {
     }
 }
 
-fn number(v: &Value, key: &str) -> Option<f64> {
+pub(super) fn number(v: &Value, key: &str) -> Option<f64> {
     v.get(key).and_then(Value::as_f64).filter(|n| n.is_finite())
 }
 
@@ -49,7 +49,7 @@ fn list<'a>(v: &'a Value, key: &str, cap: usize) -> impl Iterator<Item = &'a Val
 }
 
 /// ChamSys canvas (y down, page corner at 30,30) to the drawing (y up, page corner at the origin).
-fn to_drawing(x: f64, y: f64) -> Option<Vec2> {
+pub(super) fn to_drawing(x: f64, y: f64) -> Option<Vec2> {
     let p = Vec2::new(x - PAGE_ORIGIN, PAGE_ORIGIN + Paper::Tabloid.size().1 - y);
     (p.x.abs() <= MAX_COORD && p.y.abs() <= MAX_COORD).then_some(p)
 }
@@ -258,15 +258,12 @@ pub(super) fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
         sheet::run_project_set(s, &json!({ "fields": fields }))?;
     }
 
-    let shapes = file.get("shapes").and_then(Value::as_array).map_or(0, Vec::len);
+    let shapes = super::shapes::import(s, list(&file, "shapes", super::shapes::MAX_SHAPES).filter(|v| on_page(v)), |r| skips.add(r))?;
     let mut skipped: Vec<String> = skips.0.into_iter().map(|(r, n)| format!("{n} x {r}")).collect();
-    if shapes > 0 {
-        skipped.push(format!("{shapes} x drawn shape or text (not supported yet)"));
-    }
     if pages.len() > 1 {
         skipped.push(format!("{} other page(s); pass `page` to import another", pages.len() - 1));
     }
-    Ok(json!({ "devices": placed.len(), "wires": wires, "unplaced": unplaced_rows, "standIns": stand_ins, "skipped": skipped }))
+    Ok(json!({ "devices": placed.len(), "wires": wires, "unplaced": unplaced_rows, "shapes": shapes, "standIns": stand_ins, "skipped": skipped }))
 }
 
 /// The file's accessory lines as `csd.device.set` writes them: `{product, qty}`, junk rows dropped.
@@ -324,6 +321,38 @@ mod tests {
         assert_eq!(project["fields"]["project"], "Show");
         assert_eq!(project["fields"]["drawnBy"], "Dee");
         assert_eq!(s.execute("csd.unplaced.list", &json!({})).unwrap()["items"][0]["product"], PRODUCT);
+    }
+
+    #[test]
+    fn imports_shapes_on_their_layer() {
+        let file = json!({
+            "pages": [{ "id": "p1" }, { "id": "p2" }],
+            "shapes": [
+                { "type": "line", "x1": 30, "y1": 30, "x2": 130, "y2": 30, "color": "#ff0000" },
+                { "type": "rect", "x1": 130, "y1": 80, "x2": 30, "y2": 30 },
+                { "type": "ellipse", "x1": 30, "y1": 30, "x2": 90, "y2": 50 },
+                { "type": "ellipse", "x1": 30, "y1": 30, "x2": 30, "y2": 50 },
+                { "type": "text", "x1": 30, "y1": 30, "x2": 130, "y2": 60, "text": "A {b}\\c\nd", "fontSize": 20, "textColor": "#0000ff" },
+                { "type": "image", "src": "data:" },
+                { "type": "line", "x1": 100, "page": "p2" },
+                { "type": "rect", "x1": 1e308, "page": "p1" },
+                7
+            ]
+        });
+        let (mut s, r) = import(&file.to_string());
+        assert_eq!(r["shapes"], 4, "{r}");
+        let skipped = r["skipped"].to_string();
+        assert!(skipped.contains("image shape") && skipped.contains("ellipse with no size") && skipped.contains("outside"), "{r}");
+        let doc = s.doc().unwrap();
+        assert!(doc.layer("CSD_SHAPES").is_some());
+        let store = doc.space(&s.space()).unwrap();
+        let kinds: Vec<_> = store.iter().filter(|e| e.common.layer == "CSD_SHAPES").map(|e| std::mem::discriminant(&e.kind)).collect();
+        assert_eq!(kinds.len(), 4);
+        let mt = store.iter().find_map(|e| if let EntityKind::MText(m) = &e.kind { Some(m) } else { None }).unwrap();
+        assert_eq!((mt.height, mt.width), (20.0, 100.0));
+        assert_eq!(cadcraft_fonts::plain_mtext(&mt.contents), "A {b}\\c\nd");
+        assert!((mt.insert.x, mt.insert.y) == (0.0, Paper::Tabloid.size().1));
+        assert!(s.execute("csd.netlist", &json!({})).is_ok());
     }
 
     #[test]
