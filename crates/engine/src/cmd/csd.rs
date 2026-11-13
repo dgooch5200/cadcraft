@@ -25,6 +25,7 @@ mod cpsd;
 mod cpsd_out;
 mod group;
 mod library_csv;
+mod new;
 mod patch;
 mod place;
 mod print;
@@ -50,6 +51,11 @@ fn own_specs() -> Vec<CommandSpec> {
             .interactive(place::PlaceM::start),
         CommandSpec::new("csd.place.grid", "Place Device Grid", place::run_grid)
             .params("{product: id of a library product, at: [x,y] (first card's centre), rows, cols: >= 1 (rows * cols <= 400), dx?, dy?: spacing (default card plus 24)} → {handles}; rows run downwards"),
+        CommandSpec::new("csd.new", "New Lighting Drawing", new::run_new)
+            .params("{template?: a .cpsd file to start from, paper?: tabloid|letter (default tabloid)} → {index, title, paper, template}; a new drawing with the title block and line key, plus the template's first page when given (an unreadable template is an error and leaves no drawing)")
+            .menu(&["File", "New Lighting Drawing..."])
+            .enabled(always)
+            .noundo(),
         CommandSpec::new("csd.import.cpsd", "Import ChamSys Designer Project", cpsd::run_import)
             .params("{path: a .cpsd file, page?: 1-based number or id (default the first page)} → {devices, wires, unplaced, shapes, skipped: [reasons]}; builds the page's devices, wires (waypoints, label position, name), shapes and text (lines, rectangles, ellipses and text on layer CSD_SHAPES), off-page targets (as the page's name), the ortho setting, the unplaced list and the title block into the current drawing"),
         CommandSpec::new("csd.export.cpsd", "Export ChamSys Designer Project", cpsd_out::run_export)

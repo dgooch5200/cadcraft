@@ -569,7 +569,9 @@ pub fn start_page(app: &mut CadApp, ui: &mut egui::Ui) {
     );
     let mut y = left.top() + 140.0;
     let mut action = None;
-    for (label, cmd) in [("Open...", "open"), ("New", "new"), ("New (metric)", "new.metric"), ("Open sample drawing", "sample")] {
+    for (label, cmd) in
+        [("Open...", "open"), ("New", "new"), ("New (metric)", "new.metric"), ("New lighting drawing", "csd.new"), ("Open sample drawing", "sample")]
+    {
         let br = Rect::from_min_size(pos2(left.left() + 34.0, y), vec2(220.0, 34.0));
         let resp = ui.interact(br, ui.scope_id().with(("start", cmd)), Sense::click());
         p.rect_stroke(br, 2.0, Stroke::new(1.0, if resp.hovered() { t.text } else { t.text_dim }), egui::StrokeKind::Inside);
@@ -625,6 +627,12 @@ pub fn start_page(app: &mut CadApp, ui: &mut egui::Ui) {
         Some("new.metric") => {
             let _ = app.run("new", json!({ "metric": true }));
             app.ui.start_tab = false;
+        }
+        Some("csd.new") => {
+            if app.run("csd.new", json!({})).is_ok() {
+                app.canvas.zoom_pending = true;
+                app.ui.start_tab = false;
+            }
         }
         Some("sample") => {
             app.start("ui.sample");
