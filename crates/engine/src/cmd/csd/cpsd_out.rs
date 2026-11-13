@@ -441,4 +441,43 @@ mod tests {
         assert!((by("text")["x2"].as_f64().unwrap() - 130.0).abs() < 1e-6 && (by("text")["x1"].as_f64().unwrap() - 30.0).abs() < 1e-6);
         assert_eq!(by("line")["strokeStyle"], "dotted");
     }
+
+    #[test]
+    fn a_zero_weight_dash_keeps_the_default_dash_and_dashed_text_loads_no_linetype() {
+        let import = |shapes: Value| {
+            let a = std::env::temp_dir().join(format!("cadcraft-sty0-{}-{}.cpsd", std::process::id(), shapes.to_string().len()));
+            std::fs::write(&a, json!({ "shapes": shapes }).to_string()).unwrap();
+            let mut s = Session::new();
+            s.execute("csd.import.cpsd", &json!({ "path": a.to_str().unwrap() })).unwrap();
+            let _ = std::fs::remove_file(&a);
+            s
+        };
+        let ltscale = |w: Value| {
+            let s = import(json!([{ "type": "line", "x1": 0, "y1": 0, "x2": 50, "y2": 0, "strokeStyle": "dashed", "weight": w }]));
+            let store = s.doc().unwrap().space(&s.space()).unwrap();
+            store.iter().find(|e| e.common.layer == "CSD_SHAPES").unwrap().common.ltscale
+        };
+        assert_eq!(ltscale(json!(0)), ltscale(json!(null)));
+        let s = import(json!([{ "type": "text", "x1": 0, "y1": 0, "x2": 50, "y2": 10, "text": "Hi", "strokeStyle": "dashed" }]));
+        assert!(s.doc().unwrap().linetype("DASHED").is_none());
+    }
+
+    #[test]
+    fn a_fill_stays_on_its_own_rectangle_when_two_coincide() {
+        let file = json!({ "shapes": [
+            { "type": "rect", "x1": 30, "y1": 30, "x2": 130, "y2": 80, "color": "#ff0000" },
+            { "type": "rect", "x1": 30, "y1": 30, "x2": 130, "y2": 80, "color": "#0000ff", "fill": "#00ff00" },
+        ] });
+        let dir = std::env::temp_dir();
+        let (a, b) =
+            (dir.join(format!("cadcraft-pair-in-{}.cpsd", std::process::id())), dir.join(format!("cadcraft-pair-out-{}.cpsd", std::process::id())));
+        std::fs::write(&a, file.to_string()).unwrap();
+        let mut s = Session::new();
+        s.execute("csd.import.cpsd", &json!({ "path": a.to_str().unwrap() })).unwrap();
+        s.execute("csd.export.cpsd", &json!({ "path": b.to_str().unwrap() })).unwrap();
+        let out: Value = serde_json::from_slice(&std::fs::read(&b).unwrap()).unwrap();
+        let _ = (std::fs::remove_file(&a), std::fs::remove_file(&b));
+        let got: Vec<_> = out["shapes"].as_array().unwrap().iter().map(|r| (r["color"].clone(), r["fill"].clone())).collect();
+        assert_eq!(got, vec![(json!("#ff0000"), Value::Null), (json!("#0000ff"), json!("#00ff00"))]);
+    }
 }
