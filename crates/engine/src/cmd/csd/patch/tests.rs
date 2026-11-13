@@ -273,3 +273,22 @@ fn with_two_pages_every_order_but_drawing_groups_by_page_and_unplaced_trail() {
     assert_eq!(got(&mut s, "name"), ["B:1", "C:1", "A:2", "PLAIN:null"]);
     assert_eq!(got(&mut s, "position"), ["C:1", "B:1", "A:2", "PLAIN:null"]);
 }
+
+#[test]
+fn exports_add_a_page_column_only_with_two_pages() {
+    let mut s = session();
+    place(&mut s, "PLAIN", [100.0, 500.0], "A");
+    assert!(!export(&mut s, "csv", "drawing").contains("Page"));
+    s.execute("csd.page.add", &json!({})).unwrap();
+    s.execute("csd.page.rename", &json!({ "page": 2, "name": "Roof" })).unwrap();
+    place(&mut s, "PLAIN", [2000.0, 500.0], "B");
+    place(&mut s, "PLAIN", [-9000.0, 500.0], "C");
+    let csv = export(&mut s, "csv", "drawing");
+    let lines: Vec<&str> = csv.lines().collect();
+    assert_eq!(lines[0], "Head No,Universe,Address,Label,Page,Manufacturer,Product,Mode,Channels");
+    assert!(lines[1].contains(",A,Drawing 1,"), "{csv}");
+    assert!(lines[2].contains(",B,Roof,"), "{csv}");
+    assert!(lines[3].contains(",C,,"), "{csv}");
+    let html = export(&mut s, "html", "drawing");
+    assert!(html.contains("<th>Page</th>") && html.contains("Roof"));
+}

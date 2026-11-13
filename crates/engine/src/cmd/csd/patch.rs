@@ -197,6 +197,15 @@ struct Plan {
     rows: Vec<(Entry, u32, u32)>,
     used: u32,
     budget: u32,
+    /// Page names, only when the drawing has two or more pages (the exports then add a Page column).
+    pages: Vec<String>,
+}
+
+impl Plan {
+    /// The Page cell of a row: empty for an unplaced or off-sheet device.
+    fn page_cell(&self, e: &Entry) -> String {
+        e.page.and_then(|p| self.pages.get(p)).cloned().unwrap_or_default()
+    }
 }
 
 /// The drawing's saved patch order, drawing order if it never chose one.
@@ -211,11 +220,12 @@ fn addressing_on(d: &cadcraft_doc::Drawing) -> bool {
 fn plan(s: &Session, by: &str, cmd: &str) -> Result<Plan> {
     let mut devs = entries(s)?;
     if !addressing_on(s.doc()?) {
-        return Ok(Plan { rows: Vec::new(), used: 0, budget: 0 });
+        return Ok(Plan { rows: Vec::new(), used: 0, budget: 0, pages: Vec::new() });
     }
     // What the controllers on the drawing can originate.
     let budget = devs.iter().map(|e| e.product.universes).fold(0u32, u32::saturating_add);
-    order(&mut devs, by, super::page::pages(s).len(), cmd)?;
+    let pages: Vec<String> = super::page::pages(s).iter().enumerate().map(|(n, g)| g.name(n)).collect();
+    order(&mut devs, by, pages.len(), cmd)?;
     // Accessories follow their device and products not yet drawn come last, a unit each: four
     // fixtures need four addresses.
     let mut all: Vec<Entry> =
@@ -231,7 +241,7 @@ fn plan(s: &Session, by: &str, cmd: &str) -> Result<Plan> {
     let slots = assign(&all.iter().map(|e| e.channels).collect::<Vec<_>>());
     let used = slots.iter().map(|&(u, _, n)| u.saturating_add(n).saturating_sub(1)).max().unwrap_or(0);
     let rows = all.into_iter().zip(slots).map(|(e, (u, a, _))| (e, u, a)).collect();
-    Ok(Plan { rows, used, budget })
+    Ok(Plan { rows, used, budget, pages: if pages.len() > 1 { pages } else { Vec::new() } })
 }
 
 fn order_param<'a>(s: &'a Session, p: &'a Value) -> &'a str {
@@ -355,9 +365,14 @@ fn magicq(plan: &Plan) -> String {
 /// A plain patch list for spreadsheets, with the BOM export's formula-escaping.
 fn csv(plan: &Plan) -> String {
     let cell = |t: &str| quoted(if t.starts_with(['=', '+', '-', '@']) { format!("'{t}") } else { t.to_string() });
-    let mut out = String::from("Head No,Universe,Address,Label,Manufacturer,Product,Mode,Channels\r\n");
+    let paged = !plan.pages.is_empty();
+    let mut out = String::from(if paged {
+        "Head No,Universe,Address,Label,Page,Manufacturer,Product,Mode,Channels\r\n"
+    } else {
+        "Head No,Universe,Address,Label,Manufacturer,Product,Mode,Channels\r\n"
+    });
     for (n, (e, u, a)) in plan.rows.iter().enumerate() {
-        let f = [
+        let mut f = vec![
             (n + 1).to_string(),
             u.to_string(),
             a.to_string(),
@@ -367,6 +382,9 @@ fn csv(plan: &Plan) -> String {
             cell(&e.mode_text()),
             e.channels.to_string(),
         ];
+        if paged {
+            f.insert(4, cell(&plan.page_cell(e)));
+        }
         out.push_str(&f.join(","));
         out.push_str("\r\n");
     }
@@ -396,15 +414,17 @@ fn html(s: &Session, p: &Value, plan: &Plan) -> String {
     unis.sort_unstable();
     unis.dedup();
     let mut body = String::new();
+    let paged = !plan.pages.is_empty();
+    let cols = if paged { 7 } else { 6 };
     for u in unis {
         let list = by_uni.get(&u).map(Vec::as_slice).unwrap_or_default();
         if list.is_empty() {
             let from = continued.get(&u).copied().unwrap_or_default();
-            body.push_str(&group_row("group cont", 6, &format!("Universe {u}"), &format!("continued from {from}")));
+            body.push_str(&group_row("group cont", cols, &format!("Universe {u}"), &format!("continued from {from}")));
             continue;
         }
         let used: u64 = list.iter().filter_map(|&i| plan.rows.get(i)).map(|(e, _, _)| u64::from(e.channels).min(size)).sum();
-        body.push_str(&group_row("group", 6, &format!("Universe {u}"), &format!("{used} of {size} channels used")));
+        body.push_str(&group_row("group", cols, &format!("Universe {u}"), &format!("{used} of {size} channels used")));
         for &i in list {
             let Some((e, _, a)) = plan.rows.get(i) else { continue };
             let last = (a + e.channels).saturating_sub(1).min(UNIVERSE_SIZE);
@@ -415,19 +435,28 @@ fn html(s: &Session, p: &Value, plan: &Plan) -> String {
             }
             let mode = if e.mode.is_some() { e.mode_text() } else { format!("{} (assumed)", e.mode_text()) };
             let addr = if n > 1 { format!("{a}-{last} (spans {n} universes)") } else { format!("{a}-{last}") };
-            body.push_str(&row("", &[format!("{u}-{a}"), (i + 1).to_string(), format!("{} / {item}", e.label), mode, e.channels.to_string(), addr]));
+            let mut cells = vec![format!("{u}-{a}"), (i + 1).to_string(), format!("{} / {item}", e.label), mode, e.channels.to_string(), addr];
+            if paged {
+                cells.insert(3, plan.page_cell(e));
+            }
+            body.push_str(&row("", &cells));
         }
     }
     let mut footer = footer_lines(s, p);
     footer.insert(0, universes_text(plan));
     let info = [("Heads", plan.rows.len().to_string()), ("Universes", universes_text(plan).replace("Universes used: ", ""))];
-    page("DMX Patch", &info, &["DMX", "Head", "Fixture", "Mode", "Ch", "Addresses"], &body, &footer)
+    let heads: &[&str] =
+        if paged { &["DMX", "Head", "Fixture", "Page", "Mode", "Ch", "Addresses"] } else { &["DMX", "Head", "Fixture", "Mode", "Ch", "Addresses"] };
+    page("DMX Patch", &info, heads, &body, &footer)
 }
 
 /// The patch sheet: one row per head with its universe-address, as the web app's printPatch lists it.
 fn pdf(s: &Session, p: &Value, plan: &Plan) -> Result<Vec<u8>> {
-    const COLS: [(&str, f64); 7] =
-        [("DMX", 70.0), ("Head", 40.0), ("Fixture", 200.0), ("Product", 220.0), ("Mode", 120.0), ("Ch", 40.0), ("Addresses", 110.0)];
+    let mut cols = vec![("DMX", 70.0), ("Head", 40.0), ("Fixture", 200.0), ("Product", 220.0), ("Mode", 120.0), ("Ch", 40.0), ("Addresses", 110.0)];
+    let paged = !plan.pages.is_empty();
+    if paged {
+        cols.insert(3, ("Page", 90.0));
+    }
     let rows: Vec<Vec<String>> = plan
         .rows
         .iter()
@@ -435,7 +464,7 @@ fn pdf(s: &Session, p: &Value, plan: &Plan) -> Result<Vec<u8>> {
         .map(|(n, (e, u, a))| {
             let last = a.saturating_add(e.channels).saturating_sub(1).min(UNIVERSE_SIZE);
             let carried = e.carried_by.as_ref().map(|c| format!(" (accessory of {c})")).unwrap_or_default();
-            vec![
+            let mut cells = vec![
                 format!("{u}-{a}"),
                 (n + 1).to_string(),
                 format!("{}{carried}", e.label),
@@ -443,12 +472,16 @@ fn pdf(s: &Session, p: &Value, plan: &Plan) -> Result<Vec<u8>> {
                 e.mode_text(),
                 e.channels.to_string(),
                 format!("{a}-{last}"),
-            ]
+            ];
+            if paged {
+                cells.insert(3, plan.page_cell(e));
+            }
+            cells
         })
         .collect();
     let mut footer = super::html::footer_lines(s, p);
     footer.insert(0, universes_text(plan));
-    schedule::table_pdf("csd.patch.export", "DMX Patch", &COLS, &rows, &footer)
+    schedule::table_pdf("csd.patch.export", "DMX Patch", &cols, &rows, &footer)
 }
 
 pub(super) fn run_patch_export(s: &mut Session, p: &Value) -> Result<Value> {
