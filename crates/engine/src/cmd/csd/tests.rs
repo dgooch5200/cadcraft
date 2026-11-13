@@ -1372,6 +1372,9 @@ fn two_line_grows_the_card_and_moves_the_bottom_ports_down() {
     assert!(port(&s, a, Side::Bottom).near(before + Vec2::new(0.0, -9.0), 1e-9));
     assert!(port(&s, a, Side::Right).near(right, 1e-9));
     assert_eq!(s.execute("csd.device.info", &json!({ "handle": a.hex() })).unwrap()["libSize"], json!([70.0, 91.0]));
+    // The label moves to the middle of the lower strip (inside the border), off the rule at -26.75.
+    let label = i.attribs.iter().find(|x| x.tag == "LABEL").and_then(|x| x.text.align_pt).unwrap();
+    assert!((label.y - i.insert.y - -35.75).abs() < 1e-9, "label at {}", label.y - i.insert.y);
     s.execute("csd.device.set", &json!({ "handle": a.hex(), "twoLine": false })).unwrap();
     assert!(port(&s, a, Side::Bottom).near(before, 1e-9));
     assert_eq!(verts(&s, w), route, "off again routes as before");

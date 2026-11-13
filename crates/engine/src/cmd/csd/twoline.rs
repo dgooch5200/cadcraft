@@ -4,7 +4,7 @@ use cadcraft_csd::{card_size, is_builtin};
 use cadcraft_doc::{EntityKind, Handle};
 use serde_json::{Value, json};
 
-use super::{device_handles, ensure_device_block, product_attr, put_attr, resolve, targets, two_line};
+use super::{device_handles, ensure_device_block, fit_attribs, product_attr, put_attr, resolve, targets, two_line};
 use crate::cmd::bad;
 use crate::{Result, Session};
 
@@ -22,11 +22,15 @@ pub(super) fn set(s: &mut Session, hs: &[Handle], on: bool) -> Result<usize> {
         }
         let name = ensure_device_block(s, &product, on)?;
         let (old, new) = (card_size(&product, !on), card_size(&product, on));
+        let blk = s.doc()?.block(&name).cloned();
         s.doc_mut()?.modify_entity(h, |e| {
             let EntityKind::Insert(i) = &mut e.kind else { return };
             i.block = name;
             put_attr(i, "TWOLINE", if on { "1".into() } else { String::new() });
             i.scale.y = i.scale.y.signum() * (old.y * i.scale.y.abs() + new.y - old.y) / new.y;
+            if let Some(blk) = &blk {
+                fit_attribs(blk, i);
+            }
         })?;
         changed += 1;
     }

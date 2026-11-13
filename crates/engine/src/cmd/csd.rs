@@ -524,7 +524,7 @@ pub(crate) fn refresh_blocks(doc: &mut Arc<Drawing>, library: &[Product]) -> boo
         return false;
     }
     let mut d = (**doc).clone();
-    let mut changed = false;
+    let mut changed = HashSet::new();
     let mut put = |d: &mut Drawing, block: cadcraft_doc::Block| {
         let same = d.block(&block.name).is_some_and(|o| {
             o.base == block.base
@@ -532,8 +532,8 @@ pub(crate) fn refresh_blocks(doc: &mut Arc<Drawing>, library: &[Product]) -> boo
                 && o.entities.iter().zip(block.entities.iter()).all(|(a, b)| a.common == b.common && same_kind(&a.kind, &b.kind))
         });
         if !same {
+            changed.insert(block.name.clone());
             d.blocks.insert(block.name.clone(), Arc::new(block));
-            changed = true;
         }
     };
     for (product, two_line) in devices {
@@ -546,6 +546,24 @@ pub(crate) fn refresh_blocks(doc: &mut Arc<Drawing>, library: &[Product]) -> boo
         let block = deco_block(p, k, || d.new_handle());
         put(&mut d, block);
     }
+    // A redrawn card may have moved its attributes (a built-in drawn at its own size, say).
+    let refit: Vec<Handle> = spaces(&d)
+        .iter()
+        .filter_map(|sp| d.space(sp))
+        .flat_map(|st| st.iter().filter(|e| matches!(&e.kind, EntityKind::Insert(i) if changed.contains(&i.block))).map(|e| e.handle))
+        .collect();
+    for h in refit {
+        let blk = d.entity(h).and_then(|e| match &e.kind {
+            EntityKind::Insert(i) => d.block(&i.block).cloned(),
+            _ => None,
+        });
+        let _ = d.modify_entity(h, |e| {
+            if let (EntityKind::Insert(i), Some(blk)) = (&mut e.kind, &blk) {
+                fit_attribs(blk, i);
+            }
+        });
+    }
+    let changed = !changed.is_empty();
     if changed {
         *doc = Arc::new(d);
     }
@@ -653,10 +671,17 @@ fn run_size(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let d = s.doc_mut()?;
     for (h, x, y) in &scales {
+        let blk = d.entity(*h).and_then(|e| match &e.kind {
+            EntityKind::Insert(i) => d.block(&i.block).cloned(),
+            _ => None,
+        });
         d.modify_entity(*h, |e| {
             if let EntityKind::Insert(i) = &mut e.kind {
                 i.scale.x = *x;
                 i.scale.y = *y;
+                if let Some(blk) = &blk {
+                    fit_attribs(blk, i);
+                }
             }
         })?;
     }
@@ -889,6 +914,23 @@ fn run_device_info(s: &mut Session, p: &Value) -> Result<Value> {
         "libSize": [card.x, card.y],
         "twoLine": two_line(i),
     }))
+}
+
+/// Moves each of `i`'s attributes to where `blk` now defines it, keeping its value; attributes the
+/// block doesn't define (MOUNT, ACCS...) stay as they are.
+fn fit_attribs(blk: &cadcraft_doc::Block, i: &mut Insert) {
+    let m = i.transform(blk.base.xy());
+    for e in blk.entities.iter() {
+        let EntityKind::AttDef(def) = &e.kind else { continue };
+        let Some(a) = i.attribs.iter_mut().find(|a| a.tag == def.tag) else { continue };
+        let mut k = EntityKind::Text(def.text.clone());
+        k.transform(&m);
+        if let EntityKind::Text(mut t) = k {
+            t.value = std::mem::take(&mut a.text.value);
+            a.text = t;
+        }
+        a.multiline = def.multiline.as_ref().map(|ml| ml.transformed(&m));
+    }
 }
 
 /// Sets attribute `tag` on a device card, adding it (hidden) if the card lacks it.
