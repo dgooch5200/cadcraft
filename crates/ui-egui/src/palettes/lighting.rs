@@ -5,9 +5,9 @@ use cadcraft_csd::{Product, Protocol, builtin_products};
 use egui::{Color32, Rect, Sense, Stroke, pos2, vec2};
 use serde_json::json;
 
+use crate::CadApp;
 use crate::icons::Icon;
 use crate::theme::Tokens;
-use crate::{CadApp, Pick};
 
 const ROW_H: f32 = 46.0;
 const LIST_H: f32 = 180.0;
@@ -208,10 +208,7 @@ pub(super) fn body(app: &mut CadApp, ui: &mut egui::Ui) {
             let _ = app.run("csd.print", serde_json::Value::Null);
         }
         if ui.add_sized(vec2(w, 20.0), egui::Button::new(crate::tl!("Export .cpsd…")).truncate()).clicked() {
-            let save = |app: &mut CadApp, path: String| app.run("csd.export.cpsd", json!({ "path": path }));
-            if let Some(Err(e)) = app.pick_then(Pick::Save("drawing.cpsd".into()), save) {
-                app.session.echo(e);
-            }
+            let _ = app.run("csd.export.cpsd", serde_json::Value::Null);
         }
     });
     ui.add_space(4.0);

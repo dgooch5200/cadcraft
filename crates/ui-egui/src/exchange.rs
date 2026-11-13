@@ -32,6 +32,9 @@ pub fn route(app: &mut CadApp, id: &str) -> Result<Value, String> {
         "csd.print" => app
             .pick_then(Pick::Save(format!("{stem}.pdf")), |app, path| app.run("csd.print", json!({ "path": path })))
             .unwrap_or_else(|| no_picker(app, "CSD.PRINT", r#"csd.print {"path": "sheet.pdf"}"#)),
+        "csd.export.cpsd" => app
+            .pick_then(Pick::Save(format!("{stem}.cpsd")), |app, path| app.run("csd.export.cpsd", json!({ "path": path })))
+            .unwrap_or_else(|| no_picker(app, "CSD.EXPORT.CPSD", r#"csd.export.cpsd {"path": "show.cpsd"}"#)),
         "publish" => app
             .pick_then(Pick::Save(format!("{stem}.pdf")), |app, path| app.run("publish", json!({ "path": path })))
             .unwrap_or_else(|| no_picker(app, "PUBLISH", "publish {}")),
@@ -229,6 +232,13 @@ mod tests {
 
     fn uid(app: &CadApp) -> u64 {
         app.session.state().unwrap().uid
+    }
+
+    #[test]
+    fn export_cpsd_with_no_path_asks_for_a_file() {
+        let (mut app, asked, _) = deferred_app();
+        app.start("csd.export.cpsd");
+        assert_eq!(*asked.borrow(), [Pick::Save("Drawing1.cpsd".into())]);
     }
 
     /// Where the host shows its dialogs without waiting (macOS, #1527), the command acts on the
