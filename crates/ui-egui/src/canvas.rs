@@ -183,6 +183,8 @@ pub struct CanvasState {
     /// The right-click that opened the shortcut menu held Shift or Ctrl: it is the object snap
     /// menu ([`crate::context_menu`]).
     pub snap_menu: bool,
+    /// Where the right-click that opened the shortcut menu landed, in drawing units.
+    pub menu_world: Option<Vec2>,
     /// Tab was pressed over a snap marker: show the next candidate ([`SnapCycle`]).
     pub snap_tab: bool,
     pub snap_cycle: Option<SnapCycle>,
@@ -954,6 +956,10 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let idle = !app.session.prompting();
     if inside && pressed_secondary {
         app.canvas.snap_menu = mods.shift || mods.ctrl;
+        app.canvas.menu_world = raw_world;
+        if idle && !app.canvas.snap_menu {
+            crate::context_menu::select_device_at(app, raw_world);
+        }
     }
     if crate::context_menu::in_command(app, ui, inside, pressed_secondary) {
         let _ = app.session.input(Input::Enter);

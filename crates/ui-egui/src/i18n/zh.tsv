@@ -1510,3 +1510,21 @@ menu	View	视图
 	Request sent. An admin will approve it.	请求已发送，管理员将予以批准。
 	Couldn't reach the server: {m}	无法连接服务器：{m}
 	Sign Out	退出登录
+	Duplicate	创建副本
+	Device details	设备详情
+	Select all of this product	选择此产品的全部设备
+	Delete device	删除设备
+	Place one here	在此放置一个
+	Zoom to fit	缩放以适合
+	Align left	左对齐
+	Align top	顶部对齐
+	Distribute horizontally	水平分布
+	Distribute vertically	垂直分布
+	Copy {n} items	复制 {n} 个项目
+	Duplicate {n} items	创建 {n} 个项目的副本
+	Delete {n} items	删除 {n} 个项目
+	Deselect all	取消全选
+	Align Devices	对齐设备
+	Device at Point	指定点处的设备
+	Distribute Devices	分布设备
+	Select All of This Product	选择此产品的全部设备

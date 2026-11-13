@@ -25,6 +25,9 @@ use cadcraft_engine::{Input, find_command};
 
 use crate::CadApp;
 use crate::menus::{Entry, activate, entry_ui};
+use crate::shortcut_menus::run;
+use cadcraft_doc::Handle;
+use serde_json::json;
 
 /// Clipboard ▸ (AutoCAD's order).
 const CLIPBOARD: &[&str] = &["cutclip", "copyclip", "copybase", "pasteclip", "pasteblock", "pasteorig"];
@@ -48,6 +51,9 @@ pub const RECENT: usize = 8;
 /// of acting as Enter, by default (AutoCAD's time-sensitive right-click; 250 ms there by
 /// default). OPTIONS `rightClickDuration` changes it.
 pub const HOLD_SECS: f64 = 0.25;
+
+/// How far Duplicate puts the copy to the right of the original, in drawing units.
+const DUPLICATE_OFFSET: f64 = 90.0;
 
 /// Item ids that are not commands: keys, typed text and snap menu items.
 pub const ENTER: &str = "key:enter";
@@ -102,6 +108,7 @@ pub fn entries(app: &CadApp) -> Vec<Vec<Entry>> {
         .collect();
     first.extend(sub("Recent Commands", recent));
     push(&mut groups, first);
+    groups.extend(csd_entries(app));
     // In the Block Editor: save the block or go back to the drawing.
     if app.session.state().is_ok_and(|st| st.block_edit.is_some()) {
         push(&mut groups, items(app, &["bsave", "bsaveas", "bclose"]));
@@ -123,6 +130,78 @@ pub fn entries(app: &CadApp) -> Vec<Vec<Entry>> {
     let mut last = if selected { items(app, &["properties"]) } else { Vec::new() };
     last.extend(items(app, SETTINGS));
     push(&mut groups, last);
+    groups
+}
+
+fn is_device(e: &std::sync::Arc<cadcraft_doc::Entity>) -> bool {
+    matches!(&e.kind, EntityKind::Insert(i) if i.block.starts_with("CSD_"))
+}
+
+/// The selection, when it is non-empty and every object is a lighting device card.
+fn selected_devices(app: &CadApp) -> Vec<Handle> {
+    let Ok(d) = app.session.doc() else { return Vec::new() };
+    let sel = app.session.selection();
+    if sel.iter().all(|h| d.entity(*h).is_some_and(is_device)) { sel } else { Vec::new() }
+}
+
+/// Right-clicking a device card that is not selected selects it, so the menu acts on it.
+pub fn select_device_at(app: &mut CadApp, at: Option<cadcraft_geom::Vec2>) {
+    let Some(at) = at else { return };
+    let hit = app.run("csd.device.at", json!({ "at": [at.x, at.y] })).ok().and_then(|r| r["handle"].as_str().and_then(Handle::parse_hex));
+    if let Some(h) = hit
+        && !app.session.selection().contains(&h)
+    {
+        app.session.set_selection(vec![h]);
+    }
+}
+
+/// The lighting designer's items: a card menu for one selected device, arranging and bulk edits
+/// for several, and with none selected (and lighting in use) the canvas menu. A selection ends
+/// with Deselect All.
+fn csd_entries(app: &CadApp) -> Vec<Vec<Entry>> {
+    let devs = selected_devices(app);
+    let n = devs.len();
+    let mut groups = Vec::new();
+    if n == 0 {
+        let armed = app.session.csd_armed.as_ref();
+        let used = armed.is_some() || app.session.doc().is_ok_and(|d| d.model.iter().any(is_device));
+        if !used {
+            return groups;
+        }
+        let place = armed.zip(app.canvas.menu_world).and_then(|(p, w)| run("Place one here", "csd.place", json!({ "product": p, "at": [w.x, w.y] })));
+        push(&mut groups, place.into_iter().collect());
+        let mut canvas = items(app, &["selectall", "pasteclip"]);
+        canvas.extend(item(app, "zoom.extents", Some("Zoom to fit")));
+        push(&mut groups, canvas);
+        return groups;
+    }
+    let hexes: Vec<String> = devs.iter().map(|h| h.hex()).collect();
+    let copy = |label: &str| run(label, "copyclip", json!({ "handles": hexes }));
+    let duplicate = |label: &str| run(label, "copy", json!({ "handles": hexes, "delta": [DUPLICATE_OFFSET, 0] }));
+    let delete = |label: &str| run(label, "csd.device.delete", json!({ "handles": hexes }));
+    if n == 1 {
+        push(&mut groups, copy("Copy").into_iter().chain(duplicate("Duplicate")).collect());
+        let mut more: Vec<Entry> = crate::shortcut_menus::item(app, "ui.panel.properties", Some("Device details")).into_iter().collect();
+        more.extend(run("Select all of this product", "csd.select.product", json!({ "device": hexes.first() })));
+        push(&mut groups, more);
+        push(&mut groups, delete("Delete device").into_iter().collect());
+    } else {
+        let mut arrange: Vec<Entry> = Vec::new();
+        arrange.extend(run("Align left", "csd.align", json!({ "mode": "left", "handles": hexes })));
+        arrange.extend(run("Align top", "csd.align", json!({ "mode": "top", "handles": hexes })));
+        for (label, axis) in [("Distribute horizontally", "x"), ("Distribute vertically", "y")] {
+            // Equal gaps need a device between the two that stay put.
+            if let Some(Entry::Item { label, id, shortcut, .. }) = run(label, "csd.distribute", json!({ "axis": axis, "handles": hexes })) {
+                arrange.push(Entry::Item { label, id, shortcut, enabled: n >= 3 });
+            }
+        }
+        push(&mut groups, arrange);
+        push(&mut groups, items(app, GROUP));
+        let bulk = [copy(&crate::tf!("Copy {n} items", n = n)), duplicate(&crate::tf!("Duplicate {n} items", n = n))];
+        push(&mut groups, bulk.into_iter().flatten().collect());
+        push(&mut groups, delete(&crate::tf!("Delete {n} items", n = n)).into_iter().collect());
+    }
+    push(&mut groups, item(app, "ai_deselect", Some("Deselect all")).into_iter().collect());
     groups
 }
 
@@ -238,6 +317,8 @@ pub fn choose(app: &mut CadApp, id: &str) {
         }
     } else if let Some(s) = id.strip_prefix(SNAP) {
         choose_snap(app, s);
+    } else if id.starts_with("run:") {
+        crate::shortcut_menus::run_item(app, id);
     } else if id.starts_with("textedit:") {
         // The Edit Text window of the single selected text object; the id carries the handle.
         app.ui.dialog = Some(id.to_string());

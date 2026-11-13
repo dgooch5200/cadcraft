@@ -18,6 +18,7 @@ use serde_json::{Map, Value, json};
 
 use super::curves::handle_param;
 
+mod arrange;
 mod connect;
 mod place;
 use super::{CommandSpec, always, bad, point_req, str_param, targets};
@@ -40,6 +41,17 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{handle? (default the single selected device), label?: text (empty = the product code), notes?: text} → {handle}"),
         CommandSpec::new("csd.device.delete", "Delete Devices", run_device_delete)
             .params("{handles? (default the selection)} → {deleted, wires}; also removes every wire linked to them and the wires' decorations"),
+        CommandSpec::new("csd.select.product", "Select All of This Product", arrange::run_select_product)
+            .params("{device: handle} → {count}; selects every device of that device's product")
+            .noundo(),
+        CommandSpec::new("csd.device.at", "Device at Point", arrange::run_device_at)
+            .params("{at: [x,y]} → {handle: hex | null}; the topmost device card covering the point")
+            .noundo()
+            .enabled(always),
+        CommandSpec::new("csd.align", "Align Devices", arrange::run_align)
+            .params("{mode: left|top|right|bottom, handles? (default the selection)} → {moved}; aligns card edges"),
+        CommandSpec::new("csd.distribute", "Distribute Devices", arrange::run_distribute)
+            .params("{axis: x|y, handles? (default the selection)} → {moved}; equal gaps between cards, the outer two stay put (needs 3+)"),
         CommandSpec::new("csd.arm", "Arm Product", place::run_arm).params("{product: id of a library product} → {product}").noundo(),
         CommandSpec::new("csd.protocol", "Wire Protocol", run_protocol)
             .params("{protocol: network|netdata|10scene|dmx|0-10v|contact|power|midi|epix3p|epix4p} → {protocol}; the wire type csd.connect draws next")

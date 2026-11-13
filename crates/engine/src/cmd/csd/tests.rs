@@ -816,3 +816,67 @@ fn a_card_not_in_the_library_is_a_device_that_can_be_replaced_or_deleted() {
     let gone = card_of(&mut s, "NOPE", [0.0, 300.0]);
     assert_eq!(s.execute("csd.device.delete", &json!({ "handles": [gone.hex()] })).unwrap()["deleted"], 1);
 }
+
+fn place_at(s: &mut Session, product: &str, x: f64, y: f64) -> Handle {
+    handle(&s.execute("csd.place", &json!({ "product": product, "at": [x, y] })).unwrap())
+}
+
+fn at(s: &Session, h: Handle) -> (f64, f64) {
+    let Some(EntityKind::Insert(i)) = s.doc().unwrap().entity(h).map(|e| &e.kind) else { panic!("no insert") };
+    (i.insert.x, i.insert.y)
+}
+
+#[test]
+fn select_product_selects_every_device_of_that_product() {
+    let mut s = Session::new();
+    let a = place_at(&mut s, CONSOLE, 0.0, 0.0);
+    let b = place_at(&mut s, CONSOLE, 100.0, 0.0);
+    place_at(&mut s, NODE, 200.0, 0.0);
+    let r = s.execute("csd.select.product", &json!({ "device": a.hex() })).unwrap();
+    assert_eq!(r["count"], 2);
+    let mut sel = s.selection();
+    sel.sort();
+    assert_eq!(sel, vec![a, b]);
+    assert!(s.execute("csd.select.product", &json!({ "device": "FFFF" })).is_err());
+}
+
+#[test]
+fn align_lines_up_card_edges_and_wires_follow() {
+    let mut s = ortho_session();
+    let a = place_at(&mut s, CONSOLE, 0.0, 0.0);
+    let b = place_at(&mut s, NODE, 200.0, 60.0);
+    let w = connect(&mut s, a, b).unwrap();
+    let before = verts(&s, w);
+    s.execute("csd.size", &json!({ "handles": [b.hex()], "w": 140 })).unwrap();
+    s.execute("csd.align", &json!({ "mode": "left", "handles": [a.hex(), b.hex()] })).unwrap();
+    // Left edges meet at a's -35, so the 140-wide card's centre lands at 35.
+    assert_eq!(at(&s, a), (0.0, 0.0));
+    assert_eq!(at(&s, b), (35.0, 60.0));
+    assert_ne!(verts(&s, w), before);
+    s.set_selection(vec![a, b]);
+    s.execute("csd.align", &json!({ "mode": "top" })).unwrap();
+    assert_eq!(at(&s, a).1, at(&s, b).1);
+    assert!(s.execute("csd.align", &json!({ "mode": "middle" })).is_err());
+    assert!(s.execute("csd.align", &json!({ "mode": "left", "handles": [a.hex()] })).is_err());
+}
+
+#[test]
+fn distribute_equalises_gaps_and_keeps_the_ends() {
+    let mut s = Session::new();
+    let a = place_at(&mut s, CONSOLE, 0.0, 0.0);
+    let b = place_at(&mut s, CONSOLE, 50.0, 0.0);
+    let c = place_at(&mut s, CONSOLE, 400.0, 0.0);
+    let all = json!([a.hex(), b.hex(), c.hex()]);
+    s.execute("csd.distribute", &json!({ "axis": "x", "handles": all })).unwrap();
+    assert_eq!((at(&s, a).0, at(&s, b).0, at(&s, c).0), (0.0, 200.0, 400.0));
+    assert!(s.execute("csd.distribute", &json!({ "axis": "x", "handles": [a.hex(), b.hex()] })).is_err());
+}
+
+#[test]
+fn device_at_finds_the_card_under_a_point() {
+    let mut s = Session::new();
+    let a = place_at(&mut s, CONSOLE, 0.0, 0.0);
+    let hit = |s: &mut Session, x: f64, y: f64| s.execute("csd.device.at", &json!({ "at": [x, y] })).unwrap()["handle"].clone();
+    assert_eq!(hit(&mut s, 30.0, 30.0), json!(a.hex()));
+    assert_eq!(hit(&mut s, 90.0, 0.0), json!(null));
+}

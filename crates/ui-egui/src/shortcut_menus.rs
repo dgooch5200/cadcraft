@@ -18,7 +18,7 @@ const RECENT: usize = 8;
 /// The command line history heights offered (lines).
 const LINES: &[usize] = &[0, 1, 3, 5, 8, 12];
 
-fn item(app: &CadApp, id: &str, label: Option<&str>) -> Option<Entry> {
+pub(crate) fn item(app: &CadApp, id: &str, label: Option<&str>) -> Option<Entry> {
     let spec = find_command(id).map(|s| (s.label, s.shortcut, (s.enabled)(&app.session).is_ok()));
     let ui = crate::menus::UI_COMMANDS.iter().find(|c| c.0 == id).map(|c| (c.1, c.3, true));
     let (default, shortcut, enabled) = spec.or(ui)?;
@@ -31,7 +31,7 @@ fn action(label: &str, id: String, enabled: bool) -> Entry {
 }
 
 /// An item running `command` with `params`, when the command exists.
-fn run(label: &str, command: &str, params: Value) -> Option<Entry> {
+pub(crate) fn run(label: &str, command: &str, params: Value) -> Option<Entry> {
     let known = find_command(command).is_some() || crate::menus::is_ui_command(command);
     known.then(|| action(label, format!("run:{command}:{params}"), true))
 }
@@ -145,14 +145,19 @@ pub fn properties_entries(app: &CadApp) -> Vec<Vec<Entry>> {
     groups
 }
 
+/// Run a `run:<command>:<JSON params>` item.
+pub(crate) fn run_item(app: &mut CadApp, id: &str) {
+    let Some((command, params)) = id.strip_prefix("run:").and_then(|r| r.split_once(':')) else { return };
+    let params = serde_json::from_str(params).unwrap_or(Value::Null);
+    if let Err(e) = app.run(command, params) {
+        app.session.echo(e);
+    }
+}
+
 /// Run a chosen item. `ctx` is for the items that copy text to the system clipboard.
 pub fn choose(app: &mut CadApp, ctx: &egui::Context, id: &str) {
-    if let Some(rest) = id.strip_prefix("run:") {
-        let Some((command, params)) = rest.split_once(':') else { return };
-        let params = serde_json::from_str(params).unwrap_or(Value::Null);
-        if let Err(e) = app.run(command, params) {
-            app.session.echo(e);
-        }
+    if id.starts_with("run:") {
+        run_item(app, id);
     } else if id == "cmdline:copy" {
         ctx.copy_text(app.session.log.join("\n"));
     } else if let Some(rest) = id.strip_prefix("drawing:") {

@@ -241,3 +241,46 @@ fn time_sensitive_right_click() {
     assert!(app.session.running.is_none(), "a quick right-click is Enter: {}", app.session.prompt_text());
     assert_eq!(app.session.doc().unwrap().model.handles().len(), 1);
 }
+
+fn place_device(app: &mut CadApp, product: &str, x: f64) -> cadcraft_doc::Handle {
+    let r = app.run("csd.place", json!({ "product": product, "at": [x, 0] })).unwrap();
+    cadcraft_doc::Handle::parse_hex(r["handle"].as_str().unwrap()).unwrap()
+}
+
+fn entry(app: &CadApp, label: &str) -> (String, String, bool) {
+    flatten(&context_menu::entries(app)).into_iter().find(|(l, _, _)| l == label).unwrap_or_else(|| panic!("{label} missing"))
+}
+
+#[test]
+fn lighting_device_menus_offer_card_canvas_and_multi_select_items() {
+    let mut app = app();
+    assert!(!ids(&context_menu::entries(&app)).iter().any(|i| i.starts_with("run:csd.")), "no lighting in use, no lighting items");
+    let a = place_device(&mut app, "CHAMMQ50", 0.0);
+    let b = place_device(&mut app, "CHAMMQ50", 200.0);
+    let c = place_device(&mut app, "epix-flex-drive", 400.0);
+
+    let l = labels(&context_menu::entries(&app));
+    assert!(l.iter().any(|x| x == "Zoom to fit"), "{l:?}");
+
+    // A right-click on a card selects it and opens the card menu.
+    context_menu::select_device_at(&mut app, Some(cadcraft_geom::Vec2::new(1.0, 1.0)));
+    let l = labels(&context_menu::entries(&app));
+    for want in ["Copy", "Duplicate", "Device details", "Select all of this product", "Delete device", "Deselect all"] {
+        assert!(l.iter().any(|x| x == want), "{want} missing from {l:?}");
+    }
+    let id = entry(&app, "Select all of this product").1;
+    context_menu::choose(&mut app, &id);
+    assert_eq!(app.session.selection().len(), 2);
+
+    let l = labels(&context_menu::entries(&app));
+    for want in ["Align left", "Align top", "Distribute vertically", "Copy 2 items", "Duplicate 2 items", "Delete 2 items", "Group"] {
+        assert!(l.iter().any(|x| x == want), "{want} missing from {l:?}");
+    }
+    assert!(!entry(&app, "Distribute horizontally").2, "distributing needs three devices");
+
+    app.session.set_selection(vec![a, b, c]);
+    assert!(entry(&app, "Distribute horizontally").2);
+    let id = entry(&app, "Align top").1;
+    context_menu::choose(&mut app, &id);
+    assert_eq!(app.session.doc().unwrap().model.handles().len(), 3);
+}
