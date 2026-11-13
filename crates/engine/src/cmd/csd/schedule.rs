@@ -120,7 +120,7 @@ pub(super) fn run_schedule(s: &mut Session, _p: &Value) -> Result<Value> {
         .iter()
         .map(|d| {
             json!({
-                "handle": d.handle.hex(), "product": d.prod.id, "category": d.prod.cat, "code": d.prod.code, "label": d.label, "notes": d.notes,
+                "handle": d.handle.hex(), "product": d.prod.id, "name": d.prod.name, "category": d.prod.cat, "code": d.prod.code, "label": d.label, "notes": d.notes,
                 "portsInUse": ports_text(&d.ports), "connections": d.conns, "poeLoad": d.poe, "controlGear": d.prod.control,
             })
         })

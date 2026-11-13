@@ -1562,3 +1562,38 @@ menu	View	视图
 	Rename cable...	重命名线缆...
 	Rename cable	重命名线缆
 	Delete cable	删除线缆
+	Placed devices · {count}	已放置设备 · {count}
+	Unplaced · {count}	未放置 · {count}
+	Bill of materials · {count}	物料清单 · {count}
+	No devices placed yet.	尚未放置设备。
+	Nothing unplaced.	没有未放置的项目。
+	Nothing to list.	没有可列出的内容。
+	#	#
+	Product	产品
+	Code	代码
+	Label	标签
+	Ports in use	已用端口
+	Conns	连接数
+	PoE load	PoE 负载
+	Notes	备注
+	Actions	操作
+	Locate	定位
+	Item	项目
+	Qty	数量
+	Model ID	型号 ID
+	Product name	产品名称
+	Place	放置
+	Labels	标签
+	Add a product…	添加产品…
+	Export PDF	导出 PDF
+	Export CSV	导出 CSV
+	Exported {rows} rows: {path}	已导出 {rows} 行：{path}
+	Schedules	明细表
+	Add Unplaced Item	添加未放置项目
+	Bill of Materials	物料清单
+	Export Bill of Materials	导出物料清单
+	Place Unplaced Item	放置未放置项目
+	Placed Devices	已放置设备
+	Remove Unplaced Item	移除未放置项目
+	Set Unplaced Quantity	设置未放置数量
+	Unplaced Items	未放置项目

@@ -85,13 +85,22 @@ fn toolbar(app: &mut CadApp, ui: &mut egui::Ui, t: &Tokens) {
     let connecting = app.session.running.as_ref().is_some_and(|r| r.id == "csd.connect");
     ui.horizontal(|ui| {
         ui.add_space(8.0);
-        let w = ui.available_width() - 8.0;
+        ui.spacing_mut().item_spacing.x = gap;
+        let total = ui.available_width() - 8.0;
+        let w = (total - gap) * 0.58;
         let b = egui::Button::new(egui::RichText::new(crate::tl!("Connect")).strong().size(15.0)).selected(connecting).min_size(vec2(w, 30.0));
         let resp = ui.add_sized(vec2(w, 30.0), b);
         crate::icons::describe_control(ui, &resp, "Connect", Some(connecting), false);
         if resp.clicked() {
             app.cmd.buffer.clear();
             app.start("csd.connect");
+        }
+        let open = app.ui.csd_sched.open;
+        let w = total - gap - w;
+        let resp = ui.add_sized(vec2(w, 30.0), egui::Button::new(crate::tl!("Schedules")).selected(open));
+        crate::icons::describe_control(ui, &resp, "Schedules", Some(open), false);
+        if resp.clicked() {
+            let _ = app.run("ui.csd.schedule", serde_json::Value::Null);
         }
     });
     ui.add_space(4.0);

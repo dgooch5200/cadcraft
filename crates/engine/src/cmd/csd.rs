@@ -62,7 +62,7 @@ fn own_specs() -> Vec<CommandSpec> {
         CommandSpec::new("csd.distribute", "Distribute Devices", arrange::run_distribute)
             .params("{axis: x|y, handles? (default the selection)} → {moved}; equal gaps between cards, the outer two stay put (needs 3+)"),
         CommandSpec::new("csd.schedule", "Placed Devices", schedule::run_schedule)
-            .params("{} → {devices: [{handle, product, category, code, label, notes, portsInUse: text like \"PoE 1/3, DMX 2/2\", connections: wire count, poeLoad: watts the device's PoE outlets feed, controlGear}]}; control gear first")
+            .params("{} → {devices: [{handle, product, name, category, code, label, notes, portsInUse: text like \"PoE 1/3, DMX 2/2\", connections: wire count, poeLoad: watts the device's PoE outlets feed, controlGear}]}; control gear first")
             .noundo(),
         CommandSpec::new("csd.unplaced.list", "Unplaced Items", schedule::run_unplaced_list)
             .params("{} → {items: [{index, product, qty, code, category, name}]}; saved with the drawing")

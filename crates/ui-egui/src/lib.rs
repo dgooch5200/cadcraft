@@ -31,6 +31,7 @@ pub mod context_menu;
 pub mod control;
 pub mod credits;
 pub mod csd_library;
+pub mod csd_schedule;
 pub mod dialogs;
 pub mod docking;
 pub mod fault;
@@ -126,6 +127,8 @@ pub struct UiState {
     pub start_tab: bool,
     #[serde(skip)]
     pub csd_lib: csd_library::State,
+    #[serde(skip)]
+    pub csd_sched: csd_schedule::State,
     pub dialog: Option<String>,
     pub history_lines: usize,
     /// The user's keyboard shortcuts ([`keys`]).
@@ -219,6 +222,7 @@ impl Default for UiState {
             in_window_menu: !cfg!(target_os = "macos"),
             start_tab: false,
             csd_lib: Default::default(),
+            csd_sched: Default::default(),
             dialog: None,
             history_lines: 3,
             shortcuts: keys::UserKeys::new(),
@@ -1164,6 +1168,9 @@ impl CadApp {
         let has_doc = !self.session.docs.is_empty() && !self.ui.start_tab && !library;
         if has_doc && !self.ui.show_toolsets {
             palettes::toolsets_strip(self, ui);
+        }
+        if has_doc {
+            csd_schedule::show(self, ui);
         }
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
             if library {
