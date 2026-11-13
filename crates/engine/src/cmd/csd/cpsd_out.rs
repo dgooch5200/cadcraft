@@ -17,6 +17,8 @@ const CMD: &str = "csd.export.cpsd";
 /// ChamSys's `_format`; 7 added pages.
 const FORMAT: u32 = 7;
 /// Unplaced quantities are written one node per unit; a huge quantity must not balloon the file.
+const PAGE_ID: &str = "page-1";
+const PAGE_NAME: &str = "Canvas 1";
 const MAX_UNPLACED_NODES: u64 = 10_000;
 
 fn point(p: Vec2) -> Value {
@@ -27,6 +29,7 @@ fn point(p: Vec2) -> Value {
 pub(super) fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad(CMD, "`path` is required"))?;
     let library = s.csd_library.clone();
+    let ortho = s.settings.orthomode;
     let project = sheet::run_project(s, &Value::Null)?;
     let doc = s.doc()?;
     let store = doc.space(&s.space()).ok_or_else(|| EngineError::Other("no such space".into()))?;
@@ -35,6 +38,8 @@ pub(super) fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     let ids: HashMap<Handle, String> = devs.iter().enumerate().map(|(n, d)| (d.handle, format!("d{n}"))).collect();
     let mut used: BTreeSet<String> = BTreeSet::new();
 
+    let mut skipped: Vec<String> = Vec::new();
+    let mut lost_links = 0;
     let mut nodes: Vec<Value> = Vec::new();
     for (n, d) in devs.iter().enumerate() {
         let i = d.insert;
@@ -54,6 +59,14 @@ pub(super) fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
         if (w - card.x).abs() > 1e-9 || (h - card.y).abs() > 1e-9 {
             node["w"] = json!(w);
             node["h"] = json!(h);
+        }
+        let target = attr(i, "LINKPAGE").trim();
+        if !target.is_empty() {
+            if target == PAGE_NAME || target == PAGE_ID {
+                node["linkPage"] = json!(PAGE_ID);
+            } else {
+                lost_links += 1;
+            }
         }
         if two_line(i) {
             node["twoLine"] = json!(true);
@@ -115,14 +128,16 @@ pub(super) fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
         title.insert(theirs.into(), json!(project["fields"][ours].as_str().unwrap_or_default()));
     }
     let (shapes, skipped_shapes) = super::shapes::export(store);
-    let skipped: Vec<String> = (skipped_shapes > 0)
-        .then(|| format!("{skipped_shapes} x entity on CSD_SHAPES that is not a line, rectangle, ellipse or text"))
-        .into_iter()
-        .collect();
+    if skipped_shapes > 0 {
+        skipped.push(format!("{skipped_shapes} x entity on CSD_SHAPES that is not a line, rectangle, ellipse or text"));
+    }
+    if lost_links > 0 {
+        skipped.push(format!("{lost_links} x off-page target that is not this page (the export has one page, \"{PAGE_NAME}\")"));
+    }
     let file = json!({
-        "_app": "ChamSys System Designer", "_format": FORMAT, "_ext": ".cpsd", "ortho": false,
+        "_app": "ChamSys System Designer", "_format": FORMAT, "_ext": ".cpsd", "ortho": ortho,
         "titleBlock": title,
-        "pages": [{ "id": "page-1", "name": "Canvas 1" }],
+        "pages": [{ "id": PAGE_ID, "name": PAGE_NAME }],
         "products": products, "nodes": nodes, "conns": conns, "shapes": shapes,
     });
     let bytes = serde_json::to_vec_pretty(&file).map_err(|e| bad(CMD, e.to_string()))?;
@@ -223,6 +238,40 @@ mod tests {
         assert_eq!(t.execute("csd.unplaced.list", &json!({})).unwrap()["items"][0]["product"], PRODUCT);
         let f = t.execute("csd.project", &json!({})).unwrap()["fields"].clone();
         assert_eq!((&f["project"], &f["drawnBy"], &f["title"]), (&json!("Show"), &json!("Dee"), &json!("Rig")));
+    }
+
+    #[test]
+    fn off_page_target_is_written_only_for_the_exported_page() {
+        let mut s = Session::new();
+        let a = place(&mut s, "__off-page", [0.0, 0.0]);
+        let b = place(&mut s, "__off-page", [300.0, 0.0]);
+        s.execute("csd.device.set", &json!({ "handle": a, "linkPage": " Canvas 1 " })).unwrap();
+        s.execute("csd.device.set", &json!({ "handle": b, "linkPage": "Riser" })).unwrap();
+        let path = std::env::temp_dir().join(format!("cadcraft-cpsd-link-{}.cpsd", std::process::id()));
+        let path = path.to_str().unwrap();
+        let r = s.execute("csd.export.cpsd", &json!({ "path": path })).unwrap();
+        let file: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let _ = std::fs::remove_file(path);
+        let links: Vec<_> = file["nodes"].as_array().unwrap().iter().map(|n| n.get("linkPage").cloned()).collect();
+        assert_eq!(links.iter().flatten().collect::<Vec<_>>(), [&json!("page-1")]);
+        assert_eq!(r["skipped"].as_array().map(Vec::len), Some(1), "{r}");
+    }
+
+    #[test]
+    fn ortho_survives_the_round_trip() {
+        let path = std::env::temp_dir().join(format!("cadcraft-cpsd-ortho-{}.cpsd", std::process::id()));
+        let path = path.to_str().unwrap();
+        let mut s = Session::new();
+        s.execute("ortho", &json!({ "on": true })).unwrap();
+        s.execute("csd.export.cpsd", &json!({ "path": path })).unwrap();
+        let mut t = Session::new();
+        t.execute("csd.import.cpsd", &json!({ "path": path })).unwrap();
+        assert!(t.settings.orthomode);
+        s.execute("ortho", &json!({ "on": false })).unwrap();
+        s.execute("csd.export.cpsd", &json!({ "path": path })).unwrap();
+        let file: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let _ = std::fs::remove_file(path);
+        assert_eq!(file["ortho"], json!(false));
     }
 
     #[test]

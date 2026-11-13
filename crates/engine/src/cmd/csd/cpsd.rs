@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use cadcraft_csd::{MAX_WIRE_POINTS, Paper, Protocol, Side, WireLink, card_size, is_builtin};
+use cadcraft_csd::{MAX_WIRE_POINTS, OFF_PAGE_ID, Paper, Protocol, Side, WireLink, card_size, is_builtin};
 use cadcraft_geom::Vec2;
 use serde_json::{Value, json};
 
@@ -99,9 +99,11 @@ pub(super) fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
 
     // Page ids in file order; none means the one unnamed first page.
     let mut pages: Vec<String> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
     for e in file.get("pages").and_then(Value::as_array).into_iter().flatten().take(MAX_PAGES) {
         let id = if e.is_object() { text(e, "id") } else { e.as_str().unwrap_or_default().to_string() };
         if !id.trim().is_empty() && !pages.contains(&id) {
+            names.push(if e.is_object() { text(e, "name") } else { String::new() });
             pages.push(id);
         }
     }
@@ -122,6 +124,8 @@ pub(super) fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
         let listed = if pages.contains(&id) { id } else { pages.first().cloned().unwrap_or_default() };
         pages.get(chosen).is_some_and(|c| *c == listed)
     };
+
+    s.settings.orthomode = file.get("ortho").and_then(Value::as_bool) == Some(true);
 
     let library = s.csd_library.clone();
     let mut skips = Skips::default();
@@ -171,6 +175,11 @@ pub(super) fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
         let accessories = accessories(d);
         let accs = accessory_param(&accessories).map_err(|_| skips.add("device with unusable accessories")).ok().filter(|a| !a.is_empty());
         let mode = text(d, "mode");
+        // ChamSys names an unnamed page "Drawing N".
+        let link_page = (product.id == OFF_PAGE_ID).then(|| text(d, "linkPage")).and_then(|id| {
+            let n = pages.iter().position(|p| *p == id)?;
+            Some(names.get(n).filter(|t| !t.trim().is_empty()).cloned().unwrap_or_else(|| format!("Drawing {}", n + 1)))
+        });
         s.doc_mut()?.modify_entity(handle, |e| {
             let EntityKind::Insert(i) = &mut e.kind else { return };
             if w.is_some() || h.is_some() {
@@ -179,6 +188,9 @@ pub(super) fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
             }
             if !notes.is_empty() {
                 put_attr(i, "NOTES", notes);
+            }
+            if let Some(l) = link_page {
+                put_attr(i, "LINKPAGE", l);
             }
             if !mode.is_empty() {
                 put_attr(i, MODE_TAG, mode);
@@ -353,6 +365,38 @@ mod tests {
         assert_eq!(cadcraft_fonts::plain_mtext(&mt.contents), "A {b}\\c\nd");
         assert!((mt.insert.x, mt.insert.y) == (0.0, Paper::Tabloid.size().1));
         assert!(s.execute("csd.netlist", &json!({})).is_ok());
+    }
+
+    #[test]
+    fn off_page_target_becomes_the_page_name() {
+        let file = json!({
+            "pages": [{ "id": "p1", "name": "Stage" }, { "id": "p2", "name": "" }, { "id": "p3", "name": "Riser" }],
+            "nodes": [
+                { "id": "a", "prodId": "__off-page", "x": 0, "y": 0, "linkPage": "p3" },
+                { "id": "b", "prodId": "__off-page", "x": 300, "y": 0, "linkPage": "p2" },
+                { "id": "c", "prodId": "__off-page", "x": 600, "y": 0, "linkPage": "gone" },
+                { "id": "d", "prodId": "CHAMMQ50", "x": 900, "y": 0, "linkPage": "p3" }
+            ]
+        });
+        let (mut s, r) = import(&file.to_string());
+        assert_eq!(r["devices"], 4, "{r}");
+        let lib = s.csd_library.clone();
+        let mut links: Vec<(String, String)> = {
+            let store = s.doc().unwrap().space(&s.space()).unwrap();
+            super::super::devices(store, &lib).iter().map(|d| (d.product.id.clone(), super::super::attr(d.insert, "LINKPAGE").to_string())).collect()
+        };
+        links.sort();
+        let want = [("CHAMMQ50", ""), ("__off-page", ""), ("__off-page", "Drawing 2"), ("__off-page", "Riser")];
+        assert_eq!(links, want.map(|(a, b)| (a.to_string(), b.to_string())));
+        assert!(s.execute("csd.netlist", &json!({})).is_ok());
+    }
+
+    #[test]
+    fn ortho_follows_the_file() {
+        let (s, _) = import(r#"{"ortho":true}"#);
+        assert!(s.settings.orthomode);
+        let (s, _) = import(r#"{"ortho":"yes"}"#);
+        assert!(!s.settings.orthomode);
     }
 
     #[test]
