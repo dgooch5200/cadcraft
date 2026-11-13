@@ -16,7 +16,7 @@ mod tests;
 
 const UNIVERSE_SIZE: u32 = 512;
 /// The attribute holding a device's chosen mode name; absent means the product's largest.
-const MODE_TAG: &str = "MODE";
+pub(super) const MODE_TAG: &str = "MODE";
 
 /// A product's modes from its `modes` cell (`17ch:17, 34ch:34`): the last colon splits name from
 /// channels, and an entry with no name or no positive whole number is dropped.

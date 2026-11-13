@@ -26,6 +26,9 @@ pub fn route(app: &mut CadApp, id: &str) -> Result<Value, String> {
         "import" | "imp" => app
             .pick_then(Pick::Open, |app, path| app.run("import", json!({ "path": path })))
             .unwrap_or_else(|| no_picker(app, "IMPORT", r#"import {"path": "parts.dxf"}"#)),
+        "csd.import.cpsd" => app
+            .pick_then(Pick::Open, |app, path| app.run("csd.import.cpsd", json!({ "path": path })))
+            .unwrap_or_else(|| no_picker(app, "CSD.IMPORT.CPSD", r#"csd.import.cpsd {"path": "show.cpsd"}"#)),
         "publish" => app
             .pick_then(Pick::Save(format!("{stem}.pdf")), |app, path| app.run("publish", json!({ "path": path })))
             .unwrap_or_else(|| no_picker(app, "PUBLISH", "publish {}")),

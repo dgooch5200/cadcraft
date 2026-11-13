@@ -804,6 +804,10 @@ impl CadApp {
             }
             return;
         }
+        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("cpsd")) {
+            self.open_cpsd(path);
+            return;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.opening.start(path);
@@ -815,6 +819,18 @@ impl CadApp {
                 None => Err(format!("open: {}: the path is not valid Unicode", path.display())),
             };
             self.opened(r);
+        }
+    }
+
+    /// A ChamSys Designer project: imported into a new drawing.
+    fn open_cpsd(&mut self, path: &Path) {
+        let Some(text) = path.to_str() else { return self.open_failed(format!("OPEN: {}: the path is not valid Unicode", path.display())) };
+        match self.run("new", json!({})).and_then(|_| self.run("csd.import.cpsd", json!({ "path": text }))) {
+            Ok(_) => {
+                self.canvas.zoom_pending = true;
+                self.ui.start_tab = false;
+            }
+            Err(e) => self.open_failed(e),
         }
     }
 

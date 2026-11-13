@@ -20,6 +20,7 @@ use super::curves::handle_param;
 
 mod arrange;
 mod connect;
+mod cpsd;
 mod group;
 mod patch;
 mod place;
@@ -42,6 +43,8 @@ fn own_specs() -> Vec<CommandSpec> {
             .interactive(place::PlaceM::start),
         CommandSpec::new("csd.place.grid", "Place Device Grid", place::run_grid)
             .params("{product: id of a library product, at: [x,y] (first card's centre), rows, cols: >= 1 (rows * cols <= 400), dx?, dy?: spacing (default card plus 24)} → {handles}; rows run downwards"),
+        CommandSpec::new("csd.import.cpsd", "Import ChamSys Designer Project", cpsd::run_import)
+            .params("{path: a .cpsd file, page?: 1-based number or id (default the first page)} → {devices, wires, unplaced, skipped: [reasons]}; builds the page's devices, wires (waypoints, label position, name), the unplaced list and the title block into the current drawing"),
         CommandSpec::new("csd.clear", "Clear Drawing", run_clear)
             .params("{} → {devices, wires}; removes every device, wire and wire decoration; the title block, line key and unplaced list stay"),
         CommandSpec::new("csd.display", "Card Display", run_display)
@@ -531,17 +534,22 @@ fn run_place(s: &mut Session, p: &Value) -> Result<Value> {
     let at = point_req("csd.place", p, "at")?;
     let library = s.csd_library.clone();
     let product = lookup(&library, id).ok_or_else(|| bad("csd.place", format!("unknown product \"{id}\"")))?;
+    let h = place_card(s, product, str_param(p, "label").unwrap_or_default(), at)?;
+    schedule::consume(s.doc_mut()?, &product.id);
+    Ok(json!({ "handle": h.hex() }))
+}
+
+/// Inserts `product`'s card at `at`; the strip shows `label`, or the short code until there is one
+/// (a built-in has no code on its card, so its name).
+fn place_card(s: &mut Session, product: &Product, label: &str, at: Vec2) -> Result<Handle> {
     let name = ensure_device_block(s, product)?;
-    // The strip shows the label, or the short code until there is one; a built-in has no code on its card.
     let default = if is_builtin(&product.id) { &product.name } else { &product.code };
-    let label = str_param(p, "label").filter(|l| !l.trim().is_empty()).unwrap_or(default);
+    let label = if label.trim().is_empty() { default } else { label };
     let mut values = Map::new();
     values.insert("PRODUCT".into(), json!(product.id));
     values.insert("NAME".into(), json!(label));
     values.insert("LABEL".into(), json!(truncate_label(label)));
-    let h = super::blocks::insert(s, &name, at, 1.0, 0.0, &values)?;
-    schedule::consume(s.doc_mut()?, &product.id);
-    Ok(json!({ "handle": h.hex() }))
+    super::blocks::insert(s, &name, at, 1.0, 0.0, &values)
 }
 
 /// The name of `product`'s card block, defined in the drawing if it is not yet.
@@ -987,6 +995,14 @@ fn run_connect(s: &mut Session, p: &Value) -> Result<Value> {
         let existing: Vec<WireLink> = wires(store).into_iter().map(|(_, l)| l).collect();
         can_connect(&list, &existing, &link).map_err(|r| EngineError::Other(r.message))?;
     }
+    let h = add_wire(s, &link)?;
+    let ortho = s.settings.orthomode;
+    refresh(&mut s.state_mut()?.doc, ortho);
+    Ok(json!({ "handle": h.hex() }))
+}
+
+/// Adds the wire for `link` without checking the ports or routing it.
+fn add_wire(s: &mut Session, link: &WireLink) -> Result<Handle> {
     let (layer, ltscale) = wire_layer(s.doc_mut()?, link.protocol);
     // The route comes from `refresh`, which also deals the neighbours' slots on both edges. Wires
     // go under the cards, as on the web app's sheet.
@@ -1003,9 +1019,7 @@ fn run_connect(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(store) = s.doc_mut()?.space_mut(&space) {
         store.send_to_back(h);
     }
-    let ortho = s.settings.orthomode;
-    refresh(&mut s.state_mut()?.doc, ortho);
-    Ok(json!({ "handle": h.hex() }))
+    Ok(h)
 }
 
 /// The entity linetype scale that makes the first dash of `DASH` `len` long, whatever units the

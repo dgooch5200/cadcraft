@@ -200,6 +200,13 @@ pub(super) fn body(app: &mut CadApp, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.add_space(8.0);
+        if ui.add_sized(vec2(ui.available_width() - 8.0, 20.0), egui::Button::new(crate::tl!("Import .cpsd…"))).clicked() {
+            let _ = app.run("csd.import.cpsd", serde_json::Value::Null);
+        }
+    });
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
         ui.add(egui::TextEdit::singleline(&mut f.query).hint_text(crate::tl!("Search products")).desired_width(ui.available_width() - 8.0))
             .accessible_name(crate::tl!("Search products"));
     });
