@@ -126,7 +126,7 @@ pub(super) fn refresh_labels(doc: &mut Arc<Drawing>) {
     }
 }
 
-/// A warning naming the devices that moved between `before` and `doc` and now sit on no sheet,
+/// A warning naming the devices that moved or were added between `before` and `doc` and sit on no sheet,
 /// when their space has two or more pages (a device's page is where it lies).
 pub(super) fn off_sheet_warning(before: &Drawing, doc: &Drawing) -> Option<String> {
     const NAMED: usize = 3;
@@ -139,8 +139,11 @@ pub(super) fn off_sheet_warning(before: &Drawing, doc: &Drawing) -> Option<Strin
         }
         for e in store.iter() {
             let EntityKind::Insert(i) = &e.kind else { continue };
-            let Some(EntityKind::Insert(was)) = old.get(e.handle).map(|o| &o.kind) else { continue };
-            if product_attr(i).is_some() && !was.insert.xy().near(i.insert.xy(), 1e-9) && page_of(doc, &ps, i.insert.xy()).is_none() {
+            let moved = match old.get(e.handle).map(|o| &o.kind) {
+                Some(EntityKind::Insert(was)) => !was.insert.xy().near(i.insert.xy(), 1e-9),
+                _ => true,
+            };
+            if product_attr(i).is_some() && moved && page_of(doc, &ps, i.insert.xy()).is_none() {
                 off.push(attr(i, "NAME").to_string());
             }
         }
@@ -314,6 +317,20 @@ mod tests {
         mv(&mut s, 100.0);
         assert!(!warned(&s), "still on a sheet");
         mv(&mut s, -2000.0);
+        assert!(warned(&s));
+    }
+
+    #[test]
+    fn placing_a_device_off_every_sheet_warns_only_with_two_pages() {
+        let mut s = Session::new();
+        s.execute("csd.titleblock", &json!({})).unwrap();
+        let warned = |s: &Session| s.log.iter().any(|m| m.contains("off every sheet"));
+        place(&mut s, PRODUCT, [-2000.0, 500.0]);
+        assert!(!warned(&s), "a single page has no other sheet to be on");
+        s.execute("csd.page.add", &json!({})).unwrap();
+        place(&mut s, PRODUCT, [100.0, 500.0]);
+        assert!(!warned(&s), "on a sheet");
+        place(&mut s, PRODUCT, [-2000.0, 500.0]);
         assert!(warned(&s));
     }
 
