@@ -122,7 +122,7 @@ fn own_specs() -> Vec<CommandSpec> {
             .params("{} → {rows: [{qty, product, code, category, name, labels, notes, brand}]}: placed and unplaced plus device accessories, by category (control gear first) then model id; devices supplied by others and their accessories are left out")
             .noundo(),
         CommandSpec::new("csd.bom.export", "Export Bill of Materials", schedule::run_bom_export)
-            .params("{path, format: csv|pdf|html, footer?: [lines printed under the PDF table] (default the title block's project, venue, drawn by, date and rev)} → {path, rows}")
+            .params("{path, format: csv|pdf|html, perPage?: bool (html only: one list per page under its page name, unplaced products left out; default false), footer?: [lines printed under the PDF table] (default the title block's project, venue, drawn by, date and rev)} → {path, rows}")
             .noundo(),
         CommandSpec::new("csd.device.mode", "Set Device DMX Mode", patch::run_device_mode)
             .params("{handles? (default the selection), mode: a mode name the product offers (empty or null = the product's largest)} → {changed}"),

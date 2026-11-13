@@ -391,6 +391,33 @@ mod tests {
     }
 
     #[test]
+    fn html_bom_splits_by_page_only_when_asked_and_with_two_pages() {
+        let mut s = Session::new();
+        let export = |s: &mut Session, extra: Value| {
+            let path = std::env::temp_dir().join(format!("csd-bom-{}-{}.html", std::process::id(), extra));
+            let mut p = json!({ "path": path.to_str().unwrap(), "format": "html" });
+            p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            s.execute("csd.bom.export", &p).unwrap();
+            let t = std::fs::read_to_string(&path).unwrap();
+            let _ = std::fs::remove_file(&path);
+            t
+        };
+        place(&mut s, PRODUCT, [100.0, 500.0]);
+        s.execute("csd.titleblock", &json!({})).unwrap();
+        let whole = export(&mut s, json!({}));
+        assert_eq!(export(&mut s, json!({ "perPage": true })), whole, "one page: unchanged");
+        s.execute("csd.page.add", &json!({ "name": "Riser" })).unwrap();
+        s.execute("csd.page.add", &json!({ "name": "Empty" })).unwrap();
+        place(&mut s, PRODUCT, [2000.0, 500.0]);
+        place(&mut s, PRODUCT, [2100.0, 500.0]);
+        assert!(!export(&mut s, json!({})).contains("Riser"));
+        let by = export(&mut s, json!({ "perPage": true }));
+        let at = |t: &str| by.find(t).unwrap_or_else(|| panic!("{t} missing"));
+        assert!(at("Drawing 1") < at("Riser") && at("Riser") < at("Empty"));
+        assert!(by.contains("<td>2</td>") && by.contains("<td>1</td>"), "{by}");
+    }
+
+    #[test]
     fn renaming_a_page_moves_the_off_page_links_to_it() {
         let mut s = Session::new();
         s.execute("csd.page.add", &json!({})).unwrap();

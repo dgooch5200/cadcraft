@@ -1,7 +1,7 @@
 //! The designer's three lists: placed devices, products not yet drawn (kept in the drawing's
 //! header, so they save with it) and the bill of materials over both.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use cadcraft_csd::{Product, Protocol, WireLink, is_accessory, is_builtin, port_overload};
 use cadcraft_doc::{Common, Drawing, EntityKind, HAlign, HVal, Handle, Space, Text, VAlign};
@@ -267,6 +267,26 @@ struct Line {
 /// category, and by model id within one. Accessories are totalled under their own product; a
 /// device supplied by others is left out with its accessories.
 fn bom(s: &Session) -> Result<Vec<Line>> {
+    bom_on(s, None)
+}
+
+/// [`bom`] limited to the devices on sheet `page` (0-based); unplaced products are on no sheet and left out.
+fn bom_on(s: &Session, page: Option<usize>) -> Result<Vec<Line>> {
+    let on_page: Option<HashSet<Handle>> = match page {
+        Some(n) => {
+            let d = s.doc()?;
+            let store = d.space(&s.space()).ok_or_else(|| EngineError::Other("no such space".into()))?;
+            let ps = super::page::pages_in(store);
+            Some(
+                store
+                    .iter()
+                    .filter(|e| matches!(&e.kind, EntityKind::Insert(i) if super::page::page_of(d, &ps, i.insert.xy()) == Some(n)))
+                    .map(|e| e.handle)
+                    .collect(),
+            )
+        }
+        None => None,
+    };
     let mut by_id: BTreeMap<String, Line> = BTreeMap::new();
     let mut add = |prod: Prod, qty: u64, label: &str| {
         let line = by_id.entry(prod.id.clone()).or_insert_with(|| Line { prod, qty: 0, labels: Vec::new() });
@@ -277,7 +297,7 @@ fn bom(s: &Session) -> Result<Vec<Line>> {
         }
     };
     for p in placed(s)? {
-        if p.by_others {
+        if p.by_others || on_page.as_ref().is_some_and(|h| !h.contains(&p.handle)) {
             continue;
         }
         add(p.prod, 1, &p.label);
@@ -285,7 +305,7 @@ fn bom(s: &Session) -> Result<Vec<Line>> {
             add(a, q, "");
         }
     }
-    for (id, qty) in read(s.doc()?).into_iter().filter(|(id, _)| !is_builtin(id)) {
+    for (id, qty) in read(s.doc()?).into_iter().filter(|(id, _)| page.is_none() && !is_builtin(id)) {
         add(Prod::of(&resolve(&s.csd_library, &id)), qty, "");
     }
     let mut cats: BTreeMap<String, Vec<Line>> = BTreeMap::new();
@@ -394,21 +414,27 @@ fn pdf(lines: &[Line], footer: &[String]) -> Result<Vec<u8>> {
 }
 
 /// The BOM page, grouped by category in the BOM's own order.
-fn html(lines: &[Line], footer: &[String]) -> String {
+/// With a section title (per page), each list follows its heading; an empty page keeps its heading.
+fn html(sections: &[(Option<String>, Vec<Line>)], footer: &[String]) -> String {
     use super::html::{group_row, page, row};
     let mut body = String::new();
-    let mut cat: Option<&str> = None;
-    for l in lines {
-        let p = &l.prod;
-        if cat != Some(p.cat.as_str()) {
-            cat = Some(p.cat.as_str());
-            body.push_str(&group_row("group", 6, &p.cat, ""));
+    for (title, lines) in sections {
+        let mut cat: Option<&str> = None;
+        if let Some(t) = title {
+            body.push_str(&group_row("group", 6, t, ""));
         }
-        let name = if p.notes.is_empty() { p.name.clone() } else { format!("{} ({})", p.name, p.notes) };
-        body.push_str(&row("", &[l.qty.to_string(), p.id.clone(), l.labels.join(", "), p.brand.clone(), name, p.code.clone()]));
+        for l in lines {
+            let p = &l.prod;
+            if cat != Some(p.cat.as_str()) {
+                cat = Some(p.cat.as_str());
+                body.push_str(&group_row("group", 6, &p.cat, ""));
+            }
+            let name = if p.notes.is_empty() { p.name.clone() } else { format!("{} ({})", p.name, p.notes) };
+            body.push_str(&row("", &[l.qty.to_string(), p.id.clone(), l.labels.join(", "), p.brand.clone(), name, p.code.clone()]));
+        }
     }
-    let total: u64 = lines.iter().map(|l| l.qty).sum();
-    let info = [("Items", total.to_string()), ("Products", lines.len().to_string())];
+    let all = sections.iter().flat_map(|(_, l)| l);
+    let info = [("Items", all.clone().map(|l| l.qty).sum::<u64>().to_string()), ("Products", all.count().to_string())];
     page("Bill of materials", &info, &["Qty", "Model ID", "Labels", "Brand", "Product", "Code"], &body, footer)
 }
 
@@ -420,7 +446,16 @@ pub(super) fn run_bom_export(s: &mut Session, p: &Value) -> Result<Value> {
     let bytes = match str_param(p, "format") {
         Some("csv") => csv(&lines).into_bytes(),
         Some("pdf") => pdf(&lines, &footer)?,
-        Some("html") => html(&lines, &footer).into_bytes(),
+        Some("html") => {
+            let per_page = p.get("perPage").and_then(Value::as_bool) == Some(true);
+            let ps = super::page::pages(s);
+            let sections = if per_page && ps.len() > 1 {
+                ps.iter().enumerate().map(|(n, g)| Ok((Some(g.name(n)), bom_on(s, Some(n))?))).collect::<Result<Vec<_>>>()?
+            } else {
+                vec![(None, bom(s)?)]
+            };
+            html(&sections, &footer).into_bytes()
+        }
         _ => return Err(bad(cmd, "`format` must be csv, pdf or html")),
     };
     super::write_library(path, &bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
