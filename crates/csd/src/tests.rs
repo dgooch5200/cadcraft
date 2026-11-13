@@ -312,6 +312,15 @@ fn with_name(name: &str, code: &str) -> Product {
 }
 
 #[test]
+fn canvas_code_of_a_huge_name_is_fast() {
+    let name = "Abcdefghij ".repeat(100_000);
+    let t = std::time::Instant::now();
+    let code = canvas_code(&with_name(&name, &"X".repeat(40)));
+    assert!(code.chars().count() <= CANVAS_CODE_MAX);
+    assert!(t.elapsed().as_secs() < 2);
+}
+
+#[test]
 fn canvas_code_matches_the_web_apps_contraction() {
     for p in sample_products() {
         assert!(canvas_code(&p).chars().count() <= CANVAS_CODE_MAX, "{}", p.code);

@@ -369,31 +369,18 @@ fn universes_text(plan: &Plan) -> String {
 }
 
 /// The patch page: a header row per universe with its channels used. A fixture spanning several
-/// universes is listed under its first, and the others show as continued.
+/// universes is listed under its first, with one note naming the last universe it reaches.
 fn html(s: &Session, p: &Value, plan: &Plan) -> String {
     use super::html::{footer_lines, group_row, page, row};
     use std::collections::BTreeMap;
     let size = u64::from(UNIVERSE_SIZE);
     let span = |e: &Entry, a: u32| (u64::from(a).saturating_sub(1) + u64::from(e.channels)).div_ceil(size).max(1);
     let mut by_uni: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
-    let mut continued: BTreeMap<u32, &str> = BTreeMap::new();
-    for (i, (e, u, a)) in plan.rows.iter().enumerate() {
+    for (i, (_, u, _)) in plan.rows.iter().enumerate() {
         by_uni.entry(*u).or_default().push(i);
-        for k in 1..span(e, *a).min(1024) {
-            continued.entry(u.saturating_add(k as u32)).or_insert(&e.label);
-        }
     }
-    let mut unis: Vec<u32> = by_uni.keys().chain(continued.keys()).copied().collect();
-    unis.sort_unstable();
-    unis.dedup();
     let mut body = String::new();
-    for u in unis {
-        let list = by_uni.get(&u).map(Vec::as_slice).unwrap_or_default();
-        if list.is_empty() {
-            let from = continued.get(&u).copied().unwrap_or_default();
-            body.push_str(&group_row("group cont", 6, &format!("Universe {u}"), &format!("continued from {from}")));
-            continue;
-        }
+    for (&u, list) in &by_uni {
         let used: u64 = list.iter().filter_map(|&i| plan.rows.get(i)).map(|(e, _, _)| u64::from(e.channels).min(size)).sum();
         body.push_str(&group_row("group", 6, &format!("Universe {u}"), &format!("{used} of {size} channels used")));
         for &i in list {
@@ -405,7 +392,11 @@ fn html(s: &Session, p: &Value, plan: &Plan) -> String {
                 item.push_str(&format!(" (accessory of {c})"));
             }
             let mode = if e.mode.is_some() { e.mode_text() } else { format!("{} (assumed)", e.mode_text()) };
-            let addr = if n > 1 { format!("{a}-{last} (spans {n} universes)") } else { format!("{a}-{last}") };
+            let addr = if n > 1 {
+                format!("{a}-{last} (spans {n} universes, continued through universe {})", u64::from(u) + n - 1)
+            } else {
+                format!("{a}-{last}")
+            };
             body.push_str(&row("", &[format!("{u}-{a}"), (i + 1).to_string(), format!("{} / {item}", e.label), mode, e.channels.to_string(), addr]));
         }
     }

@@ -17,7 +17,7 @@ mod tests;
 
 /// Header variable holding the unplaced list as JSON `[[product id, qty], ...]`.
 const VAR: &str = "CSDUNPLACED";
-const MAX_ROWS: usize = 1000;
+pub(super) const MAX_ROWS: usize = 1000;
 pub(super) const MAX_QTY: u64 = 100_000;
 
 /// What the lists show of a product.

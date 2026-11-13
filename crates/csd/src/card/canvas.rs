@@ -112,7 +112,8 @@ pub fn canvas_code(product: &Product) -> String {
     if product.code.chars().count() <= CANVAS_CODE_MAX {
         return product.code.clone();
     }
-    let name: String = product.name.chars().map(deaccent).collect::<String>().trim().to_string();
+    // Library names are uncapped; the contraction loop below is quadratic in their length.
+    let name: String = product.name.chars().take(200).map(deaccent).collect::<String>().trim().to_string();
     let lower = name.to_lowercase();
     let (prefix, rest) = FAMILIES
         .iter()
