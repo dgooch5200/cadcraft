@@ -89,12 +89,13 @@ fn import_one(s: &mut Session, v: &Value, mut skip: impl FnMut(&'static str)) ->
     let stroke = text(v, "strokeStyle");
     let weight = number(v, "weight").filter(|w| w.is_finite() && *w >= 0.0);
     let line_style = match stroke.as_str() {
+        _ if kind == "text" => None,
         "dashed" => Some(("DASHED", DASH_PER_WEIGHT)),
         "dotted" => Some(("DOT", DOT_PER_WEIGHT)),
         _ => None,
     };
     let ltscale = match line_style {
-        Some((name, per)) => linetype_scale(s.doc_mut()?, name, per * weight.unwrap_or(DEFAULT_WEIGHT)),
+        Some((name, per)) => linetype_scale(s.doc_mut()?, name, per * weight.filter(|w| *w > 0.0).unwrap_or(DEFAULT_WEIGHT)),
         None => 1.0,
     };
     let lineweight = weight.map(|w| {

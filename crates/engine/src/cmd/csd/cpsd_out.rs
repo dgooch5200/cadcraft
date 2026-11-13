@@ -364,4 +364,24 @@ mod tests {
         assert!((by("text")["x2"].as_f64().unwrap() - 130.0).abs() < 1e-6 && (by("text")["x1"].as_f64().unwrap() - 30.0).abs() < 1e-6);
         assert_eq!(by("line")["strokeStyle"], "dotted");
     }
+
+    #[test]
+    fn a_zero_weight_dash_keeps_the_default_dash_and_dashed_text_loads_no_linetype() {
+        let import = |shapes: Value| {
+            let a = std::env::temp_dir().join(format!("cadcraft-sty0-{}-{}.cpsd", std::process::id(), shapes.to_string().len()));
+            std::fs::write(&a, json!({ "shapes": shapes }).to_string()).unwrap();
+            let mut s = Session::new();
+            s.execute("csd.import.cpsd", &json!({ "path": a.to_str().unwrap() })).unwrap();
+            let _ = std::fs::remove_file(&a);
+            s
+        };
+        let ltscale = |w: Value| {
+            let s = import(json!([{ "type": "line", "x1": 0, "y1": 0, "x2": 50, "y2": 0, "strokeStyle": "dashed", "weight": w }]));
+            let store = s.doc().unwrap().space(&s.space()).unwrap();
+            store.iter().find(|e| e.common.layer == "CSD_SHAPES").unwrap().common.ltscale
+        };
+        assert_eq!(ltscale(json!(0)), ltscale(json!(null)));
+        let s = import(json!([{ "type": "text", "x1": 0, "y1": 0, "x2": 50, "y2": 10, "text": "Hi", "strokeStyle": "dashed" }]));
+        assert!(s.doc().unwrap().linetype("DASHED").is_none());
+    }
 }
