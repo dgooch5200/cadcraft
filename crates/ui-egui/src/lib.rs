@@ -44,6 +44,7 @@ mod panel_state;
 pub mod spacemouse;
 pub mod switch;
 // The Edit Text window, opened from the shortcut menu's Edit Text entry.
+pub mod lproreview;
 pub mod placegrid;
 pub mod textdlg;
 pub mod wirename;
