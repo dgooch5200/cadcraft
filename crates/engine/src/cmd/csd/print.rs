@@ -5,7 +5,7 @@ use crate::cmd::str_param;
 
 const CMD: &str = "csd.print";
 const MM_PER_IN: f64 = 25.4;
-/// Sheet units per inch (tabloid is 1632 x 1056 units for 17 x 11 in).
+/// Title block pixels per inch (tabloid is 1632 x 1056 for 17 x 11 in), whatever the drawing's units.
 const UNITS_PER_IN: f64 = 96.0;
 
 pub(super) fn run_print(s: &mut Session, p: &Value) -> Result<Value> {

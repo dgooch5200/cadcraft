@@ -13,7 +13,7 @@ use crate::{Result, Session};
 /// app's does. Built-ins and devices already so are left alone; returns how many changed.
 pub(super) fn set(s: &mut Session, hs: &[Handle], on: bool) -> Result<usize> {
     let library = s.csd_library.clone();
-    let mut changed = 0;
+    let (mut changed, k) = (0, super::units::px(s.doc()?));
     for h in device_handles(s, hs)? {
         let Some(EntityKind::Insert(i)) = s.doc()?.entity(h).map(|e| &e.kind) else { continue };
         let product = resolve(&library, product_attr(i).unwrap_or_default()).into_owned();
@@ -27,7 +27,7 @@ pub(super) fn set(s: &mut Session, hs: &[Handle], on: bool) -> Result<usize> {
             let EntityKind::Insert(i) = &mut e.kind else { return };
             i.block = name;
             put_attr(i, "TWOLINE", if on { "1".into() } else { String::new() });
-            i.scale.y = i.scale.y.signum() * (old.y * i.scale.y.abs() + new.y - old.y) / new.y;
+            i.scale.y = i.scale.y.signum() * (old.y * i.scale.y.abs() + (new.y - old.y) * k) / new.y;
             if let Some(blk) = &blk {
                 fit_attribs(blk, i);
             }
