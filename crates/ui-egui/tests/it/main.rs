@@ -7,6 +7,7 @@ mod context_menus;
 mod control_cmdline;
 mod control_cmdline_key;
 mod control_methods;
+mod csd_cable_ui;
 mod dialog_dispatch;
 mod docking_workflows;
 mod drafting_polar_increment;

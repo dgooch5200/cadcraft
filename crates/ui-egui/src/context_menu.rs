@@ -62,6 +62,8 @@ pub const CANCEL: &str = "key:cancel";
 pub const TYPE: &str = "type:";
 /// Gives the running command the keyword that follows.
 pub const KEYWORD: &str = "keyword:";
+/// Opens the cable rename window ([`crate::wirename`]) for the handle that follows.
+pub const WIRE_NAME: &str = "wirename:";
 /// An object snap menu item ([`choose_snap`]).
 pub const SNAP: &str = "snap:";
 
@@ -137,6 +139,20 @@ fn is_device(e: &std::sync::Arc<cadcraft_doc::Entity>) -> bool {
     matches!(&e.kind, EntityKind::Insert(i) if i.block.starts_with("CSD_"))
 }
 
+/// The cable a lighting wire object carries (`None` for anything else).
+pub(crate) fn wire_link(e: &cadcraft_doc::Entity) -> Option<cadcraft_csd::WireLink> {
+    cadcraft_csd::WireLink::from_xdata(&e.common.xdata).filter(|_| matches!(e.kind, EntityKind::LwPolyline(_)))
+}
+
+/// How close (drawing units) a right-click must be to a waypoint to remove it rather than add one.
+const WAYPOINT_PICK: f64 = 9.0;
+
+/// The one selected cable and its link.
+fn selected_wire(app: &CadApp) -> Option<(Handle, cadcraft_csd::WireLink)> {
+    let [h] = app.session.selection()[..] else { return None };
+    Some((h, wire_link(app.session.doc().ok()?.entity(h)?)?))
+}
+
 /// The selection, when it is non-empty and every object is a lighting device card.
 fn selected_devices(app: &CadApp) -> Vec<Handle> {
     let Ok(d) = app.session.doc() else { return Vec::new() };
@@ -144,10 +160,13 @@ fn selected_devices(app: &CadApp) -> Vec<Handle> {
     if sel.iter().all(|h| d.entity(*h).is_some_and(is_device)) { sel } else { Vec::new() }
 }
 
-/// Right-clicking a device card that is not selected selects it, so the menu acts on it.
+/// Right-clicking a device card or cable that is not selected selects it, so the menu acts on it.
 pub fn select_device_at(app: &mut CadApp, at: Option<cadcraft_geom::Vec2>) {
     let Some(at) = at else { return };
-    let hit = app.run("csd.device.at", json!({ "at": [at.x, at.y] })).ok().and_then(|r| r["handle"].as_str().and_then(Handle::parse_hex));
+    let find = |app: &mut CadApp, cmd: &str, key: &str| {
+        app.run(cmd, json!({ "at": [at.x, at.y] })).ok().and_then(|r| r[key].as_str().and_then(Handle::parse_hex))
+    };
+    let hit = find(app, "csd.device.at", "handle").or_else(|| find(app, "csd.wire.hit", "wire"));
     if let Some(h) = hit
         && !app.session.selection().contains(&h)
     {
@@ -159,6 +178,9 @@ pub fn select_device_at(app: &mut CadApp, at: Option<cadcraft_geom::Vec2>) {
 /// for several, and with none selected (and lighting in use) the canvas menu. A selection ends
 /// with Deselect All.
 fn csd_entries(app: &CadApp) -> Vec<Vec<Entry>> {
+    if let Some((wire, link)) = selected_wire(app) {
+        return wire_entries(app, wire.hex(), &link);
+    }
     let devs = selected_devices(app);
     let n = devs.len();
     let mut groups = Vec::new();
@@ -170,6 +192,10 @@ fn csd_entries(app: &CadApp) -> Vec<Vec<Entry>> {
         }
         let place = armed.zip(app.canvas.menu_world).and_then(|(p, w)| run("Place one here", "csd.place", json!({ "product": p, "at": [w.x, w.y] })));
         push(&mut groups, place.into_iter().collect());
+        let bent = app.session.doc().map_or(0, |d| d.model.iter().filter(|e| wire_link(e).is_some_and(|l| !l.points.is_empty())).count());
+        if bent > 0 {
+            push(&mut groups, run(&crate::tf!("Straighten {n} bent cables", n = bent), "csd.wire.straighten", json!({})).into_iter().collect());
+        }
         let mut canvas = items(app, &["selectall", "pasteclip"]);
         canvas.extend(item(app, "zoom.extents", Some("Zoom to fit")));
         push(&mut groups, canvas);
@@ -201,6 +227,36 @@ fn csd_entries(app: &CadApp) -> Vec<Vec<Entry>> {
         push(&mut groups, bulk.into_iter().flatten().collect());
         push(&mut groups, delete(&crate::tf!("Delete {n} items", n = n)).into_iter().collect());
     }
+    push(&mut groups, item(app, "ai_deselect", Some("Deselect all")).into_iter().collect());
+    groups
+}
+
+/// The cable menu: waypoints, label position, name, delete.
+fn wire_entries(app: &CadApp, hex: String, link: &cadcraft_csd::WireLink) -> Vec<Vec<Entry>> {
+    let at = app.canvas.menu_world;
+    let at_json = at.map(|a| json!([a.x, a.y]));
+    let near = at.and_then(|a| link.points.iter().position(|p| p.dist(a) <= WAYPOINT_PICK));
+    let mut groups = Vec::new();
+    let mut points = Vec::new();
+    match (near, &at_json) {
+        (Some(index), _) => points.extend(run("Remove point", "csd.wire.point.remove", json!({ "wire": hex, "index": index }))),
+        (None, Some(a)) => points.extend(run("Add point here", "csd.wire.point.add", json!({ "wire": hex, "at": a }))),
+        _ => {}
+    }
+    if !link.points.is_empty() {
+        let label = crate::tf!("Straighten cable ({n} points)", n = link.points.len());
+        points.extend(run(&label, "csd.wire.straighten", json!({ "wires": [hex] })));
+    }
+    push(&mut groups, points);
+    let mut label = Vec::new();
+    if let Some(a) = &at_json {
+        label.extend(run("Move label here", "csd.wire.label", json!({ "wire": hex, "at": a })));
+        label.extend(run("Align label to middle of segment", "csd.wire.label", json!({ "wire": hex, "at": a, "mode": "segment" })));
+    }
+    label.extend(run("Centre label", "csd.wire.label", json!({ "wire": hex })));
+    label.push(Entry::Item { label: "Rename cable...".into(), id: format!("{WIRE_NAME}{hex}"), shortcut: None, enabled: true });
+    push(&mut groups, label);
+    push(&mut groups, run("Delete cable", "erase", json!({ "handles": [hex] })).into_iter().collect());
     push(&mut groups, item(app, "ai_deselect", Some("Deselect all")).into_iter().collect());
     groups
 }
@@ -319,7 +375,7 @@ pub fn choose(app: &mut CadApp, id: &str) {
         choose_snap(app, s);
     } else if id.starts_with("run:") {
         crate::shortcut_menus::run_item(app, id);
-    } else if id.starts_with("textedit:") {
+    } else if id.starts_with("textedit:") || id.starts_with(WIRE_NAME) {
         // The Edit Text window of the single selected text object; the id carries the handle.
         app.ui.dialog = Some(id.to_string());
     } else {

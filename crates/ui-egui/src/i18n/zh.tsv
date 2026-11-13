@@ -1552,3 +1552,13 @@ menu	View	视图
 	Drawing title	图纸标题
 	Meta	附注
 	Typing here adds a title block to the drawing.	在此输入将向图纸添加标题栏。
+	Remove point	删除点
+	Add point here	在此添加点
+	Straighten cable ({n} points)	拉直线缆（{n} 个点）
+	Straighten {n} bent cables	拉直 {n} 条弯曲线缆
+	Move label here	将标签移到此处
+	Align label to middle of segment	将标签对齐到线段中点
+	Centre label	标签居中
+	Rename cable...	重命名线缆...
+	Rename cable	重命名线缆
+	Delete cable	删除线缆

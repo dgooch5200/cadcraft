@@ -44,6 +44,7 @@ pub mod spacemouse;
 pub mod switch;
 // The Edit Text window, opened from the shortcut menu's Edit Text entry.
 pub mod textdlg;
+pub mod wirename;
 // The External References palette.
 pub mod xrefs;
 
