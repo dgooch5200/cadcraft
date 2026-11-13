@@ -9,7 +9,7 @@ use std::sync::Arc;
 use cadcraft_csd::{
     BOLD_STYLE, CARD_H, CARD_W, Deco, Product, Protocol, Side, Slot, WIRE_W, WireLink, accessory_products, block_name, bold_style, can_connect,
     deco_block, deco_block_name, deco_from_xdata, deco_points, deco_xdata, device_block, edge_frame, fan_order, is_builtin, library_json, lookup,
-    parse_library, parse_products, port_point, product_record, route_via, truncate_label, used, world_side,
+    max_supply_watts, parse_library, parse_products, poe_verdict, port_point, product_record, route_via, truncate_label, used, world_side,
 };
 use cadcraft_doc::color::{Color, Rgb};
 use cadcraft_doc::{Common, Drawing, Entity, EntityKind, EntityStore, Handle, Insert, Layer, LwPolyline, Space};
@@ -85,7 +85,7 @@ fn own_specs() -> Vec<CommandSpec> {
         CommandSpec::new("csd.distribute", "Distribute Devices", arrange::run_distribute)
             .params("{axis: x|y, handles? (default the selection)} → {moved}; equal gaps between cards, the outer two stay put (needs 3+)"),
         CommandSpec::new("csd.schedule", "Placed Devices", schedule::run_schedule)
-            .params("{} → {devices: [{handle, product, name, category, code, label, notes, mountedIn: label of the device it is mounted in, supplyByOthers, accessories: [{product, code, name, qty}], portsInUse: text like \"PoE 1/3, DMX 2/2\", connections: wire count, poeLoad: watts the device's PoE outlets feed, controlGear}]}; control gear first")
+            .params("{} → {devices: [{handle, product, name, category, code, label, notes, mountedIn: label of the device it is mounted in, supplyByOthers, accessories: [{product, code, name, qty}], portsInUse: text like \"PoE 1/3, DMX 2/2\", connections: wire count, poeLoad: watts the device's PoE outlets feed, poeWarning: text when a PoE port carries more than its supply's per-port max (else null), controlGear}]}; control gear first")
             .noundo(),
         CommandSpec::new("csd.unplaced.list", "Unplaced Items", schedule::run_unplaced_list)
             .params("{} → {items: [{index, product, qty, code, category, name}]}; saved with the drawing")
@@ -117,7 +117,7 @@ fn own_specs() -> Vec<CommandSpec> {
             .noundo()
             .enabled(always),
         CommandSpec::new("csd.connect", "Connect Devices", run_connect)
-            .params("{from: handle, fromSide: top|bot|lft|rgt, to: handle, toSide, protocol: network|netdata|10scene|dmx|0-10v|contact|power|midi|epix3p|epix4p} → {handle}; interactive: click a port on each of two devices")
+            .params("{from: handle, fromSide: top|bot|lft|rgt, to: handle, toSide, protocol: network|netdata|10scene|dmx|0-10v|contact|power|midi|epix3p|epix4p} → {handle, warning?: PoE over the supply's port budget}; interactive: click a port on each of two devices")
             .interactive(connect::ConnectM::start),
         CommandSpec::new("csd.netlist", "Device Netlist", run_netlist)
             .params("{} → {devices: [{handle, product, label, at}], wires: [{handle, from, fromSide, to, toSide, protocol}]}")
@@ -995,18 +995,25 @@ fn run_connect(s: &mut Session, p: &Value) -> Result<Value> {
         str_param(p, "protocol").and_then(Protocol::from_id).ok_or_else(|| bad("csd.connect", "`protocol` is not a known protocol id"))?,
     );
     let products = s.csd_library.clone();
-    {
+    let warning = {
         let d = s.doc()?;
         let store = d.space(&s.space()).ok_or_else(|| EngineError::Other("no such space".into()))?;
         let devs = devices(store, &products);
         let list: Vec<(Handle, &Product)> = devs.iter().map(|x| (x.handle, &*x.product)).collect();
         let existing: Vec<WireLink> = wires(store).into_iter().map(|(_, l)| l).collect();
         can_connect(&list, &existing, &link).map_err(|r| EngineError::Other(r.message))?;
-    }
+        (link.protocol == Protocol::Network)
+            .then(|| poe_verdict(&list, &existing, link.from, link.to, max_supply_watts(&products)))
+            .flatten()
+            .map(|v| v.message)
+    };
     let h = add_wire(s, &link)?;
     let ortho = s.settings.orthomode;
     refresh(&mut s.state_mut()?.doc, ortho);
-    Ok(json!({ "handle": h.hex() }))
+    Ok(match warning {
+        Some(w) => json!({ "handle": h.hex(), "warning": w }),
+        None => json!({ "handle": h.hex() }),
+    })
 }
 
 /// Adds the wire for `link` without checking the ports or routing it.

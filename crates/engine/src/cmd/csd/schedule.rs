@@ -3,12 +3,12 @@
 
 use std::collections::BTreeMap;
 
-use cadcraft_csd::{Product, Protocol, WireLink, is_accessory, is_builtin};
+use cadcraft_csd::{Product, Protocol, WireLink, is_accessory, is_builtin, port_overload};
 use cadcraft_doc::{Common, Drawing, EntityKind, HAlign, HVal, Handle, Space, Text, VAlign};
 use cadcraft_geom::Vec3;
 use serde_json::{Value, json};
 
-use super::{accessories_of, attr, bad, find_product, mount_of, port_usage, product_attr, resolve, str_param, supplied_by_others, wires};
+use super::{accessories_of, attr, bad, devices, find_product, mount_of, port_usage, product_attr, resolve, str_param, supplied_by_others, wires};
 use crate::cmd::file::io;
 use crate::{EngineError, Result, Session};
 
@@ -77,6 +77,7 @@ struct Placed {
     ports: Vec<(Protocol, usize, u64)>,
     conns: usize,
     poe: f64,
+    poe_warning: Option<String>,
 }
 
 /// The devices on the drawing, control gear first.
@@ -112,6 +113,7 @@ fn placed(s: &Session) -> Result<Vec<Placed>> {
                 ports,
                 conns,
                 poe: 0.0,
+                poe_warning: None,
             })
         })
         .collect();
@@ -119,6 +121,11 @@ fn placed(s: &Session) -> Result<Vec<Placed>> {
     let draw: BTreeMap<Handle, f64> = out.iter().map(|p| (p.handle, p.prod.poe_watts)).collect();
     for p in &mut out {
         p.poe = only.iter().filter(|l| l.from == p.handle && l.protocol == Protocol::Network).filter_map(|l| draw.get(&l.to)).sum();
+    }
+    let devs = devices(store, &s.csd_library);
+    let list: Vec<(Handle, &Product)> = devs.iter().map(|x| (x.handle, &*x.product)).collect();
+    for p in &mut out {
+        p.poe_warning = port_overload(&list, &only, p.handle);
     }
     out.sort_by_key(|p| !p.prod.control);
     Ok(out)
@@ -138,7 +145,7 @@ pub(super) fn run_schedule(s: &mut Session, _p: &Value) -> Result<Value> {
                 "handle": d.handle.hex(), "product": d.prod.id, "name": d.prod.name, "category": d.prod.cat, "code": d.prod.code, "label": d.label, "notes": d.notes,
                 "mountedIn": d.mount, "supplyByOthers": d.by_others,
                 "accessories": d.accessories.iter().map(|(a, q)| json!({ "product": a.id, "code": a.code, "name": a.name, "qty": q })).collect::<Vec<_>>(),
-                "portsInUse": ports_text(&d.ports), "connections": d.conns, "poeLoad": d.poe, "controlGear": d.prod.control,
+                "portsInUse": ports_text(&d.ports), "connections": d.conns, "poeLoad": d.poe, "poeWarning": d.poe_warning, "controlGear": d.prod.control,
             })
         })
         .collect();

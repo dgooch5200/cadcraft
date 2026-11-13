@@ -490,3 +490,37 @@ fn rule_epix_line_max_per_output() {
     // 9 full strips (900) + one half-length S (50) fits; the S adds 50, not 100.
     assert_eq!(rule(&devs, &chain[..9], 9, 12, e), None);
 }
+
+#[test]
+fn poe_budget_warns_over_the_port_and_refuses_over_the_cap() {
+    let net = [(Protocol::Network, 0, 4)];
+    let supply = Product { poe_port_watts: 60.0, ..prod(&net) };
+    let lamp = |w| Product { poe_watts: w, ..prod(&net) };
+    let (a, b, c) = (lamp(45.0), lamp(45.0), lamp(100.0));
+    let devs: Vec<(Handle, &Product)> = vec![(Handle(1), &supply), (Handle(2), &a), (Handle(3), &b), (Handle(4), &c)];
+    let verdict =
+        |links: &[WireLink], f: u64, t: u64, ceiling| poe_verdict(&devs, links, Handle(f), Handle(t), ceiling).map(|v| (v.refuse, v.message));
+
+    // 45W on a 60W port is fine; a second 45W lamp daisy-chained on warns but still connects.
+    let on_port = [link(1, 2, Protocol::Network)];
+    assert_eq!(verdict(&[], 1, 2, 0.0), None);
+    let (refuse, msg) = verdict(&on_port, 2, 3, 0.0).unwrap();
+    assert!(!refuse && msg.contains("90.0W") && msg.contains("max 60W"), "{msg}");
+    assert_eq!(code(&devs.iter().map(|(h, p)| (h.0, *p)).collect::<Vec<_>>(), &on_port, &link(2, 3, Protocol::Network)), None);
+
+    // 45 + 100 is past the 110W cap: refused, with the ChamSys code.
+    assert!(verdict(&on_port, 2, 4, 0.0).unwrap().0);
+    let r = can_connect(&devs, &on_port, &link(2, 4, Protocol::Network)).unwrap_err();
+    assert_eq!(r.code, "poe-budget-exceeded");
+
+    // No supply on the run: warns against the library's best port only when told one.
+    let island = verdict(&[link(2, 3, Protocol::Network)], 3, 4, 100.0);
+    assert!(island.is_some());
+    assert_eq!(verdict(&[], 2, 3, 100.0), None);
+
+    // Data cables are not budgeted, and the schedule sees the loaded port.
+    let two = [link(1, 2, Protocol::Network), link(2, 3, Protocol::Network)];
+    assert!(port_overload(&devs, &two, Handle(1)).unwrap().contains("90.0W"));
+    assert_eq!(port_overload(&devs, &on_port, Handle(1)), None);
+    assert_eq!(max_supply_watts(&[supply.clone(), a.clone()]), 60.0);
+}

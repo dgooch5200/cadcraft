@@ -11,12 +11,14 @@ use cadcraft_geom::Vec2;
 mod card;
 mod csv;
 mod library;
+mod poe;
 mod rules;
 mod wire;
 
 pub use card::*;
 pub use csv::*;
 pub use library::*;
+pub use poe::*;
 pub use rules::*;
 pub use wire::*;
 
@@ -331,7 +333,8 @@ fn refuse(code: &'static str, message: String) -> Result<(), Refusal> {
 }
 
 /// Self-connection, unknown device, port existence and capacity (including the asymmetric RJ45
-/// pool). then the hardware rules in `rules.rs`. ponytail: no PoE wattage budget; port it from poe.ts when needed.
+/// pool). then the hardware rules in `rules.rs`.
+/// A PoE run past `MAX_RUN_WATTS` is refused; one over its supply's port is allowed and reported by [`poe_verdict`].
 pub fn can_connect(devices: &[(Handle, &Product)], links: &[WireLink], proposed: &WireLink) -> Result<(), Refusal> {
     let (a, b, p) = (proposed.from, proposed.to, proposed.protocol);
     if a == b {
@@ -361,6 +364,11 @@ pub fn can_connect(devices: &[(Handle, &Product)], links: &[WireLink], proposed:
             };
             return refuse("ports-exhausted", message);
         }
+    }
+    if p == Protocol::Network
+        && let Some(v) = poe_verdict(devices, links, a, b, 0.0).filter(|v| v.refuse)
+    {
+        return refuse("poe-budget-exceeded", v.message);
     }
     rules::check_rules(devices, links, proposed, from, to)
 }
