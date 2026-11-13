@@ -71,6 +71,8 @@ fn own_specs() -> Vec<CommandSpec> {
             .params("{handles? (default the selection)} → {count, products: [{id, name, code, count}], size: {w, h}: card size in drawing units, null where the devices differ}")
             .noundo()
             .enabled(always),
+        CommandSpec::new("csd.devices.accessory", "Add Accessory to Devices", group::run_accessory)
+            .params("{product: id of a library product, handles? (default the selection), qty?: whole number (default 1)} → {changed}; sets that accessory line to `qty` on every device (the same as csd.device.set on each)"),
         CommandSpec::new("csd.devices.label", "Label Devices", group::run_label)
             .params("{handles? (default the selection), base: text (blank = each product code), start?: integer, pad?: digits to zero-pad the number to (default 0)} → {labels: [{handle, label}]}; without `start` every device gets `base`; with it, `base` plus a running number from `start` in reading order (top to bottom, left to right)"),
         CommandSpec::new("csd.device.delete", "Delete Devices", run_device_delete)

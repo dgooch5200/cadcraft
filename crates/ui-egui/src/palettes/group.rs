@@ -13,6 +13,7 @@ use crate::theme::Tokens;
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 struct Product {
+    id: String,
     name: String,
     code: String,
     count: u32,
@@ -132,6 +133,22 @@ pub(super) fn show(app: &mut CadApp, ui: &mut egui::Ui, sel: &[Handle]) {
                     for q in app.session.csd_library.iter() {
                         if ui.selectable_label(false, &q.name).clicked() {
                             cmd = Some(("csd.replace", json!({ "product": q.id, "handles": hexes })));
+                        }
+                    }
+                });
+        });
+        prop_row(ui, "Add accessory to all", |ui| {
+            craft_ui::ComboBox::from_id_salt(sid.with("accessory"))
+                .selected_text(crate::tl!("Choose an accessory"))
+                .width(ui.available_width() - 10.0)
+                .show_ui(ui, |ui| {
+                    let ids: Vec<&str> = i.products.iter().map(|p| p.id.as_str()).collect();
+                    let r = app.session.execute("csd.library.list", &json!({ "accessoriesFor": ids })).unwrap_or_default();
+                    // A selection of clamps is not offered a clamp.
+                    for q in r["products"].as_array().into_iter().flatten().filter(|q| !ids.contains(&q["id"].as_str().unwrap_or_default())) {
+                        let id = q["id"].as_str().unwrap_or_default();
+                        if ui.selectable_label(false, q["name"].as_str().unwrap_or(id)).clicked() {
+                            cmd = Some(("csd.devices.accessory", json!({ "product": id, "handles": hexes })));
                         }
                     }
                 });

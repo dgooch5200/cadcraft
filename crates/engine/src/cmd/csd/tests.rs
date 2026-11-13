@@ -1340,3 +1340,17 @@ fn moving_a_waypoint_snaps_to_the_grid_when_snap_is_on() {
     wire_cmd(&mut s, "csd.wire.point.move", json!({ "wire": w.hex(), "index": 0, "to": [93, 148] }));
     assert_eq!(link_of(&s, w).points, [Vec2::new(90.0, 150.0)]);
 }
+
+#[test]
+fn devices_accessory_adds_one_part_to_every_device_and_resets_a_held_line() {
+    let mut s = Session::new();
+    let (a, b) = (place_at(&mut s, NODE, 0.0, 0.0), place_at(&mut s, CONSOLE, 300.0, 0.0));
+    let hs = json!([a.hex(), b.hex()]);
+    s.execute("csd.device.set", &json!({ "handle": a.hex(), "accessories": [{ "product": "b565fc", "qty": 4 }] })).unwrap();
+    let qty = |s: &mut Session, h: Handle| s.execute("csd.device.info", &json!({ "handle": h.hex() })).unwrap()["accessories"][0]["qty"].clone();
+    assert_eq!(s.execute("csd.devices.accessory", &json!({ "handles": hs, "product": "b565fc" })).unwrap()["changed"], 2);
+    assert_eq!((qty(&mut s, a), qty(&mut s, b)), (json!(1), json!(1)));
+    assert!(s.execute("csd.devices.accessory", &json!({ "handles": hs, "product": "nope" })).is_err());
+    s.execute("undo", &json!({})).unwrap();
+    assert_eq!((qty(&mut s, a), qty(&mut s, b)), (json!(4), Value::Null), "one undo step restores both");
+}

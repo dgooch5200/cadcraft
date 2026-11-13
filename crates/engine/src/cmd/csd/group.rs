@@ -1,10 +1,10 @@
 //! Commands over several devices at once: summary and batch labels.
 
-use cadcraft_csd::{CARD_H, CARD_W};
+use cadcraft_csd::{CARD_H, CARD_W, is_builtin};
 use cadcraft_doc::{EntityKind, Handle};
 use serde_json::{Value, json};
 
-use super::{apply_label, device_handles, product_attr, resolve, str_param, targets};
+use super::{MAX_ACCESSORY_LINES, accessories_of, apply_label, device_handles, find_product, product_attr, put_attr, resolve, str_param, targets};
 use crate::cmd::bad;
 use crate::{Result, Session};
 
@@ -110,4 +110,37 @@ pub(super) fn run_label(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let labels: Vec<Value> = named.iter().map(|(h, l)| json!({ "handle": h.hex(), "label": l })).collect();
     Ok(json!({ "labels": labels }))
+}
+
+/// Puts one of a library product on every device as an accessory: a line it already has goes back
+/// to `qty`, and a device already at the line limit is skipped.
+pub(super) fn run_accessory(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "csd.devices.accessory";
+    let id = str_param(p, "product").filter(|t| !t.is_empty()).ok_or_else(|| bad(cmd, "`product` (library product id) is required"))?;
+    if is_builtin(id) || find_product(&s.csd_library, id).is_none() {
+        return Err(bad(cmd, "`product` is not a library product"));
+    }
+    let qty = match p.get("qty") {
+        None | Some(Value::Null) => 1,
+        Some(v) => v.as_u64().filter(|q| (1..=100_000).contains(q)).ok_or_else(|| bad(cmd, "`qty` must be a whole number from 1 to 100000"))?,
+    };
+    let hs = device_handles(s, &targets(s, p)?)?;
+    let mut changed = 0;
+    let d = s.doc_mut()?;
+    for h in hs {
+        d.modify_entity(h, |e| {
+            let EntityKind::Insert(i) = &mut e.kind else { return };
+            let mut lines = accessories_of(i);
+            if let Some(l) = lines.iter_mut().find(|l| l.0 == id) {
+                l.1 = qty;
+            } else if lines.len() < MAX_ACCESSORY_LINES {
+                lines.push((id.to_string(), qty));
+            } else {
+                return;
+            }
+            put_attr(i, "ACCS", serde_json::to_string(&lines).unwrap_or_default());
+            changed += 1;
+        })?;
+    }
+    Ok(json!({ "changed": changed }))
 }

@@ -1666,3 +1666,5 @@ menu	View	视图
 	DMX addressing is off for this drawing.	此图纸已关闭 DMX 寻址。
 	{label} (on {device})	{label}（位于 {device}）
 	DMX Patch Setup	DMX 补丁设置
+	Add accessory to all	为全部添加配件
+	Add Accessory to Devices	为设备添加配件
