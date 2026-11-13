@@ -143,10 +143,7 @@ fn canvas_menu_places_a_grid_pastes_at_the_cursor_and_clears_the_drawing() {
     assert_eq!(device_count(&mut app), 7);
 }
 
-#[test]
-fn dragging_a_waypoint_moves_it_and_double_clicking_removes_it() {
-    let (mut app, w) = app_with_cable();
-    app.session.set_selection(vec![w]);
+fn harness(app: CadApp) -> Harness<'static, CadApp> {
     let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut CadApp| {
             app.logic(ui.ctx());
@@ -155,8 +152,12 @@ fn dragging_a_waypoint_moves_it_and_double_clicking_removes_it() {
         app,
     );
     h.run_steps(5);
+    h
+}
+
+fn drag(h: &mut Harness<'static, CadApp>, from: Vec2, to: Vec2) {
     let xf = h.state().canvas.xf.unwrap();
-    let (from, to) = (xf.to_screen(Vec2::new(100.0, 150.0)), xf.to_screen(Vec2::new(60.0, 200.0)));
+    let (from, to) = (xf.to_screen(from), xf.to_screen(to));
     let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
     h.event(Event::PointerMoved(from));
     h.run_steps(2);
@@ -168,6 +169,15 @@ fn dragging_a_waypoint_moves_it_and_double_clicking_removes_it() {
     }
     h.event(button(to, false));
     h.run_steps(3);
+}
+
+#[test]
+fn dragging_a_waypoint_moves_it_and_double_clicking_removes_it() {
+    let (mut app, w) = app_with_cable();
+    app.session.set_selection(vec![w]);
+    let mut h = harness(app);
+    drag(&mut h, Vec2::new(100.0, 150.0), Vec2::new(60.0, 200.0));
+    let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
     let pts = points(h.state(), w);
     assert_eq!(pts.len(), 1);
     assert!(pts[0].near(Vec2::new(60.0, 200.0), 2.0), "{:?}", pts[0]);
@@ -183,4 +193,30 @@ fn dragging_a_waypoint_moves_it_and_double_clicking_removes_it() {
     }
     h.run_steps(2);
     assert!(points(h.state(), w).is_empty(), "double-click removed the waypoint");
+}
+
+#[test]
+fn rename_cable_dialog_focuses_its_text_field() {
+    let (mut app, w) = app_with_cable();
+    let ctx = egui::Context::default();
+    let mut open = true;
+    let spec = format!("{}{}", context_menu::WIRE_NAME, w.hex());
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| cadcraft_ui_egui::wirename::dialog(&mut app, ui.ctx(), &spec, &mut open));
+    out.textures_delta.clear();
+    assert!(ctx.memory(|m| m.focused()).is_some());
+}
+
+#[test]
+fn waypoints_of_every_selected_cable_can_be_dragged() {
+    let (mut app, w) = app_with_cable();
+    let a = handle(&app.run("csd.device.at", json!({ "at": [0, 0] })).unwrap());
+    let c = handle(&app.run("csd.place", json!({ "product": "epix-flex-drive", "at": [200, -60] })).unwrap());
+    let p = json!({ "from": a.hex(), "fromSide": "bot", "to": c.hex(), "toSide": "top", "protocol": "netdata" });
+    let w2 = handle(&app.run("csd.connect", p).unwrap());
+    app.run("csd.wire.point.add", json!({ "wire": w2.hex(), "at": [100, -80] })).unwrap();
+    app.session.set_selection(vec![w, w2]);
+    let mut h = harness(app);
+    drag(&mut h, Vec2::new(100.0, -80.0), Vec2::new(60.0, -100.0));
+    let pts = points(h.state(), w2);
+    assert!(pts[0].near(Vec2::new(60.0, -100.0), 2.0), "{:?}", pts[0]);
 }

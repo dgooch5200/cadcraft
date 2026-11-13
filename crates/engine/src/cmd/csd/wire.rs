@@ -25,7 +25,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             .params("{wire: handle, index? | at?: [x,y] (nearest waypoint within 9)} → {points: count}"),
         CommandSpec::new("csd.wire.point.move", "Move Wire Point", run_move).params("{wire: handle, index, to: [x,y]} → {index}; dropped on the snap grid if SNAPMODE is on"),
         CommandSpec::new("csd.wire.route", "Preview Wire Route", run_route)
-            .params("{wire: handle, index, to: [x,y]} → {path: [[x,y]]}; the route the wire would take with that waypoint moved (snapped as a move would be); changes nothing")
+            .params("{wire: handle, index, to: [x,y]} → {path: [[x,y]], to: [x,y]}; `to` is the snapped waypoint; the route the wire would take with that waypoint moved (snapped as a move would be); changes nothing")
             .noundo(),
         CommandSpec::new("csd.wire.straighten", "Straighten Wires", run_straighten)
             .params("{wires?: [handle]} (default every bent wire) → {count}; clears the waypoints"),
@@ -144,7 +144,7 @@ fn run_route(s: &mut Session, p: &Value) -> Result<Value> {
     let store = s.doc()?.space(&s.space()).ok_or_else(|| bad("csd.wire.route", "no such space"))?;
     let path =
         layout_with(store, s.settings.orthomode, Some((h, &link.points))).into_iter().find(|l| l.wire == h).map(|l| l.path).unwrap_or_default();
-    Ok(json!({ "path": path.iter().map(|v| [v.x, v.y]).collect::<Vec<_>>() }))
+    Ok(json!({ "path": path.iter().map(|v| [v.x, v.y]).collect::<Vec<_>>(), "to": [to.x, to.y] }))
 }
 
 fn run_straighten(s: &mut Session, p: &Value) -> Result<Value> {
