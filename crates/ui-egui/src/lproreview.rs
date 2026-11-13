@@ -78,20 +78,25 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, spec: &str, open: &mut bool
                         }
                         ui.label(t["quantity"].as_u64().unwrap_or_default().to_string());
                         let key = t["key"].as_str().unwrap_or_default();
-                        craft_ui::ComboBox::from_id_salt(("lproreview_pick", key)).selected_text(label(pick)).width(240.0).show_ui(ui, |ui| {
-                            ui.selectable_value(pick, String::new(), crate::tl!("Skip"));
-                            let sugg: Vec<String> =
-                                t["suggestions"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(String::from)).collect();
-                            let (first, rest) = ordered(&sugg, &ids);
-                            for (n, group) in [first, rest].into_iter().enumerate() {
-                                if n == 1 {
-                                    ui.separator();
+                        craft_ui::ComboBox::from_id_salt(("lproreview_pick", key))
+                            .selected_text(label(pick))
+                            .width(240.0)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(pick, String::new(), crate::tl!("Skip"));
+                                let sugg: Vec<String> =
+                                    t["suggestions"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(String::from)).collect();
+                                let (first, rest) = ordered(&sugg, &ids);
+                                for (n, group) in [first, rest].into_iter().enumerate() {
+                                    if n == 1 {
+                                        ui.separator();
+                                    }
+                                    for id in group {
+                                        ui.selectable_value(pick, id.to_string(), names.get(id).copied().unwrap_or(id));
+                                    }
                                 }
-                                for id in group {
-                                    ui.selectable_value(pick, id.to_string(), names.get(id).copied().unwrap_or(id));
-                                }
-                            }
-                        });
+                            })
+                            .response
+                            .accessible_name(format!("{}: {name}", crate::tl!("Product")));
                         ui.end_row();
                     }
                 });
