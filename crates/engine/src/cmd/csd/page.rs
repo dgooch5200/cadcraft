@@ -48,6 +48,11 @@ pub(super) fn pages_in(store: &EntityStore) -> Vec<Page> {
     v
 }
 
+/// The display names of the sheets in `store`, left to right.
+pub fn page_names(store: &EntityStore) -> Vec<String> {
+    pages_in(store).iter().enumerate().map(|(n, g)| g.name(n)).collect()
+}
+
 pub(super) fn pages(s: &Session) -> Vec<Page> {
     s.doc().ok().and_then(|d| d.space(&s.space())).map(pages_in).unwrap_or_default()
 }
@@ -156,6 +161,27 @@ pub(super) fn off_sheet_warning(before: &Drawing, doc: &Drawing) -> Option<Strin
 pub(super) fn run_pages(s: &mut Session, _: &Value) -> Result<Value> {
     let list: Vec<Value> = pages(s).iter().enumerate().map(|(n, g)| json!({ "index": n + 1, "name": g.name(n), "handle": g.handle.hex() })).collect();
     Ok(json!({ "pages": list }))
+}
+
+/// Zooms the view to a page, given directly or as the off-page connector (`device`) that links to it.
+pub(super) fn run_goto(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "csd.page.goto";
+    let ps = pages(s);
+    let n = match p.get("device") {
+        Some(_) => {
+            let h = super::super::curves::handle_param(p, "device").ok_or_else(|| bad(cmd, "`device` must be a handle"))?;
+            let store = s.doc()?.space(&s.space()).ok_or_else(|| bad(cmd, "no such space"))?;
+            let d = devices(store, &s.csd_library).into_iter().find(|d| d.handle == h && d.product.id == OFF_PAGE_ID);
+            let link = d.map(|d| attr(d.insert, "LINKPAGE").to_string()).ok_or_else(|| bad(cmd, "`device` is not an off-page connector"))?;
+            page_param(cmd, &json!({ "page": link }), &ps)?
+        }
+        None => page_param(cmd, p, &ps)?,
+    };
+    let g = &ps[n];
+    let (w, h) = paper_of(s.doc()?).size();
+    let b = g.at + Vec2::new(w * g.scale.x.abs(), h * g.scale.y.abs());
+    crate::cmd::view::zoom(s, &json!({ "mode": "window", "p1": [g.at.x, g.at.y], "p2": [b.x, b.y] }))?;
+    Ok(json!({ "page": n + 1, "name": g.name(n) }))
 }
 
 /// Adds the next sheet to the right of the last; returns its handle.
@@ -345,6 +371,23 @@ mod tests {
         s.execute("csd.connect", &link(&a, &b)).unwrap();
         let e = s.execute("csd.connect", &link(&a, &c)).unwrap_err().to_string();
         assert!(e.contains("off-page connector") && e.contains("page 1") && e.contains("page 2"), "{e}");
+    }
+
+    #[test]
+    fn goto_zooms_to_the_sheet_of_a_page_or_an_off_page_link() {
+        let mut s = Session::new();
+        s.execute("csd.page.add", &json!({ "name": "Riser" })).unwrap();
+        let link = place(&mut s, OFF_PAGE_ID, [100.0, 500.0]);
+        let centre = |s: &Session| s.state().unwrap().zoom_frame().center;
+        s.execute("csd.page.goto", &json!({ "page": "Riser" })).unwrap();
+        assert!(centre(&s).x > 1832.0, "{:?}", centre(&s));
+        s.execute("csd.page.goto", &json!({ "page": 1 })).unwrap();
+        assert!(centre(&s).x < 1832.0);
+        s.execute("csd.device.set", &json!({ "handle": link, "linkPage": "Riser" })).unwrap();
+        s.execute("csd.page.goto", &json!({ "device": link })).unwrap();
+        assert!(centre(&s).x > 1832.0);
+        s.execute("csd.device.set", &json!({ "handle": link, "linkPage": "Nowhere" })).unwrap();
+        assert!(s.execute("csd.page.goto", &json!({ "device": link })).is_err());
     }
 
     #[test]

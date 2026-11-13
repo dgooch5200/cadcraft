@@ -221,7 +221,8 @@ fn csd_entries(app: &CadApp) -> Vec<Vec<Entry>> {
     let delete = |label: &str| run(label, "csd.device.delete", json!({ "handles": hexes }));
     if n == 1 {
         push(&mut groups, copy("Copy").into_iter().chain(duplicate("Duplicate")).collect());
-        let mut more: Vec<Entry> = crate::shortcut_menus::item(app, "ui.panel.properties", Some("Device details")).into_iter().collect();
+        let mut more: Vec<Entry> = goto_page(app, devs[0]).into_iter().collect();
+        more.extend(crate::shortcut_menus::item(app, "ui.panel.properties", Some("Device details")));
         more.extend(run("Select all of this product", "csd.select.product", json!({ "device": hexes.first() })));
         push(&mut groups, more);
         push(&mut groups, delete("Delete device").into_iter().collect());
@@ -243,6 +244,18 @@ fn csd_entries(app: &CadApp) -> Vec<Vec<Entry>> {
     }
     push(&mut groups, item(app, "ai_deselect", Some("Deselect all")).into_iter().collect());
     groups
+}
+
+/// "Go to page" for an off-page connector whose LINKPAGE names an existing page.
+fn goto_page(app: &CadApp, h: Handle) -> Option<Entry> {
+    let d = app.session.doc().ok()?;
+    let EntityKind::Insert(i) = &d.entity(h)?.kind else { return None };
+    let tag = |t: &str| i.attribs.iter().find(|a| a.tag == t).map(|a| a.text.value.as_str());
+    let link = tag("LINKPAGE")?;
+    if tag("PRODUCT") != Some(cadcraft_csd::OFF_PAGE_ID) || !cadcraft_engine::csd_page_names(&d.model).iter().any(|n| n == link) {
+        return None;
+    }
+    run("Go to page", "csd.page.goto", json!({ "device": h.hex() }))
 }
 
 /// The cable menu: waypoints, label position, name, delete.

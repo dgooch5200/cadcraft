@@ -30,6 +30,7 @@ mod lpro;
 mod mount;
 mod new;
 mod page;
+pub use page::page_names;
 mod patch;
 mod place;
 mod print;
@@ -167,6 +168,9 @@ fn own_specs() -> Vec<CommandSpec> {
             .params("{name?: text} → {handle, index, pages}; adds a sheet to the right of the last (the first sheet too, when there is none), with the project fields copied; SHEET reads \"N of M\" once there are two"),
         CommandSpec::new("csd.page.rename", "Rename Page", page::run_rename)
             .params("{page: number (1-based) | name, name: text} → {handle, name, links}; off-page connectors that named the old page follow"),
+        CommandSpec::new("csd.page.goto", "Go to Page", page::run_goto)
+            .params("{page: number (1-based) | name, or device: an off-page connector (goes to its LINKPAGE)} → {page, name}; zooms the view to the page's sheet")
+            .noundo(),
         CommandSpec::new("csd.page.remove", "Remove Page", page::run_remove)
             .params("{page: number (1-based) | name} → {pages}; refuses a page whose sheet holds devices and the last page"),
         CommandSpec::new("csd.library.load", "Load Product Library", run_library_load)
