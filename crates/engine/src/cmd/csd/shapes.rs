@@ -195,8 +195,9 @@ pub(super) fn export(store: &EntityStore) -> (Vec<Value>, usize) {
         })
         .collect();
     let mut used = vec![false; fills.len()];
+    let fill_handles: std::collections::HashSet<_> = fills.iter().map(|(_, f)| f.handle).collect();
     for (n, e) in ents.iter().enumerate() {
-        if fills.iter().any(|(_, f)| f.handle == e.handle) {
+        if fill_handles.contains(&e.handle) {
             continue;
         }
         let id = format!("sh{n}");
