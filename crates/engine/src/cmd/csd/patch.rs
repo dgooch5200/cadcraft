@@ -359,16 +359,50 @@ fn csv(plan: &Plan) -> String {
     out
 }
 
+/// The patch sheet: one row per head with its universe-address, as the web app's printPatch lists it.
+fn pdf(s: &Session, p: &Value, plan: &Plan) -> Result<Vec<u8>> {
+    const COLS: [(&str, f64); 7] =
+        [("DMX", 70.0), ("Head", 40.0), ("Fixture", 200.0), ("Product", 220.0), ("Mode", 120.0), ("Ch", 40.0), ("Addresses", 110.0)];
+    let rows: Vec<Vec<String>> = plan
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(n, (e, u, a))| {
+            let last = (a + e.channels).saturating_sub(1).min(UNIVERSE_SIZE);
+            let carried = e.carried_by.as_ref().map(|c| format!(" (accessory of {c})")).unwrap_or_default();
+            vec![
+                format!("{u}-{a}"),
+                (n + 1).to_string(),
+                format!("{}{carried}", e.label),
+                format!("{} - {}", e.product.code, e.product.name),
+                e.mode_text(),
+                e.channels.to_string(),
+                format!("{a}-{last}"),
+            ]
+        })
+        .collect();
+    let mut footer: Vec<String> = match p.get("footer").and_then(Value::as_array) {
+        Some(a) => a.iter().filter_map(Value::as_str).map(String::from).collect(),
+        None => super::sheet::project_footer(s),
+    };
+    footer.insert(
+        0,
+        format!("Universes used: {}{}", plan.used, if plan.budget > 0 { format!(" of {} available", plan.budget) } else { String::new() }),
+    );
+    schedule::table_pdf("csd.patch.export", "DMX Patch", &COLS, &rows, &footer)
+}
+
 pub(super) fn run_patch_export(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "csd.patch.export";
     let path = str_param(p, "path").ok_or_else(|| bad(cmd, "`path` is required"))?;
     let plan = plan(s, order_param(s, p), cmd)?;
-    let text = match str_param(p, "format") {
-        Some("csv") => csv(&plan),
-        Some("magicq") => magicq(&plan),
-        _ => return Err(bad(cmd, "`format` must be csv or magicq")),
+    let bytes = match str_param(p, "format") {
+        Some("csv") => csv(&plan).into_bytes(),
+        Some("magicq") => magicq(&plan).into_bytes(),
+        Some("pdf") => pdf(s, p, &plan)?,
+        _ => return Err(bad(cmd, "`format` must be csv, magicq or pdf")),
     };
-    super::write_library(path, text.as_bytes()).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
+    super::write_library(path, &bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
     Ok(json!({ "path": path, "rows": plan.rows.len() }))
 }
 

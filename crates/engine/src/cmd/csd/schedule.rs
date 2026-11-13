@@ -334,10 +334,10 @@ fn csv(lines: &[Line]) -> String {
     out
 }
 
-/// The table as text on a scratch drawing, plotted by the PDF writer onto one landscape A4 page.
+/// A titled table and footer as text on a scratch drawing, plotted by the PDF writer onto one
+/// landscape A4 page. Columns are (heading, width).
 /// ponytail: one page, so a very long list shrinks; paginate when that matters.
-fn pdf(lines: &[Line], footer: &[String]) -> Result<Vec<u8>> {
-    const COLS: [(&str, f64); 6] = [("Qty", 30.0), ("Model ID", 150.0), ("Labels", 230.0), ("Category", 130.0), ("Product", 230.0), ("Code", 90.0)];
+pub(super) fn table_pdf(cmd: &str, title: &str, cols: &[(&str, f64)], rows: &[Vec<String>], footer: &[String]) -> Result<Vec<u8>> {
     const H: f64 = 8.0;
     const PITCH: f64 = 14.0;
     let mut d = Drawing::default();
@@ -358,29 +358,39 @@ fn pdf(lines: &[Line], footer: &[String]) -> Result<Vec<u8>> {
         d.add(&Space::Model, Common::default(), EntityKind::Text(text))?;
         Ok(())
     };
-    put(0.0, 0.0, 14.0, 400.0, "Bill of materials")?;
+    put(0.0, 0.0, 14.0, 400.0, title)?;
     let mut y = -28.0;
-    let mut row = |cells: Vec<String>, y: f64| -> Result<()> {
+    let mut row = |cells: &[String], y: f64| -> Result<()> {
         let mut x = 0.0;
-        for (cell, (_, w)) in cells.iter().zip(COLS) {
+        for (cell, (_, w)) in cells.iter().zip(cols) {
             put(x, y, H, w - 6.0, cell)?;
             x += w;
         }
         Ok(())
     };
-    row(COLS.iter().map(|c| c.0.to_string()).collect(), y)?;
-    for l in lines {
+    row(&cols.iter().map(|c| c.0.to_string()).collect::<Vec<_>>(), y)?;
+    for r in rows {
         y -= PITCH;
-        let p = &l.prod;
-        row(vec![l.qty.to_string(), p.id.clone(), l.labels.join(", "), p.cat.clone(), p.name.clone(), p.code.clone()], y)?;
+        row(r, y)?;
     }
     for line in footer {
         y -= PITCH;
-        put(0.0, y, H, COLS.iter().map(|c| c.1).sum(), line)?;
+        put(0.0, y, H, cols.iter().map(|c| c.1).sum(), line)?;
     }
-    let plot = io().and_then(|h| h.plot).ok_or_else(|| bad("csd.bom.export", "PDF output is not available in this build"))?;
-    plot(&d, &Space::Model, &json!({ "paper": "A4", "landscape": true, "fit": true, "title": "Bill of materials" }))
-        .map_err(|e| bad("csd.bom.export", e))
+    let plot = io().and_then(|h| h.plot).ok_or_else(|| bad(cmd, "PDF output is not available in this build"))?;
+    plot(&d, &Space::Model, &json!({ "paper": "A4", "landscape": true, "fit": true, "title": title })).map_err(|e| bad(cmd, e))
+}
+
+fn pdf(lines: &[Line], footer: &[String]) -> Result<Vec<u8>> {
+    const COLS: [(&str, f64); 6] = [("Qty", 30.0), ("Model ID", 150.0), ("Labels", 230.0), ("Category", 130.0), ("Product", 230.0), ("Code", 90.0)];
+    let rows: Vec<Vec<String>> = lines
+        .iter()
+        .map(|l| {
+            let p = &l.prod;
+            vec![l.qty.to_string(), p.id.clone(), l.labels.join(", "), p.cat.clone(), p.name.clone(), p.code.clone()]
+        })
+        .collect();
+    table_pdf("csd.bom.export", "Bill of materials", &COLS, &rows, footer)
 }
 
 pub(super) fn run_bom_export(s: &mut Session, p: &Value) -> Result<Value> {
