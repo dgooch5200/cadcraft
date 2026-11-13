@@ -35,7 +35,7 @@ fn inches_per_unit(insunits: i64) -> f64 {
 
 /// Drawing units per pixel: the stored factor, else 1 for a drawing that already holds lighting
 /// content from before the factor existed, else from `$INSUNITS`.
-pub(crate) fn px(d: &Drawing) -> f64 {
+pub fn px(d: &Drawing) -> f64 {
     if let Some(k) = Some(d.header.f64(VAR, 0.0)).filter(|k| k.is_finite() && *k > 0.0) {
         return k;
     }
@@ -48,6 +48,17 @@ pub(crate) fn pin_px(d: &mut Drawing) -> f64 {
     let k = px(d);
     d.header.set_f64(VAR, k);
     k
+}
+
+/// A session whose drawing draws lighting content at one unit per pixel, for tests written in
+/// ChamSys Designer's own coordinates.
+#[cfg(test)]
+pub(crate) fn px_session() -> crate::Session {
+    let mut s = crate::Session::new();
+    if let Ok(d) = s.doc_mut() {
+        d.header.set_f64(VAR, 1.0);
+    }
+    s
 }
 
 #[cfg(test)]

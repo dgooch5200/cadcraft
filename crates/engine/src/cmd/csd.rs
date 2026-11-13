@@ -36,7 +36,7 @@ mod schedule;
 mod shapes;
 mod sheet;
 mod twoline;
-mod units;
+pub(crate) mod units;
 mod wire;
 use super::{CommandSpec, always, bad, point_req, str_param, targets};
 use crate::{EngineError, Result, Session};
