@@ -121,6 +121,37 @@ fn toolbar(app: &mut CadApp, ui: &mut egui::Ui, t: &Tokens) {
     if let Some(c) = toggle {
         crate::menus::run_transparent(app, c);
     }
+    grid_size(app, ui, &st);
+}
+
+/// The snap grid in drawing units, as the web app's grid-size select. Greyed while Snap is off.
+fn grid_size(app: &mut CadApp, ui: &mut egui::Ui, st: &cadcraft_engine::Settings) {
+    const CHOICES: [f64; 4] = [4.0, 8.0, 12.0, 24.0];
+    let unit = app.session.drafting_settings().snapunit.x;
+    let mut pick = None;
+    ui.add_space(3.0);
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        ui.add_enabled_ui(st.snapmode, |ui| {
+            craft_ui::ComboBox::from_id_salt(ui.scope_id().with("csd_grid"))
+                .selected_text(format!("{} px", unit))
+                .width(ui.available_width() - 8.0)
+                .show_ui(ui, |ui| {
+                    for c in CHOICES {
+                        if ui.selectable_label((unit - c).abs() < 1e-9, format!("{c} px")).clicked() {
+                            pick = Some(c);
+                        }
+                    }
+                })
+                .response
+                .accessible_name(crate::tl!("Snap grid size"));
+        });
+    });
+    if let Some(c) = pick {
+        for var in ["SNAPUNIT", "GRIDUNIT"] {
+            let _ = app.run("setvar", json!({ "name": var, "value": [c, c] }));
+        }
+    }
 }
 
 /// The group's body. The header is the caller's.
