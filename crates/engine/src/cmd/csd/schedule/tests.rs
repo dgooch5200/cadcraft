@@ -111,6 +111,21 @@ fn bom_totals_placed_and_unplaced_by_product_and_exports_csv() {
     assert!(s.execute("csd.bom.export", &json!({ "path": "x", "format": "xls" })).is_err());
 }
 
+#[test]
+fn bom_html_export_groups_by_category_and_escapes() {
+    let mut s = Session::new();
+    s.execute("csd.place", &json!({ "product": NODE, "at": [0, 0], "label": "<b>N&1</b>" })).unwrap();
+    s.execute("csd.place", &json!({ "product": CONSOLE, "at": [0, 200] })).unwrap();
+    let path = std::env::temp_dir().join(format!("csd-bom-{}.html", std::process::id()));
+    s.execute("csd.bom.export", &json!({ "path": path, "format": "html", "footer": ["Show <1> & 2"] })).unwrap();
+    let html = std::fs::read_to_string(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(html.contains("<tr class=\"group\"><td colspan=\"6\">Sample"));
+    assert!(html.contains("&lt;b&gt;N&amp;1&lt;/b&gt;"));
+    assert!(html.contains("Show &lt;1&gt; &amp; 2"));
+    assert!(!html.contains("<b>"));
+}
+
 fn info(s: &mut Session, h: Handle) -> serde_json::Value {
     s.execute("csd.device.info", &json!({ "handle": h.hex() })).unwrap()
 }

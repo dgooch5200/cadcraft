@@ -393,18 +393,35 @@ fn pdf(lines: &[Line], footer: &[String]) -> Result<Vec<u8>> {
     table_pdf("csd.bom.export", "Bill of materials", &COLS, &rows, footer)
 }
 
+/// The BOM page, grouped by category in the BOM's own order.
+fn html(lines: &[Line], footer: &[String]) -> String {
+    use super::html::{group_row, page, row};
+    let mut body = String::new();
+    let mut cat: Option<&str> = None;
+    for l in lines {
+        let p = &l.prod;
+        if cat != Some(p.cat.as_str()) {
+            cat = Some(p.cat.as_str());
+            body.push_str(&group_row("group", 6, &p.cat, ""));
+        }
+        let name = if p.notes.is_empty() { p.name.clone() } else { format!("{} ({})", p.name, p.notes) };
+        body.push_str(&row("", &[l.qty.to_string(), p.id.clone(), l.labels.join(", "), p.brand.clone(), name, p.code.clone()]));
+    }
+    let total: u64 = lines.iter().map(|l| l.qty).sum();
+    let info = [("Items", total.to_string()), ("Products", lines.len().to_string())];
+    page("Bill of materials", &info, &["Qty", "Model ID", "Labels", "Brand", "Product", "Code"], &body, footer)
+}
+
 pub(super) fn run_bom_export(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "csd.bom.export";
     let path = str_param(p, "path").ok_or_else(|| bad(cmd, "`path` is required"))?;
     let lines = bom(s)?;
-    let footer: Vec<String> = match p.get("footer").and_then(Value::as_array) {
-        Some(a) => a.iter().filter_map(Value::as_str).map(String::from).collect(),
-        None => super::sheet::project_footer(s),
-    };
+    let footer = super::html::footer_lines(s, p);
     let bytes = match str_param(p, "format") {
         Some("csv") => csv(&lines).into_bytes(),
         Some("pdf") => pdf(&lines, &footer)?,
-        _ => return Err(bad(cmd, "`format` must be csv or pdf")),
+        Some("html") => html(&lines, &footer).into_bytes(),
+        _ => return Err(bad(cmd, "`format` must be csv, pdf or html")),
     };
     super::write_library(path, &bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
     Ok(json!({ "path": path, "rows": lines.len() }))

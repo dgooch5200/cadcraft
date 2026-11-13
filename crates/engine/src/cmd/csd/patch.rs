@@ -359,6 +359,57 @@ fn csv(plan: &Plan) -> String {
     out
 }
 
+fn universes_text(plan: &Plan) -> String {
+    format!("Universes used: {}{}", plan.used, if plan.budget > 0 { format!(" of {} available", plan.budget) } else { String::new() })
+}
+
+/// The patch page: a header row per universe with its channels used. A fixture spanning several
+/// universes is listed under its first, and the others show as continued.
+fn html(s: &Session, p: &Value, plan: &Plan) -> String {
+    use super::html::{footer_lines, group_row, page, row};
+    use std::collections::BTreeMap;
+    let size = u64::from(UNIVERSE_SIZE);
+    let span = |e: &Entry, a: u32| (u64::from(a).saturating_sub(1) + u64::from(e.channels)).div_ceil(size).max(1);
+    let mut by_uni: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+    let mut continued: BTreeMap<u32, &str> = BTreeMap::new();
+    for (i, (e, u, a)) in plan.rows.iter().enumerate() {
+        by_uni.entry(*u).or_default().push(i);
+        for k in 1..span(e, *a).min(1024) {
+            continued.entry(u.saturating_add(k as u32)).or_insert(&e.label);
+        }
+    }
+    let mut unis: Vec<u32> = by_uni.keys().chain(continued.keys()).copied().collect();
+    unis.sort_unstable();
+    unis.dedup();
+    let mut body = String::new();
+    for u in unis {
+        let list = by_uni.get(&u).map(Vec::as_slice).unwrap_or_default();
+        if list.is_empty() {
+            let from = continued.get(&u).copied().unwrap_or_default();
+            body.push_str(&group_row("group cont", 6, &format!("Universe {u}"), &format!("continued from {from}")));
+            continue;
+        }
+        let used: u64 = list.iter().filter_map(|&i| plan.rows.get(i)).map(|(e, _, _)| u64::from(e.channels).min(size)).sum();
+        body.push_str(&group_row("group", 6, &format!("Universe {u}"), &format!("{used} of {size} channels used")));
+        for &i in list {
+            let Some((e, _, a)) = plan.rows.get(i) else { continue };
+            let last = (a + e.channels).saturating_sub(1).min(UNIVERSE_SIZE);
+            let n = span(e, *a);
+            let mut item = format!("{} - {}", e.product.code, e.product.name);
+            if let Some(c) = &e.carried_by {
+                item.push_str(&format!(" (accessory of {c})"));
+            }
+            let mode = if e.mode.is_some() { e.mode_text() } else { format!("{} (assumed)", e.mode_text()) };
+            let addr = if n > 1 { format!("{a}-{last} (spans {n} universes)") } else { format!("{a}-{last}") };
+            body.push_str(&row("", &[format!("{u}-{a}"), (i + 1).to_string(), format!("{} / {item}", e.label), mode, e.channels.to_string(), addr]));
+        }
+    }
+    let mut footer = footer_lines(s, p);
+    footer.insert(0, universes_text(plan));
+    let info = [("Heads", plan.rows.len().to_string()), ("Universes", universes_text(plan).replace("Universes used: ", ""))];
+    page("DMX Patch", &info, &["DMX", "Head", "Fixture", "Mode", "Ch", "Addresses"], &body, &footer)
+}
+
 /// The patch sheet: one row per head with its universe-address, as the web app's printPatch lists it.
 fn pdf(s: &Session, p: &Value, plan: &Plan) -> Result<Vec<u8>> {
     const COLS: [(&str, f64); 7] =
@@ -381,14 +432,8 @@ fn pdf(s: &Session, p: &Value, plan: &Plan) -> Result<Vec<u8>> {
             ]
         })
         .collect();
-    let mut footer: Vec<String> = match p.get("footer").and_then(Value::as_array) {
-        Some(a) => a.iter().filter_map(Value::as_str).map(String::from).collect(),
-        None => super::sheet::project_footer(s),
-    };
-    footer.insert(
-        0,
-        format!("Universes used: {}{}", plan.used, if plan.budget > 0 { format!(" of {} available", plan.budget) } else { String::new() }),
-    );
+    let mut footer = super::html::footer_lines(s, p);
+    footer.insert(0, universes_text(plan));
     schedule::table_pdf("csd.patch.export", "DMX Patch", &COLS, &rows, &footer)
 }
 
@@ -400,7 +445,8 @@ pub(super) fn run_patch_export(s: &mut Session, p: &Value) -> Result<Value> {
         Some("csv") => csv(&plan).into_bytes(),
         Some("magicq") => magicq(&plan).into_bytes(),
         Some("pdf") => pdf(s, p, &plan)?,
-        _ => return Err(bad(cmd, "`format` must be csv, magicq or pdf")),
+        Some("html") => html(s, p, &plan).into_bytes(),
+        _ => return Err(bad(cmd, "`format` must be csv, magicq, pdf or html")),
     };
     super::write_library(path, &bytes).map_err(|e| bad(cmd, format!("{path}: {e}")))?;
     Ok(json!({ "path": path, "rows": plan.rows.len() }))

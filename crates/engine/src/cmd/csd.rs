@@ -24,6 +24,7 @@ mod connect;
 mod cpsd;
 mod cpsd_out;
 mod group;
+mod html;
 mod library_csv;
 mod mount;
 mod new;
@@ -116,7 +117,7 @@ fn own_specs() -> Vec<CommandSpec> {
             .params("{} → {rows: [{qty, product, code, category, name, labels, notes, brand}]}: placed and unplaced plus device accessories, by category (control gear first) then model id; devices supplied by others and their accessories are left out")
             .noundo(),
         CommandSpec::new("csd.bom.export", "Export Bill of Materials", schedule::run_bom_export)
-            .params("{path, format: csv|pdf, footer?: [lines printed under the PDF table] (default the title block's project, venue, drawn by, date and rev)} → {path, rows}")
+            .params("{path, format: csv|pdf|html, footer?: [lines printed under the PDF table] (default the title block's project, venue, drawn by, date and rev)} → {path, rows}")
             .noundo(),
         CommandSpec::new("csd.device.mode", "Set Device DMX Mode", patch::run_device_mode)
             .params("{handles? (default the selection), mode: a mode name the product offers (empty or null = the product's largest)} → {changed}"),
@@ -126,7 +127,7 @@ fn own_specs() -> Vec<CommandSpec> {
         CommandSpec::new("csd.patch.setup", "DMX Patch Setup", patch::run_patch_setup)
             .params("{order?: drawing|name|product|position, addressing?: bool} → {order, addressing}; saves the patch order and the addressing switch with the drawing (csd.patch and its export use them; addressing off patches nothing)"),
         CommandSpec::new("csd.patch.export", "Export DMX Patch", patch::run_patch_export)
-            .params("{path, format: csv|magicq, order?} → {path, rows}; magicq is MagicQ's Fixture Patch CSV (Head No, DMX, Position, Hang, Manufacturer, Model, Mode)")
+            .params("{path, format: csv|magicq|pdf|html, order?} → {path, rows}; magicq is MagicQ's Fixture Patch CSV (Head No, DMX, Position, Hang, Manufacturer, Model, Mode)")
             .noundo(),
         CommandSpec::new("csd.arm", "Arm Product", place::run_arm).params("{product: id of a library product} → {product}").noundo(),
         CommandSpec::new("csd.protocol", "Wire Protocol", run_protocol)

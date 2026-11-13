@@ -142,6 +142,22 @@ fn magicq_csv_matches_the_consoles_own_shape() {
 }
 
 #[test]
+fn html_export_groups_by_universe_and_escapes_names() {
+    let mut s = session();
+    place(&mut s, "PIX", [0.0, 0.0], "<script>x</script> & Co");
+    place(&mut s, "PLAIN", [300.0, 0.0], "B");
+    let html = export(&mut s, "html", "drawing");
+    assert!(html.contains("@page { size: letter landscape"));
+    for u in ["Universe 1", "Universe 2", "Universe 3"] {
+        assert!(html.contains(u), "{u}");
+    }
+    assert!(html.contains("continued from &lt;script&gt;x&lt;/script&gt; &amp; Co"));
+    assert!(html.contains("spans 2 universes"));
+    assert!(!html.contains("<script>"));
+    assert!(!html.contains("http"));
+}
+
+#[test]
 fn ascii_folds_accents_and_drops_the_rest() {
     assert_eq!(ascii("ÉPIX Ø – “Ünï” ×2 \u{4e2d}"), "EPIX O - \"Uni\" x2");
 }

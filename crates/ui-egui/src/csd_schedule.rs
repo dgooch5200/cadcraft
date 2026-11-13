@@ -538,16 +538,19 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                     act = Some(Act::Close);
                 }
                 if st.tab == Tab::Bom {
-                    for (label, fmt) in [(crate::tl!("Export PDF"), "pdf"), (crate::tl!("Export CSV"), "csv")] {
+                    for (label, fmt) in [(crate::tl!("Export PDF"), "pdf"), (crate::tl!("Export HTML"), "html"), (crate::tl!("Export CSV"), "csv")] {
                         if ui.add_enabled(can_pick && !l.lines.is_empty(), egui::Button::new(label)).clicked() {
                             act = Some(Act::Export(fmt));
                         }
                     }
                 }
                 if st.tab == Tab::Patch {
-                    for (label, fmt) in
-                        [(crate::tl!("Export PDF"), "pdf"), (crate::tl!("Export MagicQ"), "magicq"), (crate::tl!("Export CSV"), "csv")]
-                    {
+                    for (label, fmt) in [
+                        (crate::tl!("Export PDF"), "pdf"),
+                        (crate::tl!("Export HTML"), "html"),
+                        (crate::tl!("Export MagicQ"), "magicq"),
+                        (crate::tl!("Export CSV"), "csv"),
+                    ] {
                         if ui.add_enabled(can_pick && !l.patch.rows.is_empty(), egui::Button::new(label)).clicked() {
                             act = Some(Act::ExportPatch(fmt));
                         }
@@ -599,7 +602,9 @@ fn apply(app: &mut CadApp, act: Act) {
                 });
                 Ok(Value::Null)
             };
-            if let Some(Err(e)) = app.pick_then(Pick::Save(format!("dmx-patch.{}", if format == "pdf" { "pdf" } else { "csv" })), then) {
+            if let Some(Err(e)) =
+                app.pick_then(Pick::Save(format!("dmx-patch.{}", if matches!(format, "pdf" | "html") { format } else { "csv" })), then)
+            {
                 say(app, Err(e));
             }
         }
