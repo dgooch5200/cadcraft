@@ -4,7 +4,7 @@
 
 use crate::{Product, Protocol, Refusal, WireLink, used};
 use cadcraft_doc::Handle;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Devices per 10Scene bus, not counting the device driving it.
 pub const SCENE10_MAX_DEVICES_PER_SEGMENT: usize = 10;
@@ -43,15 +43,17 @@ fn is_bus_origin(p: &Product) -> bool {
 }
 
 struct Ctx<'a> {
-    devices: &'a [(Handle, &'a Product)],
+    products: HashMap<Handle, &'a Product>,
     links: &'a [WireLink],
+    /// Neighbours of each device per protocol, built once.
+    adj: HashMap<(Protocol, Handle), Vec<Handle>>,
     from: (Handle, &'a Product),
     to: (Handle, &'a Product),
 }
 
 impl Ctx<'_> {
     fn product(&self, h: Handle) -> Option<&Product> {
-        self.devices.iter().find(|(d, _)| *d == h).map(|(_, p)| *p)
+        self.products.get(&h).copied()
     }
 
     /// Members reachable from either end over `protocol` links, crossing only members.
@@ -65,13 +67,7 @@ impl Ctx<'_> {
                 continue;
             }
             out.push(p);
-            for l in self.links.iter().filter(|l| l.protocol == protocol) {
-                if l.from == h {
-                    queue.push(l.to);
-                } else if l.to == h {
-                    queue.push(l.from);
-                }
-            }
+            queue.extend(self.adj.get(&(protocol, h)).into_iter().flatten());
         }
         out
     }
@@ -160,7 +156,18 @@ pub(crate) fn check_rules(
     from: &Product,
     to: &Product,
 ) -> Result<(), Refusal> {
-    let c = Ctx { devices, links, from: (proposed.from, from), to: (proposed.to, to) };
+    let mut products = HashMap::new();
+    for (h, p) in devices {
+        products.entry(*h).or_insert(*p);
+    }
+    let mut adj: HashMap<(Protocol, Handle), Vec<Handle>> = HashMap::new();
+    for l in links {
+        adj.entry((l.protocol, l.from)).or_default().push(l.to);
+        if l.to != l.from {
+            adj.entry((l.protocol, l.to)).or_default().push(l.from);
+        }
+    }
+    let c = Ctx { products, links, adj, from: (proposed.from, from), to: (proposed.to, to) };
     for (id, protocol, check) in RULES {
         if protocol != proposed.protocol {
             continue;

@@ -4,7 +4,7 @@
 
 use crate::{Product, Protocol, WireLink};
 use cadcraft_doc::Handle;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// The most any one run may draw, whatever the supply (ChamSys issue #155). A calibration knob.
 pub const MAX_RUN_WATTS: f64 = 110.0;
@@ -16,8 +16,10 @@ pub struct PoeVerdict {
 }
 
 struct Net<'a> {
-    devices: &'a [(Handle, &'a Product)],
+    products: HashMap<Handle, &'a Product>,
     links: &'a [WireLink],
+    /// Network-cable neighbours of each device, built once.
+    adj: HashMap<Handle, Vec<Handle>>,
 }
 
 fn is_driver(p: &Product) -> bool {
@@ -27,21 +29,28 @@ fn is_load(p: &Product) -> bool {
     p.poe_watts > 0.0
 }
 
-impl Net<'_> {
+impl<'a> Net<'a> {
+    fn new(devices: &'a [(Handle, &'a Product)], links: &'a [WireLink]) -> Self {
+        let mut products = HashMap::new();
+        for (h, p) in devices {
+            products.entry(*h).or_insert(*p);
+        }
+        let mut adj: HashMap<Handle, Vec<Handle>> = HashMap::new();
+        for l in links.iter().filter(|l| l.protocol == Protocol::Network) {
+            adj.entry(l.from).or_default().push(l.to);
+            if l.to != l.from {
+                adj.entry(l.to).or_default().push(l.from);
+            }
+        }
+        Net { products, links, adj }
+    }
+
     fn product(&self, h: Handle) -> Option<&Product> {
-        self.devices.iter().find(|(d, _)| *d == h).map(|(_, p)| *p)
+        self.products.get(&h).copied()
     }
 
     fn neighbours(&self, h: Handle) -> impl Iterator<Item = Handle> + '_ {
-        self.links.iter().filter(|l| l.protocol == Protocol::Network).filter_map(move |l| {
-            if l.from == h {
-                Some(l.to)
-            } else if l.to == h {
-                Some(l.from)
-            } else {
-                None
-            }
-        })
+        self.adj.get(&h).into_iter().flatten().copied()
     }
 
     /// Watts drawn by everything reachable from `start`, never walking back through `exclude`.
@@ -112,7 +121,7 @@ fn warn(message: String) -> Option<PoeVerdict> {
 /// The budget's verdict on adding a PoE cable `from`–`to`. `ceiling` is the biggest per-port supply
 /// in the library, for runs with no supply on them; 0 skips that warning.
 pub fn poe_verdict(devices: &[(Handle, &Product)], links: &[WireLink], from: Handle, to: Handle, ceiling: f64) -> Option<PoeVerdict> {
-    let net = Net { devices, links };
+    let net = Net::new(devices, links);
     let (fp, tp) = (net.product(from)?, net.product(to)?);
     for (driver, dp, load_end) in [(from, fp, to), (to, tp, from)] {
         if is_driver(dp) {
@@ -161,7 +170,7 @@ pub fn max_supply_watts(library: &[Product]) -> f64 {
 
 /// A schedule warning when any port of the supply `driver` carries more than its ceiling.
 pub fn port_overload(devices: &[(Handle, &Product)], links: &[WireLink], driver: Handle) -> Option<String> {
-    let net = Net { devices, links };
+    let net = Net::new(devices, links);
     let p = net.product(driver).filter(|p| is_driver(p))?;
     let worst = net.driver_ports(driver).into_iter().fold(0.0, f64::max);
     (worst > p.poe_port_watts).then(|| format!("A port on {} carries {worst:.1}W (max {}W/port)", p.code, p.poe_port_watts))
