@@ -1,7 +1,7 @@
 //! The Lighting group of the Drafting tool set: the product library as a searchable list. Clicking
 //! a product arms it and starts the interactive `csd.place`, which keeps placing until Enter or Esc.
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 use cadcraft_csd::{Product, Protocol, builtin_products, product_key, split_category};
 use egui::{Color32, Rect, Sense, Stroke, pos2, vec2};
@@ -71,7 +71,7 @@ fn product_row(ui: &mut egui::Ui, t: &Tokens, p: &Product, active: bool) -> bool
 }
 
 /// The products the palette offers: the library, then the built-ins (in no library), minus the hidden.
-fn listed<'a>(library: &'a [Product], hidden: &HashSet<String>) -> Vec<&'a Product> {
+fn listed<'a>(library: &'a [Product], hidden: &BTreeSet<String>) -> Vec<&'a Product> {
     library.iter().chain(builtin_products()).filter(|p| !hidden.contains(&product_key(&p.id))).collect()
 }
 
@@ -240,7 +240,7 @@ pub(super) fn body(app: &mut CadApp, ui: &mut egui::Ui) {
     let mut f = ui.ctx().data_mut(|d| d.get_temp::<Filter>(id)).unwrap_or_default();
     let library = app.session.csd_library.clone();
     // The built-ins are in no library, so they are listed after it.
-    let all = listed(&library, &app.ui.csd_lib.hidden);
+    let all = listed(&library, &app.ui.csd_hidden);
     toolbar(app, ui, &t);
     ui.add_space(4.0);
     // The file actions share the search row: a row of their own pushes the Tool Sets below down.
@@ -331,11 +331,19 @@ mod tests {
     #[test]
     fn hidden_products_are_not_listed() {
         let lib = cadcraft_csd::sample_products();
-        let all = listed(&lib, &HashSet::new()).len();
-        let hidden = HashSet::from([product_key(&lib[0].id)]);
+        let all = listed(&lib, &BTreeSet::new()).len();
+        let hidden = BTreeSet::from([product_key(&lib[0].id)]);
         let shown = listed(&lib, &hidden);
         assert_eq!(shown.len(), all - 1);
         assert!(shown.iter().all(|p| p.id != lib[0].id));
+    }
+
+    #[test]
+    fn hidden_products_survive_a_restart() {
+        let mut ui = crate::UiState::default();
+        ui.csd_hidden.insert("rogue-r1".into());
+        let back: crate::UiState = serde_json::from_str(&serde_json::to_string(&ui).unwrap()).unwrap();
+        assert!(back.csd_hidden.contains("rogue-r1"));
     }
 
     #[test]

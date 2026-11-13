@@ -128,6 +128,9 @@ pub struct UiState {
     pub start_tab: bool,
     #[serde(skip)]
     pub csd_lib: csd_library::State,
+    /// Products this person hides from the Lighting palette, by `cadcraft_csd::product_key`. A view
+    /// preference, not a product field: never in the library or its CSV, and placing by command ignores it.
+    pub csd_hidden: std::collections::BTreeSet<String>,
     #[serde(skip)]
     pub csd_sched: csd_schedule::State,
     pub dialog: Option<String>,
@@ -223,6 +226,7 @@ impl Default for UiState {
             in_window_menu: !cfg!(target_os = "macos"),
             start_tab: false,
             csd_lib: Default::default(),
+            csd_hidden: Default::default(),
             csd_sched: Default::default(),
             dialog: None,
             history_lines: 3,

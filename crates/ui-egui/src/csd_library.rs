@@ -25,9 +25,6 @@ pub struct State {
     sel: Option<usize>,
     sort: Option<(usize, bool)>,
     msg: Option<(bool, String)>,
-    /// Products this person hides from the Lighting palette, by `product_key`. A view preference, not
-    /// a product field: it is never applied, saved or exported, and placing by command ignores it.
-    pub(crate) hidden: HashSet<String>,
     /// (drawings open, active drawing): a change means a drawing tab took over.
     seen: (usize, usize),
 }
@@ -197,6 +194,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let (mut do_apply, mut do_revert, mut do_open, mut do_save) = (false, false, false, false);
     let (mut do_import, mut do_export) = (false, false);
     let st = &mut app.ui.csd_lib;
+    let hidden = &mut app.ui.csd_hidden;
     let mut cats: Vec<String> = st.rows.iter().map(|p| p.cat.clone()).collect::<HashSet<_>>().into_iter().collect();
     cats.sort();
 
@@ -332,13 +330,13 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                     r.col(|ui| {
                         let Some(p) = st.rows.get_mut(ri) else { return };
                         if *col == Col::Show {
-                            let mut hide = st.hidden.contains(&product_key(&p.id));
+                            let mut hide = hidden.contains(&product_key(&p.id));
                             if ui.checkbox(&mut hide, "").on_hover_text("Hide from the Lighting palette").changed() {
                                 let key = product_key(&p.id);
                                 if hide {
-                                    st.hidden.insert(key)
+                                    hidden.insert(key)
                                 } else {
-                                    st.hidden.remove(&key)
+                                    hidden.remove(&key)
                                 };
                             }
                             return;
