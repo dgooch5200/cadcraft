@@ -230,6 +230,23 @@ pub fn lookup<'a>(library: &'a [Product], id: &str) -> Option<&'a Product> {
     builtin_products().iter().chain(library).find(|p| p.id == id)
 }
 
+/// A product's `cat` as (family, sub-category): `Rogue — Wash` is `("Rogue", "Wash")`, `Rogue` is
+/// `("Rogue", "")`. The separator is an em or en dash between spaces (the web app's `splitCategory`).
+pub fn split_category(cat: &str) -> (String, String) {
+    let (mut family, mut sub) = (Vec::new(), Vec::new());
+    for word in cat.split_whitespace() {
+        let dash = word == "—" || word == "–";
+        if sub.is_empty() && dash && !family.is_empty() {
+            sub.push(String::new());
+        } else if sub.is_empty() {
+            family.push(word);
+        } else {
+            sub.push(if dash { "—" } else { word }.to_string());
+        }
+    }
+    (family.join(" "), sub.join(" ").trim().to_string())
+}
+
 /// The identity two libraries are compared on: the id with each run of whitespace turned into `_`
 /// (the web app's `productKey`). Case-sensitive.
 pub fn product_key(id: &str) -> String {

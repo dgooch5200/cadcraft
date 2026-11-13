@@ -609,6 +609,16 @@ fn poe_budget_warns_over_the_port_and_refuses_over_the_cap() {
 }
 
 #[test]
+fn split_category_reads_family_and_sub() {
+    let s = split_category;
+    assert_eq!(s("Rogue — Wash"), ("Rogue".into(), "Wash".into()));
+    assert_eq!(s("Rogue – Wash — Zoom"), ("Rogue".into(), "Wash — Zoom".into()));
+    assert_eq!(s("Moving  Lights"), ("Moving Lights".into(), String::new()));
+    assert_eq!(s("Rogue-Wash"), ("Rogue-Wash".into(), String::new()));
+    assert_eq!(s(""), (String::new(), String::new()));
+}
+
+#[test]
 fn product_key_collapses_whitespace_and_keeps_case() {
     assert_eq!(product_key("Rogue  R2 \t Wash"), "Rogue_R2_Wash");
     assert_eq!(product_key("a b"), product_key("a  b"));

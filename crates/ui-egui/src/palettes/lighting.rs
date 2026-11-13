@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use cadcraft_csd::{Product, Protocol, builtin_products, product_key};
+use cadcraft_csd::{Product, Protocol, builtin_products, product_key, split_category};
 use egui::{Color32, Rect, Sense, Stroke, pos2, vec2};
 use serde_json::json;
 
@@ -17,13 +17,57 @@ const LIST_H: f32 = 180.0;
 #[derive(Clone, Default)]
 struct Filter {
     query: String,
-    /// Empty is "All".
-    category: String,
 }
 
-fn matches(p: &Product, f: &Filter, needle: &str) -> bool {
-    (f.category.is_empty() || p.cat == f.category)
-        && (needle.is_empty() || [&p.id, &p.name, &p.code].iter().any(|s| s.to_lowercase().contains(needle)))
+fn matches(p: &Product, needle: &str) -> bool {
+    needle.is_empty() || [&p.id, &p.name, &p.code].iter().any(|s| s.to_lowercase().contains(needle))
+}
+
+type Folders<'a> = Vec<(String, Vec<(String, Vec<&'a Product>)>)>;
+
+/// Family folders in first-seen order, each with its sub-category folders (the family's own products
+/// under an empty name), from the products' `Family — Category` text.
+fn folders<'a>(products: &[&'a Product]) -> Folders<'a> {
+    let mut out: Folders<'a> = Vec::new();
+    for p in products {
+        let (family, sub) = split_category(&p.cat);
+        let fi = out.iter().position(|f| f.0 == family).unwrap_or_else(|| {
+            out.push((family, Vec::new()));
+            out.len() - 1
+        });
+        let Some(subs) = out.get_mut(fi).map(|f| &mut f.1) else { continue };
+        let si = subs.iter().position(|s| s.0 == sub).unwrap_or_else(|| {
+            subs.push((sub, Vec::new()));
+            subs.len() - 1
+        });
+        if let Some(s) = subs.get_mut(si) {
+            s.1.push(p);
+        }
+    }
+    out
+}
+
+/// One product row; true when clicked.
+fn product_row(ui: &mut egui::Ui, t: &Tokens, p: &Product, active: bool) -> bool {
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
+    let pt = ui.painter();
+    if active {
+        pt.rect_filled(r, 0.0, t.selection);
+    } else if resp.hovered() {
+        pt.rect_filled(r, 0.0, t.hover);
+    }
+    let sw = Rect::from_min_size(pos2(r.left() + 10.0, r.center().y - 11.0), vec2(30.0, 22.0));
+    pt.rect_filled(sw, 2.0, rgb(p.color));
+    pt.rect_stroke(sw, 2.0, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    let x = sw.right() + 8.0;
+    pt.text(pos2(x, r.center().y - 8.0), egui::Align2::LEFT_CENTER, &p.code, egui::FontId::proportional(14.0), t.text);
+    let name = pt.layout_no_wrap(p.name.clone(), egui::FontId::proportional(12.5), t.text_dim);
+    let clip = Rect::from_min_max(pos2(x, r.top()), pos2(r.right() - 8.0, r.bottom()));
+    pt.with_clip_rect(clip).galley(pos2(x, r.center().y + 2.0), name, t.text_dim);
+    let clicked = resp.clicked();
+    let tip = format!("{}\n{}", if p.brand.is_empty() { &p.name } else { &p.brand }, port_summary(p));
+    resp.on_hover_text(tip.trim_end());
+    clicked
 }
 
 /// The products the palette offers: the library, then the built-ins (in no library), minus the hidden.
@@ -197,12 +241,6 @@ pub(super) fn body(app: &mut CadApp, ui: &mut egui::Ui) {
     let library = app.session.csd_library.clone();
     // The built-ins are in no library, so they are listed after it.
     let all = listed(&library, &app.ui.csd_lib.hidden);
-    let mut cats: Vec<&str> = Vec::new();
-    for p in &all {
-        if !cats.contains(&p.cat.as_str()) {
-            cats.push(&p.cat);
-        }
-    }
     toolbar(app, ui, &t);
     ui.add_space(4.0);
     // The file actions share the search row: a row of their own pushes the Tool Sets below down.
@@ -223,57 +261,35 @@ pub(super) fn body(app: &mut CadApp, ui: &mut egui::Ui) {
     if let Some(cmd) = file {
         let _ = app.run(cmd, serde_json::Value::Null);
     }
-    ui.add_space(3.0);
-    ui.horizontal(|ui| {
-        ui.add_space(8.0);
-        let shown = if f.category.is_empty() { crate::tl!("All").to_string() } else { f.category.clone() };
-        craft_ui::ComboBox::from_id_salt(id.with("cat"))
-            .selected_text(shown)
-            .width(ui.available_width() - 8.0)
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut f.category, String::new(), crate::tl!("All"));
-                for c in &cats {
-                    ui.selectable_value(&mut f.category, c.to_string(), *c);
-                }
-            })
-            .response
-            .accessible_name(crate::tl!("Category"));
-    });
     ui.add_space(4.0);
     let needle = f.query.trim().to_lowercase();
-    let hits: Vec<&Product> = all.iter().copied().filter(|p| matches(p, &f, &needle)).collect();
+    let hits: Vec<&Product> = all.iter().copied().filter(|p| matches(p, &needle)).collect();
+    let searching = !needle.is_empty();
     let placing = app.session.running.as_ref().is_some_and(|r| r.id == "csd.place");
+    let armed = if placing { app.session.csd_armed.clone() } else { None };
     let mut picked = None;
-    egui::ScrollArea::vertical().id_salt(id.with("list")).max_height(LIST_H).auto_shrink([false, true]).show_rows(
-        ui,
-        ROW_H,
-        hits.len(),
-        |ui, range| {
-            for p in hits.get(range).unwrap_or_default() {
-                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
-                let active = placing && app.session.csd_armed.as_deref() == Some(p.id.as_str());
-                let pt = ui.painter();
-                if active {
-                    pt.rect_filled(r, 0.0, t.selection);
-                } else if resp.hovered() {
-                    pt.rect_filled(r, 0.0, t.hover);
-                }
-                let sw = Rect::from_min_size(pos2(r.left() + 10.0, r.center().y - 11.0), vec2(30.0, 22.0));
-                pt.rect_filled(sw, 2.0, rgb(p.color));
-                pt.rect_stroke(sw, 2.0, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-                let x = sw.right() + 8.0;
-                pt.text(pos2(x, r.center().y - 8.0), egui::Align2::LEFT_CENTER, &p.code, egui::FontId::proportional(14.0), t.text);
-                let name = pt.layout_no_wrap(p.name.clone(), egui::FontId::proportional(12.5), t.text_dim);
-                let clip = Rect::from_min_max(pos2(x, r.top()), pos2(r.right() - 8.0, r.bottom()));
-                pt.with_clip_rect(clip).galley(pos2(x, r.center().y + 2.0), name, t.text_dim);
-                if resp.clicked() {
+    egui::ScrollArea::vertical().id_salt(id.with("list")).max_height(LIST_H).auto_shrink([false, true]).show(ui, |ui| {
+        // A search opens every folder, so a hit is never inside a closed one.
+        let open = searching.then_some(true);
+        let mut rows = |ui: &mut egui::Ui, products: &[&Product]| {
+            for p in products {
+                if product_row(ui, &t, p, armed.as_deref() == Some(p.id.as_str())) {
                     picked = Some(p.id.clone());
                 }
-                let tip = format!("{}\n{}", if p.brand.is_empty() { &p.name } else { &p.brand }, port_summary(p));
-                resp.on_hover_text(tip.trim_end());
             }
-        },
-    );
+        };
+        for (family, subs) in folders(&hits) {
+            egui::CollapsingHeader::new(&family).id_salt(id.with(("family", &family))).open(open).show(ui, |ui| {
+                for (sub, products) in &subs {
+                    if sub.is_empty() {
+                        rows(ui, products);
+                    } else {
+                        egui::CollapsingHeader::new(sub).id_salt(id.with(("sub", &family, sub))).open(open).show(ui, |ui| rows(ui, products));
+                    }
+                }
+            });
+        }
+    });
     ui.ctx().data_mut(|d| d.insert_temp(id, f));
     if let Some(id) = picked {
         let was_active = placing && app.session.csd_armed.as_deref() == Some(id.as_str());
@@ -291,19 +307,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn search_is_case_insensitive_on_id_name_and_code_and_the_category_narrows() {
+    fn search_is_case_insensitive_on_id_name_and_code() {
         let lib = cadcraft_csd::sample_products();
-        let hit = |query: &str, category: &str| {
-            let f = Filter { query: query.into(), category: category.into() };
-            lib.iter().filter(|p| matches(p, &f, &f.query.to_lowercase())).count()
-        };
-        assert_eq!(hit("", ""), lib.len());
+        let hit = |query: &str| lib.iter().filter(|p| matches(p, &query.to_lowercase())).count();
+        assert_eq!(hit(""), lib.len());
         let first = &lib[0];
-        assert!(hit(&first.code.to_uppercase(), "") >= 1);
-        assert!(hit(&first.name.to_lowercase(), "") >= 1);
-        assert!(hit(&first.id, &first.cat) >= 1);
-        assert_eq!(hit(&first.id, "no such category"), 0);
-        assert_eq!(hit("zzzz-nothing", ""), 0);
+        assert!(hit(&first.code.to_uppercase()) >= 1);
+        assert!(hit(&first.name.to_lowercase()) >= 1);
+        assert_eq!(hit("zzzz-nothing"), 0);
+    }
+
+    #[test]
+    fn products_group_into_family_then_category_folders() {
+        let make = |cat: &str| Product { id: cat.into(), cat: cat.into(), ..Product::default() };
+        let (a, b, c, d) = (make("Rogue — Wash"), make("Rogue — Spot"), make("Rogue"), make("Rogue — Wash"));
+        let f = folders(&[&a, &b, &c, &d]);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].0, "Rogue");
+        let subs: Vec<(&str, usize)> = f[0].1.iter().map(|s| (s.0.as_str(), s.1.len())).collect();
+        assert_eq!(subs, [("Wash", 2), ("Spot", 1), ("", 1)]);
     }
 
     #[test]
