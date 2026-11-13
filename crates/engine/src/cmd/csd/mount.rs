@@ -1,14 +1,14 @@
 //! Drag to mount: a single device moved so its card lies wholly inside another device's card is
 //! mounted in it, and one moved out of its host is unmounted (the web app's `mountTargetAt`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use cadcraft_csd::Product;
 use cadcraft_doc::{Drawing, EntityKind, EntityStore, Handle, Insert};
 use cadcraft_geom::Vec2;
 
-use super::{card_of, mount_cycles, mount_of, product_attr, put_attr, spaces};
+use super::{card_of, mount_cycles, mount_of, product_attr, put_attr, spaces, wires};
 
 /// The card's axis-aligned box as `(min, max)`; the insert is its centre.
 fn card_box(i: &Insert, products: &[Product]) -> (Vec2, Vec2) {
@@ -88,6 +88,47 @@ pub(super) fn stack(doc: &mut Arc<Drawing>) {
                     store.bring_to_front(h);
                 });
             }
+        }
+    }
+}
+
+/// The wires with an end on a mounted device.
+fn lifted(store: &EntityStore) -> HashSet<Handle> {
+    let mounted = |h: Handle| matches!(store.get(h).map(|e| &e.kind), Some(EntityKind::Insert(i)) if mount_of(store, i).is_some());
+    wires(store).into_iter().filter(|(_, l)| mounted(l.from) || mounted(l.to)).map(|(h, _)| h).collect()
+}
+
+/// Cables with an end on a mounted device are painted over every card, so a rack does not hide
+/// the runs to what it holds (`liftedConnections`); one whose end was unmounted goes back under.
+/// Other cables are left where they are. Run after [`stack`] and before the wires' decorations are
+/// raised.
+pub(super) fn lift_wires(before: &Drawing, doc: &mut Arc<Drawing>) {
+    for space in spaces(doc) {
+        let (Some(store), Some(old)) = (doc.space(&space), before.space(&space)) else { continue };
+        let now = lifted(store);
+        let was = lifted(old);
+        if now.is_empty() && was.is_empty() {
+            continue;
+        }
+        let cards: Vec<usize> =
+            store.iter().enumerate().filter(|(_, e)| matches!(&e.kind, EntityKind::Insert(i) if product_attr(i).is_some())).map(|(n, _)| n).collect();
+        let (Some(&first), Some(&last)) = (cards.first(), cards.last()) else { continue };
+        let at = |want: &HashSet<Handle>, over: bool| -> Vec<Handle> {
+            store
+                .iter()
+                .enumerate()
+                .filter(|(n, e)| want.contains(&e.handle) && if over { *n < last } else { *n > first })
+                .map(|(_, e)| e.handle)
+                .collect()
+        };
+        let (up, down) = (at(&now, true), at(&was.difference(&now).copied().collect(), false));
+        if let Some(store) = Arc::make_mut(doc).space_mut(&space) {
+            down.into_iter().rev().for_each(|h| {
+                store.send_to_back(h);
+            });
+            up.into_iter().for_each(|h| {
+                store.bring_to_front(h);
+            });
         }
     }
 }

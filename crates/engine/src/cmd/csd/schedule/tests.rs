@@ -225,6 +225,23 @@ fn a_mounted_device_is_painted_after_its_host() {
 }
 
 #[test]
+fn a_cable_to_a_mounted_device_is_lifted_over_the_cards_and_dropped_on_unmount() {
+    let mut s = Session::new();
+    let rack = place(&mut s, CONSOLE, [0.0, 0.0]);
+    let inner = place(&mut s, NODE, [600.0, 0.0]);
+    let other = place(&mut s, NODE, [1200.0, 0.0]);
+    let wire = json!({ "from": inner.hex(), "fromSide": "rgt", "to": other.hex(), "toSide": "lft", "protocol": "dmx" });
+    let w = Handle::parse_hex(s.execute("csd.connect", &wire).unwrap()["handle"].as_str().unwrap()).unwrap();
+    let at = |s: &Session, h| s.doc().unwrap().space(&s.space()).unwrap().handles().iter().position(|x| *x == h).unwrap();
+    let over = |s: &Session| [rack, inner, other].iter().all(|c| at(s, w) > at(s, *c));
+    assert!(!over(&s));
+    set(&mut s, inner, json!({ "mount": rack.hex() })).unwrap();
+    assert!(over(&s));
+    set(&mut s, inner, json!({ "mount": "" })).unwrap();
+    assert!(!over(&s));
+}
+
+#[test]
 fn builtin_blocks_place_but_are_on_no_list() {
     let mut s = Session::new();
     let node = place(&mut s, NODE, [0.0, 0.0]);

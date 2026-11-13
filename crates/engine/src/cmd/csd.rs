@@ -1301,6 +1301,7 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
         if let Some(b) = before {
             mount::auto_mount(b, &mut st.doc, &library);
             mount::stack(&mut st.doc);
+            mount::lift_wires(b, &mut st.doc);
             carry_mounted(b, &mut st.doc);
         }
         refresh(&mut st.doc, &library, ortho);
