@@ -45,3 +45,13 @@ mod viewport_double_click_selection;
 mod workspace_focus;
 mod workspaces;
 mod zoomed_far_in;
+
+/// A session that draws lighting content at one unit per ChamSys pixel, for tests written in its
+/// coordinates.
+fn px_session() -> cadcraft_engine::Session {
+    let mut s = cadcraft_engine::Session::new();
+    if let Ok(d) = s.doc_mut() {
+        d.header.set_f64("CSDPX", 1.0);
+    }
+    s
+}
