@@ -413,7 +413,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs csd-units-a: place_card must insert at scale k"]
     fn an_inch_drawing_places_an_imported_device_at_its_pixels_over_96_and_round_trips() {
         let file = json!({ "nodes": [
             { "id": "a", "prodId": PRODUCT, "x": 100, "y": 100 },
