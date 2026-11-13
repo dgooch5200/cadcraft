@@ -21,6 +21,13 @@ fn choices(types: &[Value], picks: &[String]) -> Value {
     Value::Object(m)
 }
 
+/// Library product ids for a row's combo: its suggestions first, then the rest, each once.
+fn ordered<'a>(suggestions: &'a [String], library: &'a [String]) -> (Vec<&'a str>, Vec<&'a str>) {
+    let first: Vec<&str> = library.iter().map(String::as_str).filter(|id| suggestions.iter().any(|s| s == id)).collect();
+    let rest = library.iter().map(String::as_str).filter(|id| !first.contains(id)).collect();
+    (first, rest)
+}
+
 pub fn dialog(app: &mut CadApp, ctx: &egui::Context, spec: &str, open: &mut bool) {
     let path = spec.strip_prefix(DIALOG).unwrap_or_default();
     let sid = egui::Id::unique("lproreview").with(path);
@@ -44,6 +51,8 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, spec: &str, open: &mut bool
         Some(p) => p.name.clone(),
         None => crate::i18n::t("Skip").to_string(),
     };
+    let ids: Vec<String> = library.iter().filter(|p| !cadcraft_csd::is_builtin(&p.id)).map(|p| p.id.clone()).collect();
+    let names: std::collections::HashMap<&str, &str> = library.iter().map(|p| (p.id.as_str(), p.name.as_str())).collect();
     let (mut keep, mut import, mut cancel) = (*open, false, false);
     egui::Window::new(crate::tl!("Import Luminary Project")).id(egui::Id::unique("Import Luminary review")).open(&mut keep).collapsible(false).show(
         ctx,
@@ -56,13 +65,26 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, spec: &str, open: &mut bool
                     ui.end_row();
                     for (t, pick) in rv.types.iter().zip(rv.picks.iter_mut()) {
                         let name = t["name"].as_str().filter(|n| !n.is_empty()).or(t["luminaire"].as_str()).unwrap_or_default();
-                        ui.label(name);
+                        let unsure = t["matched"].as_bool() == Some(false);
+                        let shown = if unsure { format!("\u{26a0} {name}") } else { name.to_string() };
+                        let l = ui.label(shown);
+                        if unsure {
+                            l.on_hover_text(crate::tl!("No sure match: check the product"));
+                        }
                         ui.label(t["quantity"].as_u64().unwrap_or_default().to_string());
                         let key = t["key"].as_str().unwrap_or_default();
                         craft_ui::ComboBox::from_id_salt(("lproreview_pick", key)).selected_text(label(pick)).width(240.0).show_ui(ui, |ui| {
                             ui.selectable_value(pick, String::new(), crate::tl!("Skip"));
-                            for p in library.iter().filter(|p| !cadcraft_csd::is_builtin(&p.id)) {
-                                ui.selectable_value(pick, p.id.clone(), &p.name);
+                            let sugg: Vec<String> =
+                                t["suggestions"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(String::from)).collect();
+                            let (first, rest) = ordered(&sugg, &ids);
+                            for (n, group) in [first, rest].into_iter().enumerate() {
+                                if n == 1 {
+                                    ui.separator();
+                                }
+                                for id in group {
+                                    ui.selectable_value(pick, id.to_string(), names.get(id).copied().unwrap_or(id));
+                                }
                             }
                         });
                         ui.end_row();
@@ -97,6 +119,14 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, spec: &str, open: &mut bool
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn suggestions_come_first_without_duplicates() {
+        let lib: Vec<String> = ["a", "b", "c", "d"].map(String::from).into();
+        let sugg: Vec<String> = ["c", "a", "zz"].map(String::from).into();
+        let (first, rest) = ordered(&sugg, &lib);
+        assert_eq!((first, rest), (vec!["a", "c"], vec!["b", "d"]));
+    }
 
     #[test]
     fn choices_map_each_type_key_to_its_pick() {
