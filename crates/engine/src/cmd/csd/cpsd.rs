@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use cadcraft_csd::{MAX_WIRE_POINTS, OFF_PAGE_ID, Paper, Protocol, Side, WireLink, card_size, is_builtin};
+use cadcraft_csd::{MAX_COORD, MAX_WIRE_POINTS, OFF_PAGE_ID, Paper, Protocol, Side, WireLink, card_size, is_builtin};
 use cadcraft_geom::Vec2;
 use serde_json::{Value, json};
 
@@ -18,7 +18,6 @@ const MAX_BYTES: usize = 50 * 1024 * 1024;
 const MAX_DEVICES: usize = 20_000;
 const MAX_WIRES: usize = 50_000;
 const MAX_PAGES: usize = 1_000;
-const MAX_COORD: f64 = 1.0e7;
 /// ChamSys keeps the page's top-left corner at (30, 30) of its y-down canvas.
 const PAGE_ORIGIN: f64 = 30.0;
 const UNPLACED_PAGE: &str = "unplaced";
@@ -90,7 +89,17 @@ impl Skips {
     }
 }
 
+/// A failed import leaves the routing mode as it was; the wires it drew need the file's mode while it runs.
 pub(super) fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
+    let ortho = s.settings.orthomode;
+    let r = import(s, p);
+    if r.is_err() {
+        s.settings.orthomode = ortho;
+    }
+    r
+}
+
+fn import(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad(CMD, "`path` is required"))?;
     let bytes = read(path).map_err(|e| bad(CMD, format!("{path}: {e}")))?;
     let file: Value = serde_json::from_slice(&bytes).map_err(|e| bad(CMD, format!("{path}: not a ChamSys project file ({e})")))?;
@@ -155,7 +164,7 @@ pub(super) fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
             continue;
         }
         let size = |k| number(d, k).filter(|n| *n > 0.0);
-        let (w, h) = (size("w"), size("h"));
+        let (w, h) = (size("w").map(|w| w.clamp(MIN_SIZE, MAX_SIZE)), size("h").map(|h| h.clamp(MIN_SIZE, MAX_SIZE)));
         let (x, y) = (number(d, "x").unwrap_or(100.0), number(d, "y").unwrap_or(100.0));
         let product = resolve(&library, &pid).into_owned();
         let two_line = !is_builtin(&product.id)
@@ -184,8 +193,8 @@ pub(super) fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
         s.doc_mut()?.modify_entity(handle, |e| {
             let EntityKind::Insert(i) = &mut e.kind else { return };
             if w.is_some() || h.is_some() {
-                i.scale.x = w.map_or(1.0, |w| w.clamp(MIN_SIZE, MAX_SIZE) / card.x);
-                i.scale.y = h.map_or(1.0, |h| h.clamp(MIN_SIZE, MAX_SIZE) / card.y);
+                i.scale.x = w.map_or(1.0, |w| w / card.x);
+                i.scale.y = h.map_or(1.0, |h| h / card.y);
             }
             if !notes.is_empty() {
                 put_attr(i, "NOTES", notes);
@@ -234,7 +243,7 @@ pub(super) fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
             continue;
         }
         let protocol = match text(c, "type").as_str() {
-            "poe" | "PoE" => Protocol::Power,
+            "poe" | "PoE" => Protocol::Network,
             id => Protocol::from_id(id).unwrap_or_else(|| {
                 skips.add("wire of an unknown type (drawn as network)");
                 Protocol::Network
@@ -398,6 +407,19 @@ mod tests {
         assert!(s.settings.orthomode);
         let (s, _) = import(r#"{"ortho":"yes"}"#);
         assert!(!s.settings.orthomode);
+    }
+
+    #[test]
+    fn a_huge_card_size_is_clamped_before_centring_and_poe_wires_are_network() {
+        let (s, r) = import(
+            r#"{"nodes":[{"id":"a","prodId":"CHAMMQ50","x":0,"y":0,"w":1e9,"h":1e9},{"id":"b","prodId":"CHAMMQ50","x":0,"y":0}],"conns":[{"from":"a","to":"b","type":"poe"}]}"#,
+        );
+        assert_eq!(r["devices"], 2, "{r}");
+        let lib = s.csd_library.clone();
+        let store = s.doc().unwrap().space(&s.space()).unwrap();
+        assert!(super::super::devices(store, &lib).iter().all(|d| d.insert.insert.x.abs() < 2000.0));
+        let links = super::super::wires(store);
+        assert!(links.iter().all(|(_, l)| l.protocol == Protocol::Network));
     }
 
     #[test]

@@ -9,6 +9,7 @@ use crate::{Result, Session};
 pub(super) fn run_new(s: &mut Session, p: &Value) -> Result<Value> {
     let previous = s.active;
     let template = str_param(p, "template");
+    let ortho = s.settings.orthomode;
     let i = s.new_drawing(false);
     let built: Result<Value> = (|| {
         if let Some(path) = template {
@@ -24,6 +25,7 @@ pub(super) fn run_new(s: &mut Session, p: &Value) -> Result<Value> {
             // A template that cannot be read leaves no half-built drawing behind.
             s.docs.remove(i);
             s.active = previous.min(s.docs.len().saturating_sub(1));
+            s.settings.orthomode = ortho;
             s.bump_doc_epoch();
             Err(e)
         }
@@ -45,6 +47,17 @@ mod tests {
         assert_eq!(s.docs.len(), before + 1);
         assert!(s.execute("csd.project", &json!({})).unwrap()["exists"].as_bool().unwrap());
         assert!(s.execute("csd.legend", &json!({})).is_ok());
+    }
+
+    #[test]
+    fn a_failed_new_drawing_keeps_the_routing_mode() {
+        let mut s = Session::new();
+        let path = std::env::temp_dir().join(format!("csd-new-ortho-{}.cpsd", std::process::id()));
+        std::fs::write(&path, r#"{"ortho":true}"#).unwrap();
+        let p = json!({ "template": path.to_str().unwrap(), "paper": "a4" });
+        assert!(s.execute("csd.new", &p).is_err());
+        let _ = std::fs::remove_file(&path);
+        assert!(!s.settings.orthomode);
     }
 
     #[test]
