@@ -1672,3 +1672,11 @@ menu	View	视图
 	Set Devices Properties	设置设备属性
 	Hidden	隐藏
 	Hide from the Lighting palette	从照明面板中隐藏
+	All {n} {code} on this drawing	本图纸中全部 {n} 个 {code}
+	Choose a product	选择产品
+	Connect	连接
+	Not in the library	不在产品库中
+	Position, mounting and accessories stay as they are. Cables the new product cannot carry are removed — undo puts everything back in one step.	位置、安装和配件保持不变。新产品无法承载的线缆会被移除，放弃操作可一步恢复全部内容。
+	Snap grid size	捕捉栅格尺寸
+	The library's size for {name}. Taller sides fan more cables apart.	产品库中 {name} 的尺寸。侧面越高，线缆散开越明显。
+	pooled	共享
