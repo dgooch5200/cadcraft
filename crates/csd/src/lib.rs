@@ -10,10 +10,12 @@ use cadcraft_geom::Vec2;
 
 mod card;
 mod library;
+mod rules;
 mod wire;
 
 pub use card::*;
 pub use library::*;
+pub use rules::*;
 pub use wire::*;
 
 /// The xdata application name of wires.
@@ -317,15 +319,17 @@ pub fn deco_from_xdata(tags: &[RawTag]) -> Option<(Handle, Deco)> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Refusal {
     pub code: &'static str,
+    /// The ChamSys rule id, for `rule-violation` refusals.
+    pub rule_id: Option<&'static str>,
     pub message: String,
 }
 
 fn refuse(code: &'static str, message: String) -> Result<(), Refusal> {
-    Err(Refusal { code, message })
+    Err(Refusal { code, rule_id: None, message })
 }
 
 /// Self-connection, unknown device, port existence and capacity (including the asymmetric RJ45
-/// pool). ponytail: no PoE wattage budget and no hardware rules; port those from connect.ts when needed.
+/// pool). then the hardware rules in `rules.rs`. ponytail: no PoE wattage budget; port it from poe.ts when needed.
 pub fn can_connect(devices: &[(Handle, &Product)], links: &[WireLink], proposed: &WireLink) -> Result<(), Refusal> {
     let (a, b, p) = (proposed.from, proposed.to, proposed.protocol);
     if a == b {
@@ -356,7 +360,7 @@ pub fn can_connect(devices: &[(Handle, &Product)], links: &[WireLink], proposed:
             return refuse("ports-exhausted", message);
         }
     }
-    Ok(())
+    rules::check_rules(devices, links, proposed, from, to)
 }
 
 /// Five products from the ChamSys library, for tests and the first run.
@@ -382,7 +386,7 @@ pub fn sample_products() -> Vec<Product> {
     };
     vec![
         p("CHAMMQ50", "MagicQ MagicQ50 Compact Console", "MQ50", &[(Protocol::Dmx, 0, 4), (Protocol::NetData, 0, 2)], 0.0, 0.0, 0x1565c0),
-        p("logic-poex", "Logic POE-X Converter", "POE-X", &[(Protocol::Network, 0, 3)], 75.0, 0.0, 0x0277bd),
+        p("logic-poe-switch", "Logic PoE Switch", "POE-SW", &[(Protocol::Network, 0, 3)], 75.0, 0.0, 0x0277bd),
         p("epix-flex-drive", "EPIX Flex Drive", "EPIX FLEX DRIVE", &[(Protocol::Dmx, 1, 1), (Protocol::NetData, 1, 1)], 0.0, 0.0, 0x65edfa),
         p("logic-ar111m", "Logic AR111 Downlight M RGBW (45W)", "AR111-DNM", &[(Protocol::Network, 0, 2)], 0.0, 45.0, 0x0277bd),
         p("b565fc", "Ovation B-565FC", "B-565FC", &[(Protocol::Dmx, 1, 0)], 0.0, 0.0, 0xf7ae41),

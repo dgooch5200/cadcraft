@@ -66,7 +66,7 @@ fn placing_a_product_takes_one_off_its_unplaced_row_and_place_arms_it() {
 fn schedule_lists_control_gear_first_with_ports_connections_and_poe() {
     let mut s = Session::new();
     let missing = place(&mut s, "OVCYC1FCV2", [0.0, 200.0]);
-    let poe = place(&mut s, "logic-poex", [0.0, 0.0]);
+    let poe = place(&mut s, "logic-poe-switch", [0.0, 0.0]);
     let lamp = place(&mut s, "logic-ar111m", [200.0, 0.0]);
     let p = json!({ "from": poe.hex(), "fromSide": "rgt", "to": lamp.hex(), "toSide": "lft", "protocol": "network" });
     s.execute("csd.connect", &p).unwrap();

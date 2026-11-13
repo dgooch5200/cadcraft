@@ -398,3 +398,95 @@ fn builtin_card_is_a_dashed_box_without_a_strip() {
     assert!(by_others.iter().any(|e| e.common.linetype == "DASHED2"));
     assert!(plain.iter().all(|e| e.common.linetype != "DASHED2"));
 }
+
+fn named(code: &str, ports: &[(Protocol, u32, u32)]) -> Product {
+    Product { name: code.into(), code: code.into(), ..prod(ports) }
+}
+
+/// Links `ids` in a chain and returns the rule id (if any) refusing `a`–`b`.
+fn rule(devs: &[(u64, &Product)], chain: &[u64], a: u64, b: u64, protocol: Protocol) -> Option<&'static str> {
+    let links: Vec<_> = chain.windows(2).map(|w| link(w[0], w[1], protocol)).collect();
+    let l: Vec<_> = devs.iter().map(|(h, p)| (Handle(*h), *p)).collect();
+    let r = can_connect(&l, &links, &link(a, b, protocol)).err()?;
+    assert_eq!(r.code, "rule-violation", "{}", r.message);
+    assert!(r.message.ends_with(&format!("[{}]", r.rule_id?)));
+    r.rule_id
+}
+
+#[test]
+fn rule_scn_bus_max10() {
+    let origin = named("RACK", &[(Protocol::Scene10, 0, 4)]);
+    let st = named("STN", &[(Protocol::Scene10, 1, 1)]);
+    let mut devs = vec![(1, &origin)];
+    devs.extend((2..=12).map(|h| (h, &st)));
+    let chain: Vec<u64> = (1..=11).collect();
+    assert_eq!(rule(&devs, &chain[..10], 10, 11, Protocol::Scene10), None);
+    assert_eq!(rule(&devs, &chain, 11, 12, Protocol::Scene10), Some("scn-bus-max10"));
+    // A second output of the same origin starts another bus.
+    assert_eq!(rule(&devs, &chain, 1, 12, Protocol::Scene10), None);
+}
+
+#[test]
+fn rule_logic_mr16_poe_x() {
+    let poex = named("POE-X", &[(Protocol::Network, 0, 3)]);
+    let mr16 = named("MR16", &[(Protocol::Network, 0, 2)]);
+    let ar111 = Product { poe_watts: 45.0, ..named("AR111", &[(Protocol::Network, 0, 2)]) };
+    let gs8 = named("GS8", &[(Protocol::Network, 0, 8)]);
+    let devs = [(1, &poex), (2, &mr16), (3, &ar111), (4, &gs8)];
+    let net = Protocol::Network;
+    assert_eq!(rule(&devs, &[], 1, 2, net), None);
+    assert_eq!(rule(&devs, &[], 1, 4, net), None);
+    assert_eq!(rule(&devs, &[], 1, 3, net), Some("logic-mr16-poe-x"));
+    assert_eq!(rule(&devs, &[], 3, 1, net), Some("logic-mr16-poe-x"));
+    assert_eq!(rule(&devs, &[], 2, 4, net), Some("logic-mr16-poe-x"));
+}
+
+#[test]
+fn rule_logic_mr16_max8() {
+    let mr16 = named("MR16", &[(Protocol::Network, 0, 2)]);
+    let devs: Vec<(u64, &Product)> = (1..=9).map(|h| (h, &mr16)).collect();
+    let chain: Vec<u64> = (1..=8).collect();
+    assert_eq!(rule(&devs, &chain[..7], 7, 8, Protocol::Network), None);
+    assert_eq!(rule(&devs, &chain, 8, 9, Protocol::Network), Some("logic-mr16-max8"));
+}
+
+#[test]
+fn rule_logic_fixture_net_thru() {
+    let fixture = Product { poe_watts: 45.0, ..named("AR111", &[(Protocol::Network, 0, 1), (Protocol::NetData, 0, 1)]) };
+    let mr16 = named("MR16", &[(Protocol::Network, 0, 1), (Protocol::NetData, 0, 1)]);
+    let injector = named("INJ", &[(Protocol::NetData, 0, 2), (Protocol::Network, 0, 2)]);
+    let devs = [(1, &fixture), (2, &injector), (3, &mr16)];
+    let l: Vec<_> = devs.iter().map(|(h, p)| (Handle(*h), *p)).collect();
+    let net = |links: &[WireLink], a, b| can_connect(&l, links, &link(a, b, Protocol::NetData)).err().and_then(|r| r.rule_id);
+    assert_eq!(net(&[], 1, 2), Some("logic-fixture-net-thru"));
+    assert_eq!(net(&[link(2, 1, Protocol::Network)], 1, 2), None);
+    assert_eq!(net(&[], 3, 2), Some("logic-fixture-net-thru"));
+}
+
+#[test]
+fn rule_epix_flex_max_per_output() {
+    let flex = named("EPIX FLEX 20", &[(Protocol::Epix3p, 1, 1)]);
+    let boost = named("EPIX FLEX BOOST", &[(Protocol::Epix3p, 1, 1)]);
+    let devs: Vec<(u64, &Product)> = vec![(1, &flex), (2, &flex), (3, &flex), (4, &boost), (5, &flex), (6, &flex), (7, &boost), (8, &flex)];
+    let e = Protocol::Epix3p;
+    assert_eq!(rule(&devs, &[1], 1, 2, e), None);
+    assert_eq!(rule(&devs, &[1, 2], 2, 3, e), Some("epix-flex-max-per-output"));
+    // Drive -> 20 -> 20 -> Boost -> 20 -> 20 is legal; the Boost starts a new leg.
+    assert_eq!(rule(&devs, &[1, 2, 4, 5], 5, 6, e), None);
+    // Two Boosts in series do not make a third legal leg: five strips on one output.
+    assert_eq!(rule(&devs, &[1, 2, 4, 5, 6, 7], 7, 8, e), Some("epix-flex-max-per-output"));
+}
+
+#[test]
+fn rule_epix_line_max_per_output() {
+    let line = named("EPIXL10IP", &[(Protocol::Epix4p, 1, 1)]);
+    let half = named("EPIX LINE 10 IP S", &[(Protocol::Epix4p, 1, 1)]);
+    let mut devs: Vec<(u64, &Product)> = (1..=11).map(|h| (h, &line)).collect();
+    devs.push((12, &half));
+    let chain: Vec<u64> = (1..=10).collect();
+    let e = Protocol::Epix4p;
+    assert_eq!(rule(&devs, &chain[..9], 9, 10, e), None);
+    assert_eq!(rule(&devs, &chain, 10, 11, e), Some("epix-line-max-per-output"));
+    // 9 full strips (900) + one half-length S (50) fits; the S adds 50, not 100.
+    assert_eq!(rule(&devs, &chain[..9], 9, 12, e), None);
+}

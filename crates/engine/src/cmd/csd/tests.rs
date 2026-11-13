@@ -200,7 +200,7 @@ fn links_survive_a_dxf_round_trip() {
 #[test]
 fn three_wires_off_one_side_fan_out_in_far_end_order() {
     let mut s = ortho_session();
-    let src = handle(&s.execute("csd.place", &json!({ "product": "logic-poex", "at": [0, 0] })).unwrap());
+    let src = handle(&s.execute("csd.place", &json!({ "product": "logic-poe-switch", "at": [0, 0] })).unwrap());
     let mut wires = Vec::new();
     // Placed right, left, middle: the slots must still follow the far ends' x.
     for x in [150, -150, 0] {
