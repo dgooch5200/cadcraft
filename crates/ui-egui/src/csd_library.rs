@@ -20,6 +20,7 @@ pub struct State {
     dirty: bool,
     query: String,
     cat: String,
+    rename: String,
     sel: Option<usize>,
     sort: Option<(usize, bool)>,
     msg: Option<(bool, String)>,
@@ -118,6 +119,13 @@ fn new_product(rows: &[Product]) -> Product {
     Product { name: "New product".into(), code: id.clone(), cat: "Uncategorized".into(), color: 0x555555, id, ..Product::default() }
 }
 
+/// A copy of `p` under a free id, ready to edit.
+fn duplicate(rows: &[Product], p: &Product) -> Product {
+    let free = |id: &str| !rows.iter().any(|r| r.id == id);
+    let id = std::iter::once(format!("{}-copy", p.id)).chain((2..).map(|n| format!("{}-copy-{n}", p.id))).find(|id| free(id)).unwrap_or_default();
+    Product { name: format!("{} copy", p.name), code: id.clone(), id, ..p.clone() }
+}
+
 /// The working copy as `csd.library.set` records; `img` and the other extra keys stay out (the
 /// command keeps the old product's).
 fn records(rows: &[Product]) -> Vec<Value> {
@@ -167,9 +175,10 @@ fn apply(app: &mut CadApp) {
     }
 }
 
-fn pick(app: &mut CadApp, save: bool) {
+/// A library file dialog: `cmd` is the engine command run on the chosen path.
+fn pick(app: &mut CadApp, cmd: &'static str, save: bool, file: &str) {
     let then = move |app: &mut CadApp, path: String| {
-        let (cmd, done) = if save { ("csd.library.save", "Saved") } else { ("csd.library.load", "Loaded") };
+        let done = if save { "Saved" } else { "Loaded" };
         if save && app.ui.csd_lib.dirty {
             app.ui.csd_lib.msg = Some((false, "Apply or Revert first: the file holds the applied library.".into()));
             return Ok(Value::Null);
@@ -185,7 +194,7 @@ fn pick(app: &mut CadApp, save: bool) {
         }
         Ok(Value::Null)
     };
-    let kind = if save { Pick::Save("library.json".into()) } else { Pick::Open };
+    let kind = if save { Pick::Save(file.into()) } else { Pick::Open };
     if let Some(Err(e)) = app.pick_then(kind, then) {
         app.ui.csd_lib.msg = Some((false, e));
     }
@@ -199,6 +208,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     let bad = problems(&app.ui.csd_lib.rows);
     let bad_rows: HashSet<usize> = bad.iter().map(|b| b.0).collect();
     let (mut do_apply, mut do_revert, mut do_open, mut do_save) = (false, false, false, false);
+    let (mut do_import, mut do_export) = (false, false);
     let st = &mut app.ui.csd_lib;
     let mut cats: Vec<String> = st.rows.iter().map(|p| p.cat.clone()).collect::<HashSet<_>>().into_iter().collect();
     cats.sort();
@@ -225,6 +235,15 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             st.query.clear();
             st.cat.clear();
         }
+        if ui.add_enabled(st.sel.is_some(), egui::Button::new("Duplicate selected")).clicked()
+            && let Some(p) = st.sel.and_then(|i| st.rows.get(i)).map(|p| duplicate(&st.rows, p))
+        {
+            st.rows.push(p);
+            st.sel = Some(st.rows.len() - 1);
+            st.dirty = true;
+            st.query.clear();
+            st.cat.clear();
+        }
         if ui.add_enabled(st.sel.is_some(), egui::Button::new("Delete selected")).clicked()
             && let Some(i) = st.sel.take().filter(|i| *i < st.rows.len())
         {
@@ -241,8 +260,29 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         do_open =
             ui.add_enabled(can_pick, egui::Button::new("Open…")).on_disabled_hover_text("Needs a host file dialog that returns a path").clicked();
         do_save = ui.add_enabled(can_pick, egui::Button::new("Save as…")).clicked();
+        do_import = ui
+            .add_enabled(can_pick, egui::Button::new("Import CSV…"))
+            .on_disabled_hover_text("Needs a host file dialog that returns a path")
+            .clicked();
+        do_export = ui.add_enabled(can_pick, egui::Button::new("Export CSV…")).clicked();
         ui.label(RichText::new(format!("{} products", st.rows.len())).weak());
     });
+    if !st.cat.is_empty() {
+        ui.horizontal(|ui| {
+            ui.add_space(6.0);
+            ui.label("Rename this category to");
+            ui.add(egui::TextEdit::singleline(&mut st.rename).desired_width(180.0)).accessible_name("New category name");
+            if ui.add_enabled(!st.rename.trim().is_empty(), egui::Button::new("Rename")).clicked() {
+                let to = st.rename.trim().to_string();
+                for p in st.rows.iter_mut().filter(|p| p.cat == st.cat) {
+                    p.cat = to.clone();
+                }
+                st.cat = to;
+                st.rename.clear();
+                st.dirty = true;
+            }
+        });
+    }
     if let Some((ok, m)) = &st.msg {
         let c = if *ok { ui.visuals().text_color() } else { ui.visuals().error_fg_color };
         ui.label(RichText::new(m).color(c));
@@ -321,10 +361,16 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         app.ui.csd_lib.msg = Some((true, "Reverted to the applied library.".into()));
     }
     if do_open {
-        pick(app, false);
+        pick(app, "csd.library.load", false, "");
     }
     if do_save {
-        pick(app, true);
+        pick(app, "csd.library.save", true, "library.json");
+    }
+    if do_import {
+        pick(app, "csd.library.import_csv", false, "");
+    }
+    if do_export {
+        pick(app, "csd.library.export_csv", true, "library.csv");
     }
 }
 
@@ -406,6 +452,18 @@ mod tests {
         assert_eq!(app.session.csd_library.len(), before);
         assert_eq!(app.ui.csd_lib.msg.as_ref().map(|m| m.0), Some(false));
         assert_eq!(problems(&app.ui.csd_lib.rows).len(), 2);
+    }
+
+    #[test]
+    fn duplicate_gets_a_free_id() {
+        let mut app = app();
+        reload(&mut app);
+        let rows = &mut app.ui.csd_lib.rows;
+        let a = duplicate(rows, &rows[0]);
+        assert_ne!(a.id, rows[0].id);
+        rows.push(a.clone());
+        assert_ne!(duplicate(rows, &rows[0]).id, a.id);
+        assert!(problems(rows).is_empty());
     }
 
     #[test]

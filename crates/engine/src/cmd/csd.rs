@@ -22,6 +22,7 @@ mod arrange;
 mod connect;
 mod cpsd;
 mod group;
+mod library_csv;
 mod patch;
 mod place;
 mod schedule;
@@ -33,6 +34,7 @@ use crate::{EngineError, Result, Session};
 pub fn specs() -> Vec<CommandSpec> {
     let mut all = own_specs();
     all.extend(wire::specs());
+    all.extend(library_csv::specs());
     all
 }
 

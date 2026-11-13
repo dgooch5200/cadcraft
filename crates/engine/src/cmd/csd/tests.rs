@@ -394,6 +394,38 @@ fn library_set_list_and_place() {
 }
 
 #[test]
+fn library_csv_round_trips_and_reads_old_headers() {
+    let mut s = Session::new();
+    let csv = s.execute("csd.library.export_csv", &json!({})).unwrap();
+    let before = csv["count"].clone();
+    assert!(before.as_u64() > Some(1));
+    let r = s.execute("csd.library.import_csv", &json!({ "text": csv["csv"] })).unwrap();
+    assert_eq!(r["count"], before);
+    assert_eq!(s.execute("csd.library.export_csv", &json!({})).unwrap()["csv"], csv["csv"]);
+
+    let text = "\u{feff}Product Name,Model ID,DMX Ports,Network Ports,Notes\r\n\"Wash, big\",My Wash,2,1,\"say \"\"hi\"\"\"\r\n,No Name,1,1,\r\nSpot,My Wash,9,9,dup\r\n";
+    let r = s.execute("csd.library.import_csv", &json!({ "text": text })).unwrap();
+    assert_eq!(r["count"], 1);
+    let p = &s.csd_library[0];
+    assert_eq!((p.id.as_str(), p.code.as_str(), p.name.as_str(), p.notes.as_str()), ("My_Wash", "My_Wash", "Wash, big", "say \"hi\""));
+    assert_eq!((p.counts[3].1, p.counts[0].1), (2, 1));
+}
+
+#[test]
+fn library_csv_import_rejects_hostile_input() {
+    let mut s = Session::new();
+    let import = |s: &mut Session, t: String| s.execute("csd.library.import_csv", &json!({ "text": t }));
+    assert!(import(&mut s, String::new()).is_err());
+    assert!(import(&mut s, "a,b\n1,2\n".into()).is_err());
+    assert!(import(&mut s, "Model ID,Product Name\n\"open,x\n".into()).is_err());
+    let many = format!("Model ID,Product Name\n{}", "a,b\n".repeat(10_001));
+    assert!(import(&mut s, many).is_err());
+    let wide = format!("Model ID,Product Name{}\nx,y{}\n", ",c".repeat(5000), ",1".repeat(5000));
+    assert_eq!(import(&mut s, wide).unwrap()["count"], 1);
+    assert!(s.execute("csd.library.import_csv", &json!({})).is_err());
+}
+
+#[test]
 fn library_list_offers_only_general_and_own_series_accessories() {
     let mut s = Session::new();
     let rec = |id: &str, cat: &str| json!({ "id": id, "name": id, "cat": cat });

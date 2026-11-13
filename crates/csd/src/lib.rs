@@ -9,11 +9,13 @@ use cadcraft_doc::{Handle, RawTag};
 use cadcraft_geom::Vec2;
 
 mod card;
+mod csv;
 mod library;
 mod rules;
 mod wire;
 
 pub use card::*;
+pub use csv::*;
 pub use library::*;
 pub use rules::*;
 pub use wire::*;
