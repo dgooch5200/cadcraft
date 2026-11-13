@@ -3,13 +3,14 @@
 //! file dialogs and `csd.library.load` / `csd.library.save`.
 
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use cadcraft_csd::{Product, product_key, product_record};
+use cadcraft_csd::{Product, product_key, product_record, validate_library};
 use egui::{Color32, RichText};
 use egui_extras::{Column, TableBuilder};
 use serde_json::{Value, json};
 
+use crate::theme::Tokens;
 use crate::{CadApp, Pick};
 
 #[derive(Default, Clone, Debug)]
@@ -99,24 +100,6 @@ fn compare(a: &Product, b: &Product, col: Col) -> Ordering {
     text(a).cmp(&text(b)).then(num(a).total_cmp(&num(b)))
 }
 
-/// Problems that block Apply, by row index.
-fn problems(rows: &[Product]) -> Vec<(usize, String)> {
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    for (i, p) in rows.iter().enumerate() {
-        let id = p.id.trim();
-        if id.is_empty() {
-            out.push((i, format!("row {}: id is empty", i + 1)));
-        } else if !seen.insert(id) {
-            out.push((i, format!("row {}: id \"{id}\" is used twice", i + 1)));
-        }
-        if p.name.trim().is_empty() {
-            out.push((i, format!("row {}: name is empty", i + 1)));
-        }
-    }
-    out
-}
-
 /// A new product with an id no row has.
 fn new_product(rows: &[Product]) -> Product {
     let free = |id: &str| !rows.iter().any(|p| p.id == id);
@@ -165,8 +148,7 @@ pub fn active(app: &mut CadApp) -> bool {
 }
 
 fn apply(app: &mut CadApp) {
-    let bad = problems(&app.ui.csd_lib.rows);
-    if !bad.is_empty() {
+    if !validate_library(&app.ui.csd_lib.rows).is_empty() {
         app.ui.csd_lib.msg = Some((false, "Not applied: fix the highlighted rows.".into()));
         return;
     }
@@ -210,8 +192,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         reload(app);
     }
     let can_pick = !cfg!(target_arch = "wasm32") && app.services.pick_open.is_some();
-    let bad = problems(&app.ui.csd_lib.rows);
-    let bad_rows: HashSet<usize> = bad.iter().map(|b| b.0).collect();
+    let bad = validate_library(&app.ui.csd_lib.rows);
+    let bad_cells: HashMap<(usize, &str), &str> = bad.iter().map(|b| ((b.row, b.field), b.message.as_str())).collect();
     let (mut do_apply, mut do_revert, mut do_open, mut do_save) = (false, false, false, false);
     let (mut do_import, mut do_export) = (false, false);
     let st = &mut app.ui.csd_lib;
@@ -292,8 +274,8 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         let c = if *ok { ui.visuals().text_color() } else { ui.visuals().error_fg_color };
         ui.label(RichText::new(m).color(c));
     }
-    for (_, m) in bad.iter().take(3) {
-        ui.label(RichText::new(m).color(ui.visuals().error_fg_color));
+    for b in bad.iter().take(3) {
+        ui.label(RichText::new(format!("Row {}: {}", b.row + 1, b.message)).color(Tokens::get().danger));
     }
 
     let q = st.query.to_lowercase();
@@ -361,7 +343,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                             }
                             return;
                         }
-                        if cell(ui, p, *col, ri, bad_rows.contains(&ri)) {
+                        if cell(ui, p, *col, ri, &|field| bad_cells.get(&(ri, field)).copied()) {
                             st.dirty = true;
                         }
                     });
@@ -392,27 +374,28 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
 }
 
 /// One editable cell; true when the value changed.
-fn cell(ui: &mut egui::Ui, p: &mut Product, col: Col, row: usize, flagged: bool) -> bool {
+fn cell<'a>(ui: &mut egui::Ui, p: &mut Product, col: Col, row: usize, err: &dyn Fn(&'static str) -> Option<&'a str>) -> bool {
     let w = ui.available_width();
-    let text = |ui: &mut egui::Ui, s: &mut String, warn: bool| {
+    let text = |ui: &mut egui::Ui, s: &mut String, problem: Option<&str>| {
         let mut e = egui::TextEdit::singleline(s).desired_width(w);
-        if warn {
-            e = e.text_color(ui.visuals().error_fg_color);
+        if problem.is_some() {
+            e = e.text_color(Tokens::get().danger);
         }
-        ui.add(e).changed()
+        let resp = ui.add(e);
+        if let Some(m) = problem {
+            resp.clone().on_hover_text(m);
+        }
+        resp.changed()
     };
     match col {
         Col::Show => false,
-        Col::Id => text(ui, &mut p.id, flagged),
-        Col::Name => {
-            let empty = p.name.trim().is_empty();
-            text(ui, &mut p.name, empty)
-        }
-        Col::Code => text(ui, &mut p.code, false),
-        Col::Cat => text(ui, &mut p.cat, false),
-        Col::Brand => text(ui, &mut p.brand, false),
-        Col::Modes => text(ui, &mut p.modes, false),
-        Col::Notes => text(ui, &mut p.notes, false),
+        Col::Id => text(ui, &mut p.id, err("id")),
+        Col::Name => text(ui, &mut p.name, err("name")),
+        Col::Code => text(ui, &mut p.code, None),
+        Col::Cat => text(ui, &mut p.cat, None),
+        Col::Brand => text(ui, &mut p.brand, None),
+        Col::Modes => text(ui, &mut p.modes, err("modes")),
+        Col::Notes => text(ui, &mut p.notes, None),
         Col::Color => color_cell(ui, p, row),
         Col::PoeW => ui.add(egui::DragValue::new(&mut p.poe_watts).range(0.0..=1e6).speed(0.5)).changed(),
         Col::PoePortW => ui.add(egui::DragValue::new(&mut p.poe_port_watts).range(0.0..=1e6).speed(0.5)).changed(),
@@ -469,7 +452,18 @@ mod tests {
         apply(&mut app);
         assert_eq!(app.session.csd_library.len(), before);
         assert_eq!(app.ui.csd_lib.msg.as_ref().map(|m| m.0), Some(false));
-        assert_eq!(problems(&app.ui.csd_lib.rows).len(), 2);
+        assert_eq!(validate_library(&app.ui.csd_lib.rows).len(), 2);
+    }
+
+    #[test]
+    fn a_malformed_mode_blocks_apply() {
+        let mut app = app();
+        reload(&mut app);
+        app.ui.csd_lib.rows[0].modes = "Std:0".into();
+        let before = app.session.csd_library.to_vec();
+        apply(&mut app);
+        assert_eq!(app.session.csd_library.to_vec(), before);
+        assert_eq!(app.ui.csd_lib.msg.as_ref().map(|m| m.0), Some(false));
     }
 
     #[test]
@@ -481,7 +475,7 @@ mod tests {
         assert_ne!(a.id, rows[0].id);
         rows.push(a.clone());
         assert_ne!(duplicate(rows, &rows[0]).id, a.id);
-        assert!(problems(rows).is_empty());
+        assert!(validate_library(rows).is_empty());
     }
 
     #[test]

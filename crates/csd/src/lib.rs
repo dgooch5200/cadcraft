@@ -13,6 +13,7 @@ mod csv;
 mod library;
 mod poe;
 mod rules;
+mod validate;
 mod wire;
 
 pub use card::*;
@@ -20,6 +21,7 @@ pub use csv::*;
 pub use library::*;
 pub use poe::*;
 pub use rules::*;
+pub use validate::*;
 pub use wire::*;
 
 /// The xdata application name of wires.
