@@ -317,12 +317,14 @@ fn placed_tab(ui: &mut egui::Ui, st: &mut State, l: &Lists, act: &mut Option<Act
                     ui.label(d.accessory_count().to_string()).on_hover_text(names);
                 });
                 r.col(|ui| {
-                    if ui.small_button(crate::tl!("Locate")).clicked() {
-                        *act = Some(Act::Locate(d.handle.clone()));
-                    }
-                    if ui.small_button(crate::tl!("Delete")).clicked() {
-                        *act = Some(Act::DeleteDevice(d.handle.clone()));
-                    }
+                    ui.horizontal(|ui| {
+                        if ui.small_button(crate::tl!("Locate")).clicked() {
+                            *act = Some(Act::Locate(d.handle.clone()));
+                        }
+                        if ui.small_button(crate::tl!("Delete")).clicked() {
+                            *act = Some(Act::DeleteDevice(d.handle.clone()));
+                        }
+                    });
                 });
             });
         });
@@ -366,12 +368,14 @@ fn unplaced_tab(ui: &mut egui::Ui, st: &mut State, l: &Lists, library: &[cadcraf
                     cell(&mut r, t);
                 }
                 r.col(|ui| {
-                    if ui.small_button(crate::tl!("Place")).clicked() {
-                        *act = Some(Act::Place(it.index));
-                    }
-                    if ui.small_button(crate::tl!("Delete")).clicked() {
-                        *act = Some(Act::Remove(it.index));
-                    }
+                    ui.horizontal(|ui| {
+                        if ui.small_button(crate::tl!("Place")).clicked() {
+                            *act = Some(Act::Place(it.index));
+                        }
+                        if ui.small_button(crate::tl!("Delete")).clicked() {
+                            *act = Some(Act::Remove(it.index));
+                        }
+                    });
                 });
             });
         });
