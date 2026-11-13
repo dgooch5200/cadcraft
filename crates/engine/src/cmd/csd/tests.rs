@@ -1512,3 +1512,37 @@ fn a_products_icon_size_sets_its_card_and_a_resized_card_scales_from_it() {
     s.execute("csd.size", &json!({ "handles": [a.hex()], "w": 432 })).unwrap();
     assert_eq!(s.execute("csd.device.info", &json!({ "handle": a.hex() })).unwrap()["size"], json!([432.0, 90.0]));
 }
+
+#[test]
+fn titleblock_fit_grows_the_sheet_around_the_drawing_and_undoes_in_one_step() {
+    let (mut s, a, b, _) = setup();
+    s.execute("csd.titleblock", &json!({ "at": [0, 0] })).unwrap();
+    s.execute("csd.place", &json!({ "product": CONSOLE, "at": [5000, 3000] })).unwrap();
+    let r = s.execute("csd.titleblock.fit", &json!({})).unwrap();
+    assert_eq!(r["changed"], true, "{r}");
+    let k = r["scale"].as_f64().unwrap();
+    assert!(k > 3.0, "{r}");
+    let d = s.doc().unwrap();
+    let store = d.space(&s.space()).unwrap();
+    let ins = store.iter().find_map(|e| match &e.kind {
+        EntityKind::Insert(i) if i.block == cadcraft_csd::TITLEBLOCK => Some(i.clone()),
+        _ => None,
+    });
+    let ins = ins.unwrap();
+    assert!((ins.scale.x - k).abs() < 1e-9);
+    let (w, h) = cadcraft_csd::Paper::Tabloid.size();
+    for dev in [a, b] {
+        let at = cadcraft_doc::entity_bounds(d, d.entity(dev).unwrap(), 0);
+        let lo = ins.insert.xy() + Vec2::new(cadcraft_csd::MARGIN, cadcraft_csd::MARGIN + cadcraft_csd::TITLE_H) * k;
+        let hi = ins.insert.xy() + Vec2::new(w - cadcraft_csd::MARGIN, h - cadcraft_csd::MARGIN) * k;
+        assert!(at.min.x >= lo.x && at.min.y >= lo.y && at.max.x <= hi.x && at.max.y <= hi.y, "{at:?} not in {lo:?}..{hi:?}");
+    }
+    assert_eq!(s.execute("csd.titleblock.fit", &json!({})).unwrap()["changed"], false);
+    s.execute("undo", &json!({})).unwrap();
+    s.execute("undo", &json!({})).unwrap();
+    let scale = s.doc().unwrap().space(&s.space()).unwrap().iter().find_map(|e| match &e.kind {
+        EntityKind::Insert(i) if i.block == cadcraft_csd::TITLEBLOCK => Some(i.scale.x),
+        _ => None,
+    });
+    assert_eq!(scale, Some(1.0));
+}

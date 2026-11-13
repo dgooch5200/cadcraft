@@ -73,6 +73,47 @@ pub(super) fn run_paper(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "handle": h.hex(), "paper": paper.id() }))
 }
 
+/// Grows the sheet (title block and line keys) about its corner until the rest of the drawing fits
+/// inside its frame, centred; a drawing that already fits leaves it alone.
+pub(super) fn run_titleblock_fit(s: &mut Session, _: &Value) -> Result<Value> {
+    let cmd = "csd.titleblock.fit";
+    let (tb, ins) = find(s, TITLEBLOCK).ok_or_else(|| bad(cmd, "the drawing has no title block; run csd.titleblock first"))?;
+    let k0 = ins.scale.x;
+    if !(k0.is_finite() && k0 > 0.0) {
+        return Err(bad(cmd, "the title block's scale is not a positive number"));
+    }
+    let d = s.doc()?;
+    let store = d.space(&s.space()).ok_or_else(|| bad(cmd, "no such space"))?;
+    let sheet: Vec<Handle> = store
+        .iter()
+        .filter(|e| matches!(&e.kind, EntityKind::Insert(i) if i.block == TITLEBLOCK || i.block.starts_with(LEGEND)))
+        .map(|e| e.handle)
+        .collect();
+    let b = store
+        .iter()
+        .filter(|e| !sheet.contains(&e.handle))
+        .map(|e| cadcraft_doc::entity_bounds(d, e, 0))
+        .filter(|b| !b.is_empty() && b.min.is_finite() && b.max.is_finite())
+        .fold(cadcraft_geom::Bounds2::EMPTY, |a, b| a.union(&b));
+    let (w, h) = paper_of(d).size();
+    let (aw, ah) = (w - 2.0 * MARGIN, h - 2.0 * MARGIN - TITLE_H);
+    let origin = ins.insert.xy();
+    let inside = |k: f64| {
+        let lo = origin + Vec2::new(MARGIN, MARGIN + TITLE_H) * k;
+        b.min.x >= lo.x && b.min.y >= lo.y && b.max.x <= lo.x + aw * k && b.max.y <= lo.y + ah * k
+    };
+    if b.is_empty() || inside(k0) {
+        return Ok(json!({ "handle": tb.hex(), "scale": k0, "changed": false }));
+    }
+    // A tenth of the frame left clear around the drawing.
+    let k = ((b.width() / aw).max(b.height() / ah) * 1.1).max(k0);
+    let k = (k * 100.0).ceil() / 100.0;
+    let to = Vec2::new(b.min.x - (aw * k - b.width()) / 2.0 - MARGIN * k, b.min.y - (ah * k - b.height()) / 2.0 - (MARGIN + TITLE_H) * k);
+    let m = cadcraft_geom::Mat3::scale_about(origin, k / k0).then(cadcraft_geom::Mat3::translate(to - origin));
+    crate::cmd::modify::transform_entities(s, &sheet, &m, false)?;
+    Ok(json!({ "handle": tb.hex(), "scale": k, "changed": true }))
+}
+
 pub(super) fn run_project(s: &mut Session, _: &Value) -> Result<Value> {
     let found = find(s, TITLEBLOCK);
     let fields: Map<String, Value> =
