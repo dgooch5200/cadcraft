@@ -17,7 +17,7 @@ pub(super) fn run_print(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (w, h) = sheet::paper_of(s.doc()?).size();
     let mut q = json!({
-        "path": path, "output": format, "fit": true, "landscape": true, "margins": [0, 0, 0, 0],
+        "path": path, "output": format, "fit": true, "landscape": true, "margins": [0, 0, 0, 0], "physicalSize": true,
         "width": w.min(h) / UNITS_PER_IN * MM_PER_IN, "height": w.max(h) / UNITS_PER_IN * MM_PER_IN,
     });
     // Without a title block the plot falls back to the drawing's extents.

@@ -35,6 +35,11 @@ fn opacity(p: &cadcraft_render::DPrim) -> String {
 
 /// Write a display list (as [`export_window`] does for a space's own).
 pub fn export_list(list: &cadcraft_render::DisplayList, window: Option<Bounds2>) -> String {
+    export_list_sized(list, window, None)
+}
+
+/// [`export_list`] with the root `width`/`height` set to `size_in` (inches) when given, else 1600 px wide.
+pub fn export_list_sized(list: &cadcraft_render::DisplayList, window: Option<Bounds2>, size_in: Option<(f64, f64)>) -> String {
     let window = window.filter(|w| !w.is_empty());
     let b = window.unwrap_or(list.bounds);
     // A single point (or a zero-size window) has no extent: show a unit box centred on it.
@@ -59,12 +64,14 @@ pub fn export_list(list: &cadcraft_render::DisplayList, window: Option<Bounds2>)
     let stroke = vw.max(vh) / 1500.0;
     // Decimals: at least 6, more when the stroke would otherwise lose its leading digits.
     let dp = (3.0 - stroke.log10().floor()).clamp(6.0, 15.0) as usize;
+    let (pw, ph) = match size_in {
+        Some((w, h)) => (format!("{w:.4}in"), format!("{h:.4}in")),
+        None => (format!("{:.0}", 1600.0), format!("{:.0}", 1600.0 * vh / vw)),
+    };
     let mut s = String::new();
     let _ = write!(
         s,
-        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {vw:.dp$} {vh:.dp$}" width="{:.0}" height="{:.0}"><rect width="100%" height="100%" fill="white"/>"#,
-        1600.0,
-        1600.0 * vh / vw
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {vw:.dp$} {vh:.dp$}" width="{pw}" height="{ph}"><rect width="100%" height="100%" fill="white"/>"#
     );
     let white = Rgb(255, 255, 255);
     let tx = |x: f64| x - x0;

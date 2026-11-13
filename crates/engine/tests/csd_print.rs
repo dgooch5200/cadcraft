@@ -28,6 +28,7 @@ fn prints_each_format_on_the_sheet_paper() {
     assert!(text(&dir.join("sheet.pdf")).contains("/MediaBox[0 0 792 612]"));
     let svg = text(&dir.join("sheet.svg"));
     assert!(svg.contains("viewBox=\"0 0 1056") && svg.contains(" 816"), "{}", svg.chars().take(200).collect::<String>());
+    assert!(svg.contains("width=\"11.0000in\" height=\"8.5000in\""), "{}", svg.chars().take(300).collect::<String>());
     if let Ok(keep) = std::env::var("CSD_PRINT_KEEP") {
         let _ = std::fs::copy(dir.join("sheet.png"), keep);
     }

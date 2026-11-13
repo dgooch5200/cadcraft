@@ -141,7 +141,12 @@ fn svg(d: &Drawing, space: &Space, opts: &Value) -> Result<Vec<u8>> {
     let mut list = cadcraft_render::build_plot(d, space, &ropts);
     let s = fit_scale(&window.unwrap_or(list.bounds), &sheet, &o);
     cadcraft_render::pen::apply(&mut list, s * sheet.unit_mm);
-    Ok(crate::svg::export_list(&list, window).into_bytes())
+    // `physicalSize`: declare the paper's size in inches on the root element.
+    let size_in = opts.get("physicalSize").and_then(Value::as_bool).filter(|b| *b).map(|_| {
+        let k = sheet.unit_mm / 25.4;
+        (sheet.size.x * k, sheet.size.y * k)
+    });
+    Ok(crate::svg::export_list_sized(&list, window, size_in).into_bytes())
 }
 
 #[cfg(test)]
