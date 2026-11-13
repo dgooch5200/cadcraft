@@ -25,7 +25,7 @@ pub(super) fn poe_switch(s: &mut Session) -> &'static str {
 
 /// A session routing wires at right angles (the tests below assume it; the default is smooth curves).
 fn ortho_session() -> Session {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     s.execute("ortho", &json!({ "on": true })).unwrap();
     s
 }
@@ -241,7 +241,7 @@ fn wires_sit_on_their_protocol_layer() {
     assert_eq!((l.color, l.linetype.as_str()), (Color::True(Rgb::from_u32(0x3377cc)), "Continuous"));
 
     let mut d = Drawing::new_metric();
-    let (name, scale) = super::wire_layer(&mut d, Protocol::Scene10);
+    let (name, scale) = super::wire_layer(&mut d, Protocol::Scene10, 1.0);
     let l = d.layer(&name).unwrap();
     assert_eq!((l.color, l.linetype.as_str()), (Color::True(Rgb::from_u32(0x6dbd45)), "DASHED2"));
     assert!(d.linetype("DASHED2").is_some() && scale > 0.0 && scale != 1.0);
@@ -374,7 +374,7 @@ fn decorations_stay_above_later_entities() {
 
 #[test]
 fn library_set_list_and_place() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let rec = |id: &str, cat: &str| json!({ "id": id, "name": format!("Fixture {id}"), "code": id, "cat": cat, "dmxIn": 1, "img": "data:x" });
     let r = s.execute("csd.library.set", &json!({ "products": [rec("A1", "Wash"), rec("B2", "Spot")] })).unwrap();
     assert_eq!(r["count"], 2);
@@ -396,7 +396,7 @@ fn library_set_list_and_place() {
 
 #[test]
 fn library_csv_round_trips_and_reads_old_headers() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let csv = s.execute("csd.library.export", &json!({})).unwrap();
     let before = csv["count"].clone();
     assert!(before.as_u64() > Some(1));
@@ -414,7 +414,7 @@ fn library_csv_round_trips_and_reads_old_headers() {
 
 #[test]
 fn library_csv_import_rejects_hostile_input() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let import = |s: &mut Session, t: String| s.execute("csd.library.import", &json!({ "text": t }));
     assert!(import(&mut s, String::new()).is_err());
     assert!(import(&mut s, "a,b\n1,2\n".into()).is_err());
@@ -428,7 +428,7 @@ fn library_csv_import_rejects_hostile_input() {
 
 #[test]
 fn library_list_offers_only_general_and_own_series_accessories() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let rec = |id: &str, cat: &str| json!({ "id": id, "name": id, "cat": cat });
     let products = [
         rec("par", "Ovation — PAR"),
@@ -450,7 +450,7 @@ fn library_list_offers_only_general_and_own_series_accessories() {
 
 #[test]
 fn library_save_then_load() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let path = std::env::temp_dir().join(format!("csd-lib-save-{}.json", std::process::id()));
     let path = path.to_string_lossy().into_owned();
     let n = s.csd_library.len() - 1;
@@ -478,7 +478,7 @@ fn device_count(s: &mut Session) -> usize {
 
 #[test]
 fn armed_product_is_placed_at_each_point_until_enter() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     s.execute("csd.arm", &json!({ "product": NODE })).unwrap();
     s.start("csd.place").unwrap();
     s.input(Input::Point(Vec2::new(0.0, 0.0))).unwrap();
@@ -493,7 +493,7 @@ fn armed_product_is_placed_at_each_point_until_enter() {
 
 #[test]
 fn escape_stops_placing_and_keeps_what_is_placed() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     s.execute("csd.arm", &json!({ "product": NODE })).unwrap();
     s.start("csd.place").unwrap();
     s.input(Input::Point(Vec2::new(0.0, 0.0))).unwrap();
@@ -504,13 +504,13 @@ fn escape_stops_placing_and_keeps_what_is_placed() {
 
 #[test]
 fn arming_needs_a_known_product() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     assert!(s.execute("csd.arm", &json!({ "product": "no-such-product" })).is_err());
 }
 
 #[test]
 fn placing_with_nothing_armed_asks_for_the_product() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     s.start("csd.place").unwrap();
     s.input(Input::Text("no-such-product".into())).unwrap();
     assert!(s.running.is_some(), "still asking");
@@ -585,7 +585,7 @@ fn stale_copy() -> (Drawing, String) {
 fn opening_a_drawing_brings_its_cards_up_to_date() {
     let (d, name) = stale_copy();
     let stale = d.block(&name).unwrap().entities.len();
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     s.open_drawing(d, "Old", None);
     assert_eq!(s.doc().unwrap().block(&name).unwrap().entities.len() + 1, stale);
     assert!(!s.state().unwrap().is_dirty());
@@ -597,7 +597,7 @@ fn opening_an_up_to_date_drawing_changes_nothing() {
     let (s, ..) = setup();
     let imported = cadcraft_io::read_dxf(cadcraft_io::write_dxf(s.doc().unwrap()).as_bytes()).unwrap();
     let before = imported.blocks.clone();
-    let mut t = Session::new();
+    let mut t = crate::cmd::csd::units::px_session();
     t.open_drawing(imported, "Same", None);
     assert!(t.doc().unwrap().blocks.iter().all(|(n, b)| std::sync::Arc::ptr_eq(b, &before[n])));
 }
@@ -671,7 +671,7 @@ fn waypoints_past_the_coordinate_bound_are_refused() {
 
 #[test]
 fn replace_refits_the_label_to_the_new_card() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let mut lib = (*s.csd_library).clone();
     let node = lib.iter().find(|p| p.id == NODE).unwrap().clone();
     let mut wide = cadcraft_csd::Product { id: "wide".into(), ..node };
@@ -703,7 +703,7 @@ fn replace_swaps_the_product_on_the_selection_and_skips_the_same_one() {
 
 #[test]
 fn csd_protocol_sets_the_wire_type_and_rejects_unknown_ids() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     assert_eq!(s.execute("csd.protocol", &json!({ "protocol": "dmx" })).unwrap()["protocol"], "dmx");
     assert_eq!(s.csd_protocol, Protocol::Dmx);
     assert!(s.execute("csd.protocol", &json!({ "protocol": "nope" })).is_err());
@@ -728,7 +728,7 @@ fn polyline(s: &Session, h: Handle) -> Vec<(Vec2, f64)> {
 
 #[test]
 fn smooth_wires_by_default_leave_the_ports_and_follow_the_ortho_toggle() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let a = handle(&s.execute("csd.place", &json!({ "product": CONSOLE, "at": [0, 0] })).unwrap());
     let b = handle(&s.execute("csd.place", &json!({ "product": NODE, "at": [200, 60] })).unwrap());
     let w = connect(&mut s, a, b).unwrap();
@@ -922,7 +922,7 @@ fn at(s: &Session, h: Handle) -> (f64, f64) {
 
 #[test]
 fn select_product_selects_every_device_of_that_product() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let a = place_at(&mut s, CONSOLE, 0.0, 0.0);
     let b = place_at(&mut s, CONSOLE, 100.0, 0.0);
     place_at(&mut s, NODE, 200.0, 0.0);
@@ -956,7 +956,7 @@ fn align_lines_up_card_edges_and_wires_follow() {
 
 #[test]
 fn distribute_equalises_gaps_and_keeps_the_ends() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let a = place_at(&mut s, CONSOLE, 0.0, 0.0);
     let b = place_at(&mut s, CONSOLE, 50.0, 0.0);
     let c = place_at(&mut s, CONSOLE, 400.0, 0.0);
@@ -968,7 +968,7 @@ fn distribute_equalises_gaps_and_keeps_the_ends() {
 
 #[test]
 fn device_at_finds_the_card_under_a_point() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let a = place_at(&mut s, CONSOLE, 0.0, 0.0);
     let hit = |s: &mut Session, x: f64, y: f64| s.execute("csd.device.at", &json!({ "at": [x, y] })).unwrap()["handle"].clone();
     assert_eq!(hit(&mut s, 30.0, 30.0), json!(a.hex()));
@@ -1036,7 +1036,7 @@ fn waypoint_errors_change_nothing() {
 
 #[test]
 fn smooth_wires_pass_through_their_waypoints() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let a = handle(&s.execute("csd.place", &json!({ "product": CONSOLE, "at": [0, 0] })).unwrap());
     let b = handle(&s.execute("csd.place", &json!({ "product": NODE, "at": [200, 60] })).unwrap());
     let w = connect(&mut s, a, b).unwrap();
@@ -1123,7 +1123,7 @@ fn fields(s: &mut Session) -> Value {
 
 #[test]
 fn titleblock_is_inserted_once_and_fields_are_set_and_undone() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     assert_eq!(fields(&mut s)["project"], "");
     let a = handle(&s.execute("csd.titleblock", &json!({ "at": [10, 20] })).unwrap());
     assert_eq!(handle(&s.execute("csd.titleblock", &json!({})).unwrap()), a);
@@ -1150,7 +1150,7 @@ fn block_right(s: &Session, name: &str) -> f64 {
 
 #[test]
 fn paper_sizes_the_sheet_and_legend_and_keeps_fields() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     assert!(s.execute("csd.paper", &json!({ "paper": "letter" })).is_err(), "needs a title block");
     assert!(s.execute("csd.titleblock", &json!({ "paper": "a4" })).is_err());
     assert_eq!(s.execute("csd.titleblock", &json!({})).unwrap()["paper"], "tabloid");
@@ -1175,7 +1175,7 @@ fn paper_sizes_the_sheet_and_legend_and_keeps_fields() {
 
 #[test]
 fn a_new_letter_titleblock_is_letter_sized() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     s.execute("csd.titleblock", &json!({ "paper": "letter" })).unwrap();
     assert_eq!(block_right(&s, "CSD_TITLEBLOCK"), 1056.0 - 22.0);
     s.execute("csd.legend", &json!({})).unwrap();
@@ -1184,7 +1184,7 @@ fn a_new_letter_titleblock_is_letter_sized() {
 
 #[test]
 fn project_set_inserts_the_titleblock_when_missing_in_one_undo_step() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     s.execute("csd.project.set", &json!({ "fields": { "venue": "O2" } })).unwrap();
     assert_eq!(s.execute("csd.project", &json!({})).unwrap()["exists"], true);
     s.undo().unwrap();
@@ -1193,7 +1193,7 @@ fn project_set_inserts_the_titleblock_when_missing_in_one_undo_step() {
 
 #[test]
 fn project_fields_survive_a_dxf_round_trip() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     s.execute("csd.project.set", &json!({ "fields": { "project": "Tour", "title": "FOH rack", "meta": "v2" } })).unwrap();
     let before = fields(&mut s);
     let text = cadcraft_io::write_dxf(s.doc().unwrap());
@@ -1235,7 +1235,7 @@ fn wiring_alone_creates_no_legend() {
 
 #[test]
 fn bom_footer_defaults_to_the_title_block_project_fields() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     assert!(super::sheet::project_footer(&s).is_empty());
     s.execute("csd.project.set", &json!({ "fields": { "project": "Demo", "rev": "B" } })).unwrap();
     assert_eq!(super::sheet::project_footer(&s), vec!["Project: Demo   Rev: B".to_string()]);
@@ -1243,7 +1243,7 @@ fn bom_footer_defaults_to_the_title_block_project_fields() {
 
 #[test]
 fn devices_label_numbers_in_reading_order_and_is_one_undo() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let mut at = |x: i32, y: i32| handle(&s.execute("csd.place", &json!({ "product": NODE, "at": [x, y] })).unwrap());
     let (c, a, b) = (at(0, -200), at(300, 0), at(0, 10));
     let hs = json!([c.hex(), a.hex(), b.hex()]);
@@ -1421,7 +1421,7 @@ fn moving_a_waypoint_snaps_to_the_grid_when_snap_is_on() {
 
 #[test]
 fn devices_accessory_adds_one_part_to_every_device_and_resets_a_held_line() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let (a, b) = (place_at(&mut s, NODE, 0.0, 0.0), place_at(&mut s, CONSOLE, 300.0, 0.0));
     let hs = json!([a.hex(), b.hex()]);
     s.execute("csd.device.set", &json!({ "handle": a.hex(), "accessories": [{ "product": "b565fc", "qty": 4 }] })).unwrap();
@@ -1465,7 +1465,7 @@ fn two_line_for_a_group_skips_built_ins_and_refuses_them_singly() {
 
 #[test]
 fn built_in_cards_have_their_own_size_and_keep_the_whole_label() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let o = handle(
         &s.execute("csd.place", &json!({ "product": "__by-others", "at": [0, 0], "label": "120/208V 3 Phase 100A Input from others" })).unwrap(),
     );
@@ -1476,7 +1476,7 @@ fn built_in_cards_have_their_own_size_and_keep_the_whole_label() {
 
 #[test]
 fn a_products_icon_size_sets_its_card_and_a_resized_card_scales_from_it() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let mut lib = (*s.csd_library).clone();
     if let Some(p) = lib.iter_mut().find(|p| p.id == CONSOLE) {
         p.extra.insert("iconW".into(), json!(216));
@@ -1522,4 +1522,35 @@ fn titleblock_fit_grows_the_sheet_around_the_drawing_and_undoes_in_one_step() {
         _ => None,
     });
     assert_eq!(scale, Some(1.0));
+}
+
+#[test]
+fn an_inch_drawing_lays_out_the_same_geometry_at_one_ninety_sixth() {
+    let k = 1.0 / 96.0;
+    let (px, _, _, w0) = setup();
+    let mut s = Session::new();
+    s.execute("ortho", &json!({ "on": true })).unwrap();
+    let a = handle(&s.execute("csd.place", &json!({ "product": CONSOLE, "at": [0, 0] })).unwrap());
+    let b = handle(&s.execute("csd.place", &json!({ "product": NODE, "at": [200.0 * k, 60.0 * k] })).unwrap());
+    let w = connect(&mut s, a, b).unwrap();
+    let width = |s: &mut Session| s.execute("csd.device.info", &json!({ "handle": a.hex() })).unwrap()["size"][0].as_f64().unwrap();
+    assert!((width(&mut s) - cadcraft_csd::CARD_W * k).abs() < 1e-9);
+    let lib = s.execute("csd.device.info", &json!({ "handle": a.hex() })).unwrap()["libSize"][0].as_f64().unwrap();
+    assert!((lib - cadcraft_csd::CARD_W * k).abs() < 1e-9);
+    let (want, got) = (verts(&px, w0), verts(&s, w));
+    assert_eq!(want.len(), got.len());
+    assert!(want.iter().zip(&got).all(|(p, q)| (*p * k).near(*q, 1e-9)), "{want:?} vs {got:?}");
+    let decos: Vec<f64> = (s.doc().unwrap().model.iter())
+        .filter(|e| deco_from_xdata(&e.common.xdata).is_some())
+        .filter_map(|e| match &e.kind {
+            EntityKind::Insert(i) => Some(i.scale.x),
+            _ => None,
+        })
+        .collect();
+    assert!(!decos.is_empty() && decos.iter().all(|x| (x - k).abs() < 1e-12), "{decos:?}");
+    // A requested size is in drawing units and clamps to the pixel limits at this scale.
+    s.execute("csd.size", &json!({ "handles": [a.hex()], "w": 20.0 })).unwrap();
+    assert!((width(&mut s) - 1000.0 * k).abs() < 1e-9);
+    s.execute("csd.size", &json!({ "handles": [a.hex()], "w": null })).unwrap();
+    assert!((width(&mut s) - cadcraft_csd::CARD_W * k).abs() < 1e-9);
 }

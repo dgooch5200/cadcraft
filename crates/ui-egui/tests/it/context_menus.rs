@@ -253,7 +253,7 @@ fn entry(app: &CadApp, label: &str) -> (String, String, bool) {
 
 #[test]
 fn lighting_device_menus_offer_card_canvas_and_multi_select_items() {
-    let mut app = app();
+    let mut app = CadApp::new(crate::px_session(), Services::default());
     assert!(!ids(&context_menu::entries(&app)).iter().any(|i| i.starts_with("run:csd.")), "no lighting in use, no lighting items");
     let a = place_device(&mut app, "CHAMMQ50", 0.0);
     let b = place_device(&mut app, "CHAMMQ50", 200.0);

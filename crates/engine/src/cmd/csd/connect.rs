@@ -10,14 +10,15 @@ use super::{devices, run_connect};
 use crate::cmd::helpers::line;
 use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 
-/// How far outside a card a click still picks it.
+/// How far outside a card a click still picks it, in pixels.
 const MARGIN: f64 = 10.0;
 
 type Port = (Handle, Side, Vec2);
 
 /// The device whose card (plus margin) holds `p`, and the card side whose port is nearest.
 fn pick(s: &Session, p: Vec2) -> Option<Port> {
-    let store = s.doc().ok()?.space(&s.space())?;
+    let d = s.doc().ok()?;
+    let (store, margin) = (d.space(&s.space())?, MARGIN * super::units::px(d));
     devices(store, &s.csd_library)
         .iter()
         .filter_map(|d| {
@@ -25,7 +26,7 @@ fn pick(s: &Session, p: Vec2) -> Option<Port> {
             let (at, scale) = (i.insert.xy(), Vec2::new(i.scale.x, i.scale.y));
             let local = (p - at).rotate(-i.rotation);
             let size = d.size();
-            let inside = local.x.abs() <= size.x / 2.0 * scale.x.abs() + MARGIN && local.y.abs() <= size.y / 2.0 * scale.y.abs() + MARGIN;
+            let inside = local.x.abs() <= size.x / 2.0 * scale.x.abs() + margin && local.y.abs() <= size.y / 2.0 * scale.y.abs() + margin;
             let (side, port, dist) = [Side::Top, Side::Bottom, Side::Left, Side::Right]
                 .into_iter()
                 .map(|side| {

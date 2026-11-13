@@ -50,6 +50,31 @@ mod tests {
     }
 
     #[test]
+    fn the_new_sheet_is_17_by_11_inches() {
+        let mut s = Session::new();
+        s.execute("csd.new", &json!({})).unwrap();
+        let (_, tb) = super::sheet::find(&s, cadcraft_csd::TITLEBLOCK).unwrap();
+        let (w, h) = cadcraft_csd::Paper::Tabloid.size();
+        assert!((w * tb.scale.x - 17.0).abs() < 1e-9 && (h * tb.scale.y - 11.0).abs() < 1e-9, "{:?}", tb.scale);
+        let (_, lg) = super::sheet::find(&s, cadcraft_csd::LEGEND).unwrap();
+        assert!((lg.scale.x - tb.scale.x).abs() < 1e-12);
+        assert!((lg.insert.x - cadcraft_csd::MARGIN / 96.0).abs() < 1e-9, "{:?}", lg.insert);
+    }
+
+    #[test]
+    fn fitting_an_inch_sheet_reports_its_scale_against_its_own_size() {
+        let mut s = Session::new();
+        s.execute("csd.new", &json!({})).unwrap();
+        assert_eq!(s.execute("csd.titleblock.fit", &json!({})).unwrap()["changed"], false);
+        s.execute("line", &json!({ "points": [[1.0, 1.0], [34.0, 20.0]] })).unwrap();
+        let r = s.execute("csd.titleblock.fit", &json!({})).unwrap();
+        assert!(r["changed"].as_bool().unwrap() && (r["scale"].as_f64().unwrap() - 2.2).abs() < 0.3, "{r}");
+        let (_, tb) = super::sheet::find(&s, cadcraft_csd::TITLEBLOCK).unwrap();
+        assert!((tb.scale.x - r["scale"].as_f64().unwrap() / 96.0).abs() < 1e-9);
+        assert_eq!(s.execute("csd.titleblock.fit", &json!({})).unwrap()["changed"], false);
+    }
+
+    #[test]
     fn a_failed_new_drawing_keeps_the_routing_mode() {
         let mut s = Session::new();
         let path = std::env::temp_dir().join(format!("csd-new-ortho-{}.cpsd", std::process::id()));

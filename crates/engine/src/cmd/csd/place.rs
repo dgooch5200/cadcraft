@@ -22,7 +22,7 @@ pub(super) fn run_arm(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// The most devices one `csd.place.grid` puts down.
 const MAX_GRID: u64 = 400;
-/// The web app's default space between neighbouring cards.
+/// The web app's default space between neighbouring cards, in pixels.
 const GRID_GAP: f64 = 24.0;
 
 /// `csd.place.grid`: `at` is the first card's centre; rows run downwards, columns to the right.
@@ -41,7 +41,8 @@ pub(super) fn run_grid(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let product = str_param(p, "product").ok_or_else(|| bad(cmd, "`product` is required"))?;
     let card = lookup(&s.csd_library, product).map_or(Vec2::new(CARD_W, CARD_H), |x| card_size(x, false));
-    let (dx, dy) = (step("dx", card.x + GRID_GAP)?, step("dy", card.y + GRID_GAP)?);
+    let k = super::units::px(s.doc()?);
+    let (dx, dy) = (step("dx", (card.x + GRID_GAP) * k)?, step("dy", (card.y + GRID_GAP) * k)?);
     let at = point_req(cmd, p, "at")?;
     let mut handles = Vec::new();
     for r in 0..rows {
@@ -95,7 +96,7 @@ impl Interactive for PlaceM {
     }
     fn preview(&self, s: &Session, c: Vec2) -> Vec<EntityKind> {
         let size = self.product.as_deref().and_then(|id| lookup(&s.csd_library, id)).map_or(Vec2::new(CARD_W, CARD_H), |x| card_size(x, false));
-        let h = size * 0.5;
+        let h = size * (0.5 * s.doc().map_or(1.0, super::units::px));
         vec![lwpoly(rect_vertices(c - h, c + h), true)]
     }
 }

@@ -36,6 +36,7 @@ mod schedule;
 mod shapes;
 mod sheet;
 mod twoline;
+pub(crate) mod units;
 mod wire;
 use super::{CommandSpec, always, bad, point_req, str_param, targets};
 use crate::{EngineError, Result, Session};
@@ -266,8 +267,8 @@ const CORNER_R: f64 = 6.0;
 
 /// The wire's polyline: its route, with each interior bend of an `ortho` route rounded by an arc
 /// (a bulge of tan(turn / 4)), kept short enough that neighbouring bends never overlap.
-fn vertices(path: &[Vec2], ortho: bool) -> Vec<PolyVertex> {
-    let v = |p: Vec2, bulge| PolyVertex { p, bulge, start_width: WIRE_W, end_width: WIRE_W };
+fn vertices(path: &[Vec2], ortho: bool, k: f64) -> Vec<PolyVertex> {
+    let v = |p: Vec2, bulge| PolyVertex { p, bulge, start_width: WIRE_W * k, end_width: WIRE_W * k };
     if !ortho {
         return path.iter().map(|&p| v(p, 0.0)).collect();
     }
@@ -284,7 +285,7 @@ fn vertices(path: &[Vec2], ortho: bool) -> Vec<PolyVertex> {
             out.push(v(p, 0.0));
             continue;
         }
-        let t = (CORNER_R * (turn.abs() / 2.0).tan()).min(la / 2.0).min(lb / 2.0);
+        let t = (CORNER_R * k * (turn.abs() / 2.0).tan()).min(la / 2.0).min(lb / 2.0);
         out.push(v(p - a * (t / la), (turn / 4.0).tan()));
         out.push(v(p + b * (t / lb), 0.0));
     }
@@ -306,13 +307,14 @@ struct Laid {
 }
 
 /// The path of every linked wire in `store` whose two devices exist. Each device edge's wires
-/// are dealt slots in fan order, so a wire's route depends on its neighbours on both edges.
-fn layout(store: &EntityStore, products: &[Product], ortho: bool) -> Vec<Laid> {
-    layout_with(store, products, ortho, None)
+/// are dealt slots in fan order, so a wire's route depends on its neighbours on both edges. `k` is
+/// the drawing units per pixel: routes are computed in pixels and scaled back.
+fn layout(store: &EntityStore, products: &[Product], ortho: bool, k: f64) -> Vec<Laid> {
+    layout_with(store, products, ortho, k, None)
 }
 
 /// [`layout`] with one wire's waypoints replaced, to preview an edit.
-fn layout_with(store: &EntityStore, products: &[Product], ortho: bool, over: Option<(Handle, &[Vec2])>) -> Vec<Laid> {
+fn layout_with(store: &EntityStore, products: &[Product], ortho: bool, k: f64, over: Option<(Handle, &[Vec2])>) -> Vec<Laid> {
     let device = |h| match store.get(h).map(|x| &x.kind) {
         Some(EntityKind::Insert(i)) if is_device_block(i) => Some(i),
         _ => None,
@@ -362,7 +364,8 @@ fn layout_with(store: &EntityStore, products: &[Product], ortho: bool, over: Opt
             let shift = was.map(|(f, t)| (p - f, q - t)).filter(|(d, e)| d.len() > 1e-9 && d.near(*e, 1e-6)).map(|(d, _)| d);
             let moved = shift.filter(|_| !l.points.is_empty()).map(|d| l.points.iter().map(|&pt| pt + d).collect::<Vec<_>>());
             let points = moved.as_ref().unwrap_or(&l.points);
-            let path = route_via(p, side_p, sa, q, side_q, sb, points, ortho);
+            let px: Vec<Vec2> = points.iter().map(|&pt| pt / k).collect();
+            let path = route_via(p / k, side_p, sa, q / k, side_q, sb, &px, ortho).into_iter().map(|v| v * k).collect();
             Laid { wire: w, link: l, path, moved }
         })
         .collect()
@@ -410,7 +413,7 @@ impl Plan {
 /// route with exactly its decorations, no decoration of a wire that is not there, and the
 /// decorations on top of everything else. A wire with a missing device keeps its geometry and
 /// its decorations, so undoing the erase finds it linked again.
-fn plan(store: &EntityStore, products: &[Product], ortho: bool) -> Plan {
+fn plan(store: &EntityStore, products: &[Product], ortho: bool, k: f64) -> Plan {
     let mut plan = Plan::default();
     let wire_set: HashSet<Handle> = wires(store).into_iter().map(|(h, _)| h).collect();
     // A decoration of a wire that is not one (a stale or hostile handle) or a second one for the
@@ -428,18 +431,20 @@ fn plan(store: &EntityStore, products: &[Product], ortho: bool) -> Plan {
         }
     }
     plan.lift = decos.iter().filter(|(i, _)| last_other.is_some_and(|l| *i < l)).map(|(_, h)| *h).collect();
-    for Laid { wire, link, path, moved } in layout(store, products, ortho) {
+    for Laid { wire, link, path, moved } in layout(store, products, ortho, k) {
         let protocol = link.protocol;
         if let Some(points) = moved {
             plan.links.push((wire, WireLink { points, ..link.clone() }));
         }
-        let vs = vertices(&path, ortho);
+        let vs = vertices(&path, ortho, k);
         if !matches!(store.get(wire).map(|e| &e.kind), Some(EntityKind::LwPolyline(pl)) if same(&pl.vertices, &vs)) {
             plan.routes.push((wire, vs));
         }
         let layer = store.get(wire).map(|e| e.common.layer.clone()).unwrap_or_default();
-        for (deco, at) in deco_points(&path, ortho, link.label_t).into_iter().flatten() {
-            let insert = Insert { block: deco_block_name(protocol, deco), insert: at.to3(0.0), ..Insert::default() };
+        let scale = cadcraft_geom::Vec3::new(k, k, k);
+        // The decorations are laid out in pixels, then drawn at `k`.
+        for (deco, at) in deco_points(&path.iter().map(|&v| v / k).collect::<Vec<_>>(), ortho, link.label_t).into_iter().flatten() {
+            let insert = Insert { block: deco_block_name(protocol, deco), insert: (at * k).to3(0.0), scale, ..Insert::default() };
             let want = Want { wire, deco, protocol, layer: layer.clone(), insert };
             match have.get(&(wire, deco)) {
                 Some(h) if store.get(*h).is_some_and(|e| want.matches(e)) => {}
@@ -502,8 +507,9 @@ fn spaces(doc: &Drawing) -> Vec<Space> {
 pub(crate) fn refresh(doc: &mut Arc<Drawing>, products: &[Product], ortho: bool) {
     sheet::refresh_legend(doc);
     show_labels(doc);
+    let k = units::px(doc);
     for space in spaces(doc) {
-        let p = doc.space(&space).map(|st| plan(st, products, ortho)).unwrap_or_default();
+        let p = doc.space(&space).map(|st| plan(st, products, ortho, k)).unwrap_or_default();
         apply(doc, &space, p);
     }
 }
@@ -622,6 +628,7 @@ fn run_place(s: &mut Session, p: &Value) -> Result<Value> {
 /// Inserts `product`'s card at `at`; the strip shows `label`, or the short code until there is one
 /// (a built-in has no code on its card, so its name).
 fn place_card(s: &mut Session, product: &Product, label: &str, at: Vec2) -> Result<Handle> {
+    let k = units::pin_px(s.doc_mut()?);
     let name = ensure_device_block(s, product, false)?;
     let default = if is_builtin(&product.id) { product.name.clone() } else { canvas_code(product) };
     let label = if label.trim().is_empty() { &default } else { label };
@@ -629,7 +636,7 @@ fn place_card(s: &mut Session, product: &Product, label: &str, at: Vec2) -> Resu
     values.insert("PRODUCT".into(), json!(product.id));
     values.insert("NAME".into(), json!(label));
     values.insert("LABEL".into(), json!(strip_text(product, false, label)));
-    super::blocks::insert(s, &name, at, 1.0, 0.0, &values)
+    super::blocks::insert(s, &name, at, k, 0.0, &values)
 }
 
 /// `label` as the card's label shows it: cut to the strip, or whole where a built-in wraps it.
@@ -654,13 +661,13 @@ const MIN_SIZE: f64 = 10.0;
 const MAX_SIZE: f64 = 1000.0;
 
 /// One axis of `csd.size`: absent keeps `was`, null resets to the card's own size, a number sets it.
-fn axis_scale(p: &Value, key: &str, card: f64, was: f64) -> Result<f64> {
+fn axis_scale(p: &Value, key: &str, card: f64, was: f64, k: f64) -> Result<f64> {
     match p.get(key) {
         None => Ok(was),
-        Some(Value::Null) => Ok(was.signum()),
+        Some(Value::Null) => Ok(was.signum() * k),
         Some(v) => {
             let n = v.as_f64().filter(|n| n.is_finite()).ok_or_else(|| bad("csd.size", format!("`{key}` must be a number or null")))?;
-            Ok(was.signum() * n.clamp(MIN_SIZE, MAX_SIZE) / card)
+            Ok(was.signum() * n.clamp(MIN_SIZE * k, MAX_SIZE * k) / card)
         }
     }
 }
@@ -674,13 +681,14 @@ fn device_handles(s: &Session, hs: &[Handle]) -> Result<Vec<Handle>> {
 fn run_size(s: &mut Session, p: &Value) -> Result<Value> {
     let hs = device_handles(s, &targets(s, p)?)?;
     let library = s.csd_library.clone();
+    let k = units::px(s.doc()?);
     // Validate against every device first so a bad value changes nothing.
     let mut scales = Vec::new();
     for h in &hs {
         if let Some(EntityKind::Insert(i)) = s.doc()?.entity(*h).map(|e| &e.kind) {
             let sign = |v: f64| if v == 0.0 { 1.0 } else { v };
             let card = card_of(i, &library);
-            scales.push((*h, axis_scale(p, "w", card.x, sign(i.scale.x))?, axis_scale(p, "h", card.y, sign(i.scale.y))?));
+            scales.push((*h, axis_scale(p, "w", card.x, sign(i.scale.x), k)?, axis_scale(p, "h", card.y, sign(i.scale.y), k)?));
         }
     }
     let d = s.doc_mut()?;
@@ -931,7 +939,7 @@ fn run_device_info(s: &mut Session, p: &Value) -> Result<Value> {
         "sameProduct": same,
         "at": [i.insert.x, i.insert.y],
         "size": [card.x * i.scale.x.abs(), card.y * i.scale.y.abs()],
-        "libSize": [card.x, card.y],
+        "libSize": [card.x * units::px(d), card.y * units::px(d)],
         "twoLine": two_line(i),
     }))
 }
@@ -1161,7 +1169,8 @@ fn run_connect(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Adds the wire for `link` without checking the ports or routing it.
 fn add_wire(s: &mut Session, link: &WireLink) -> Result<Handle> {
-    let (layer, ltscale) = wire_layer(s.doc_mut()?, link.protocol);
+    let k = units::pin_px(s.doc_mut()?);
+    let (layer, ltscale) = wire_layer(s.doc_mut()?, link.protocol, k);
     // The route comes from `refresh`, which also deals the neighbours' slots on both edges. Wires
     // go under the cards, as on the web app's sheet.
     let h =
@@ -1198,9 +1207,9 @@ fn linetype_scale(d: &mut Drawing, name: &str, len: f64) -> f64 {
 /// The layer for `protocol`'s wires, created on first use in the protocol's colour (true
 /// colour) and, for the dashed protocols, with a dashed linetype; also the linetype scale for
 /// its wires.
-fn wire_layer(d: &mut Drawing, protocol: Protocol) -> (String, f64) {
+fn wire_layer(d: &mut Drawing, protocol: Protocol, k: f64) -> (String, f64) {
     let name = format!("CSD_{}", protocol.id());
-    let scale = if protocol.dashed() { dashed_scale(d, DASH_LEN) } else { 1.0 };
+    let scale = if protocol.dashed() { dashed_scale(d, DASH_LEN * k) } else { 1.0 };
     if d.layer(&name).is_none() {
         let mut layer = Layer::new(&name);
         layer.color = Color::True(Rgb::from_u32(protocol.color()));

@@ -29,14 +29,14 @@ fn hex(v: &Value, key: &str) -> Option<Rgb> {
 }
 
 /// Draws one shape of the file; `skip` hears why a shape was left out.
-fn import_one(s: &mut Session, v: &Value, mut skip: impl FnMut(&'static str)) -> Result<bool> {
+fn import_one(s: &mut Session, k: f64, v: &Value, mut skip: impl FnMut(&'static str)) -> Result<bool> {
     if !v.is_object() {
         skip("shape that is not an object");
         return Ok(false);
     }
     let kind = text(v, "type");
     let coord = |k| number(v, k).unwrap_or(0.0);
-    let (Some(a), Some(b)) = (to_drawing(coord("x1"), coord("y1")), to_drawing(coord("x2"), coord("y2"))) else {
+    let (Some(a), Some(b)) = (to_drawing(coord("x1"), coord("y1"), k), to_drawing(coord("x2"), coord("y2"), k)) else {
         skip("shape outside the drawing limits");
         return Ok(false);
     };
@@ -56,7 +56,7 @@ fn import_one(s: &mut Session, v: &Value, mut skip: impl FnMut(&'static str)) ->
         }
         "text" => {
             color = hex(v, "textColor");
-            let height = number(v, "fontSize").filter(|h| *h > 0.0).unwrap_or(DEFAULT_FONT).min(MAX_FONT);
+            let height = number(v, "fontSize").filter(|h| *h > 0.0).unwrap_or(DEFAULT_FONT).min(MAX_FONT) * k;
             let contents = mtext_literal(&text(v, "text").chars().take(MAX_TEXT_CHARS).collect::<String>());
             let (ax, code) = match text(v, "textAlign").as_str() {
                 "center" => ((lo.x + hi.x) / 2.0, 2),
@@ -95,7 +95,7 @@ fn import_one(s: &mut Session, v: &Value, mut skip: impl FnMut(&'static str)) ->
         _ => None,
     };
     let ltscale = match line_style {
-        Some((name, per)) => linetype_scale(s.doc_mut()?, name, per * weight.filter(|w| *w > 0.0).unwrap_or(DEFAULT_WEIGHT)),
+        Some((name, per)) => linetype_scale(s.doc_mut()?, name, per * k * weight.filter(|w| *w > 0.0).unwrap_or(DEFAULT_WEIGHT)),
         None => 1.0,
     };
     let lineweight = weight.map(|w| {
@@ -157,25 +157,25 @@ fn import_one(s: &mut Session, v: &Value, mut skip: impl FnMut(&'static str)) ->
 }
 
 /// Imports `shapes`; returns how many were drawn.
-pub(super) fn import<'a>(s: &mut Session, shapes: impl Iterator<Item = &'a Value>, mut skip: impl FnMut(&'static str)) -> Result<usize> {
+pub(super) fn import<'a>(s: &mut Session, k: f64, shapes: impl Iterator<Item = &'a Value>, mut skip: impl FnMut(&'static str)) -> Result<usize> {
     let mut n = 0;
     for v in shapes {
         if s.doc()?.layer(SHAPES_LAYER).is_none() {
             s.doc_mut()?.layers.push(Layer::new(SHAPES_LAYER));
         }
-        n += usize::from(import_one(s, v, &mut skip)?);
+        n += usize::from(import_one(s, k, v, &mut skip)?);
     }
     Ok(n)
 }
 
-fn corners(a: Vec2, b: Vec2) -> Value {
-    let ((x1, y1), (x2, y2)) = (from_drawing(a), from_drawing(b));
+fn corners(a: Vec2, b: Vec2, k: f64) -> Value {
+    let ((x1, y1), (x2, y2)) = (from_drawing(a, k), from_drawing(b, k));
     json!({ "x1": x1, "y1": y1, "x2": x2, "y2": y2 })
 }
 
 /// A box (low and high corner in the drawing) as ChamSys's top-left and bottom-right corners.
-fn boxed((lo, hi): (Vec2, Vec2)) -> Value {
-    corners(Vec2::new(lo.x, hi.y), Vec2::new(hi.x, lo.y))
+fn boxed((lo, hi): (Vec2, Vec2), k: f64) -> Value {
+    corners(Vec2::new(lo.x, hi.y), Vec2::new(hi.x, lo.y), k)
 }
 
 fn put_color(shape: &mut Value, key: &str, c: Color) {
@@ -185,7 +185,7 @@ fn put_color(shape: &mut Value, key: &str, c: Color) {
 }
 
 /// The entities on [`SHAPES_LAYER`] as `shapes`, and how many of them have no ChamSys kind.
-pub(super) fn export(store: &EntityStore) -> (Vec<Value>, usize) {
+pub(super) fn export(store: &EntityStore, k: f64) -> (Vec<Value>, usize) {
     let (mut out, mut skipped) = (Vec::new(), 0);
     let ents: Vec<_> = store.iter().filter(|e| e.common.layer == SHAPES_LAYER).collect();
     // Solid rectangular hatches are the fills of the rectangles drawn over them.
@@ -216,9 +216,9 @@ pub(super) fn export(store: &EntityStore) -> (Vec<Value>, usize) {
         }
         let id = format!("sh{n}");
         let shape = match &e.kind {
-            EntityKind::Line(l) => Some(("line", corners(l.a.xy(), l.b.xy()))),
+            EntityKind::Line(l) => Some(("line", corners(l.a.xy(), l.b.xy(), k))),
             EntityKind::LwPolyline(p) => rect_of(p).map(|b| {
-                let mut r = boxed(b);
+                let mut r = boxed(b, k);
                 if let Some(f) = fill_of.get(&e.handle) {
                     put_color(&mut r, "fill", f.common.color);
                     if let Transparency::Percent(p) = f.common.transparency {
@@ -227,7 +227,7 @@ pub(super) fn export(store: &EntityStore) -> (Vec<Value>, usize) {
                 }
                 ("rect", r)
             }),
-            EntityKind::Ellipse(el) => ellipse_box(el).map(|b| ("ellipse", boxed(b))),
+            EntityKind::Ellipse(el) => ellipse_box(el).map(|b| ("ellipse", boxed(b, k))),
             EntityKind::MText(t) => {
                 let w = t.width.max(0.0);
                 let (left, align) = match t.attach {
@@ -235,10 +235,10 @@ pub(super) fn export(store: &EntityStore) -> (Vec<Value>, usize) {
                     3 => (t.insert.x - w, "right"),
                     _ => (t.insert.x, "left"),
                 };
-                let mut c = corners(Vec2::new(left, t.insert.y), Vec2::new(left + w, t.insert.y - t.height));
+                let mut c = corners(Vec2::new(left, t.insert.y), Vec2::new(left + w, t.insert.y - t.height), k);
                 c["textAlign"] = json!(align);
                 c["text"] = json!(cadcraft_fonts::plain_mtext(&t.contents));
-                c["fontSize"] = json!(t.height);
+                c["fontSize"] = json!(t.height / k);
                 (1..=3).contains(&t.attach).then_some(("text", c))
             }
             _ => None,

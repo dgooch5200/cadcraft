@@ -21,8 +21,8 @@ const PAGE_ID: &str = "page-1";
 const PAGE_NAME: &str = "Canvas 1";
 const MAX_UNPLACED_NODES: u64 = 10_000;
 
-fn point(p: Vec2) -> Value {
-    let (x, y) = from_drawing(p);
+fn point(p: Vec2, k: f64) -> Value {
+    let (x, y) = from_drawing(p, k);
     json!({ "x": x, "y": y })
 }
 
@@ -32,6 +32,7 @@ pub(super) fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     let ortho = s.settings.orthomode;
     let project = sheet::run_project(s, &Value::Null)?;
     let doc = s.doc()?;
+    let k = super::units::px(doc);
     let store = doc.space(&s.space()).ok_or_else(|| EngineError::Other("no such space".into()))?;
 
     let devs = devices(store, &library);
@@ -44,9 +45,9 @@ pub(super) fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     for (n, d) in devs.iter().enumerate() {
         let i = d.insert;
         let card = d.size();
-        let (w, h) = (card.x * i.scale.x.abs(), card.y * i.scale.y.abs());
+        let (w, h) = (card.x * i.scale.x.abs() / k, card.y * i.scale.y.abs() / k);
         // The insert point is the card's centre; ChamSys keeps the top-left.
-        let (cx, cy) = from_drawing(Vec2::new(i.insert.x, i.insert.y));
+        let (cx, cy) = from_drawing(Vec2::new(i.insert.x, i.insert.y), k);
         let name = attr(i, "NAME");
         let mut node = json!({
             "id": format!("d{n}"),
@@ -105,7 +106,7 @@ pub(super) fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
                 "type": l.protocol.id(), "label": l.name.clone().unwrap_or_default(),
             });
             if !l.points.is_empty() {
-                c["points"] = l.points.iter().copied().map(point).collect();
+                c["points"] = l.points.iter().copied().map(|p| point(p, k)).collect();
             }
             if let Some(t) = l.label_t {
                 c["labelT"] = json!(t);
@@ -127,7 +128,7 @@ pub(super) fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     for (theirs, ours) in TITLE_MAP {
         title.insert(theirs.into(), json!(project["fields"][ours].as_str().unwrap_or_default()));
     }
-    let (shapes, skipped_shapes) = super::shapes::export(store);
+    let (shapes, skipped_shapes) = super::shapes::export(store, k);
     if skipped_shapes > 0 {
         skipped.push(format!("{skipped_shapes} x entity on CSD_SHAPES that is not a line, rectangle, ellipse or text"));
     }
@@ -190,7 +191,7 @@ mod tests {
 
     #[test]
     fn round_trips_through_the_importer() {
-        let mut s = Session::new();
+        let mut s = crate::cmd::csd::units::px_session();
         let a = place(&mut s, PRODUCT, [0.0, 0.0]);
         let b = place(&mut s, NODE, [300.0, 80.0]);
         let c = place(&mut s, NODE, [600.0, -50.0]);
@@ -210,7 +211,7 @@ mod tests {
         let r = s.execute("csd.export.cpsd", &json!({ "path": path })).unwrap();
         assert_eq!((r["devices"].clone(), r["wires"].clone(), r["unplaced"].clone()), (json!(3), json!(1), json!(1)), "{r}");
 
-        let mut t = Session::new();
+        let mut t = crate::cmd::csd::units::px_session();
         let r = t.execute("csd.import.cpsd", &json!({ "path": path })).unwrap();
         let _ = std::fs::remove_file(path);
         assert_eq!(
@@ -242,7 +243,7 @@ mod tests {
 
     #[test]
     fn off_page_target_is_written_only_for_the_exported_page() {
-        let mut s = Session::new();
+        let mut s = crate::cmd::csd::units::px_session();
         let a = place(&mut s, "__off-page", [0.0, 0.0]);
         let b = place(&mut s, "__off-page", [300.0, 0.0]);
         s.execute("csd.device.set", &json!({ "handle": a, "linkPage": " Canvas 1 " })).unwrap();
@@ -261,10 +262,10 @@ mod tests {
     fn ortho_survives_the_round_trip() {
         let path = std::env::temp_dir().join(format!("cadcraft-cpsd-ortho-{}.cpsd", std::process::id()));
         let path = path.to_str().unwrap();
-        let mut s = Session::new();
+        let mut s = crate::cmd::csd::units::px_session();
         s.execute("ortho", &json!({ "on": true })).unwrap();
         s.execute("csd.export.cpsd", &json!({ "path": path })).unwrap();
-        let mut t = Session::new();
+        let mut t = crate::cmd::csd::units::px_session();
         t.execute("csd.import.cpsd", &json!({ "path": path })).unwrap();
         assert!(t.settings.orthomode);
         s.execute("ortho", &json!({ "on": false })).unwrap();
@@ -276,7 +277,7 @@ mod tests {
 
     #[test]
     fn two_line_survives_the_round_trip() {
-        let mut s = Session::new();
+        let mut s = crate::cmd::csd::units::px_session();
         let a = place(&mut s, PRODUCT, [0.0, 0.0]);
         s.execute("csd.device.set", &json!({ "handle": a, "twoLine": true, "label": "Desk" })).unwrap();
         let path = std::env::temp_dir().join(format!("cadcraft-cpsd-two-{}.cpsd", std::process::id()));
@@ -284,7 +285,7 @@ mod tests {
         s.execute("csd.export.cpsd", &json!({ "path": path })).unwrap();
         let file: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         assert_eq!(file["nodes"][0]["twoLine"], json!(true));
-        let mut t = Session::new();
+        let mut t = crate::cmd::csd::units::px_session();
         let r = t.execute("csd.import.cpsd", &json!({ "path": path })).unwrap();
         let _ = std::fs::remove_file(path);
         assert_eq!(r["skipped"], json!([]), "{r}");
@@ -303,7 +304,7 @@ mod tests {
         let (a, b) =
             (dir.join(format!("cadcraft-shp-in-{}.cpsd", std::process::id())), dir.join(format!("cadcraft-shp-out-{}.cpsd", std::process::id())));
         std::fs::write(&a, file.to_string()).unwrap();
-        let mut s = Session::new();
+        let mut s = crate::cmd::csd::units::px_session();
         s.execute("csd.import.cpsd", &json!({ "path": a.to_str().unwrap() })).unwrap();
         let r = s.execute("csd.export.cpsd", &json!({ "path": b.to_str().unwrap() })).unwrap();
         let stray = s.add_entity(cadcraft_doc::EntityKind::Point(cadcraft_doc::Point { p: cadcraft_geom::Vec3::ZERO, angle: 0.0 })).unwrap();
@@ -337,7 +338,7 @@ mod tests {
         let (a, b) =
             (dir.join(format!("cadcraft-sty-in-{}.cpsd", std::process::id())), dir.join(format!("cadcraft-sty-out-{}.cpsd", std::process::id())));
         std::fs::write(&a, file.to_string()).unwrap();
-        let mut s = Session::new();
+        let mut s = crate::cmd::csd::units::px_session();
         s.execute("csd.import.cpsd", &json!({ "path": a.to_str().unwrap() })).unwrap();
         let store = s.doc().unwrap().space(&s.space()).unwrap();
         let on: Vec<_> = store.iter().filter(|e| e.common.layer == "CSD_SHAPES").collect();
@@ -370,7 +371,7 @@ mod tests {
         let import = |shapes: Value| {
             let a = std::env::temp_dir().join(format!("cadcraft-sty0-{}-{}.cpsd", std::process::id(), shapes.to_string().len()));
             std::fs::write(&a, json!({ "shapes": shapes }).to_string()).unwrap();
-            let mut s = Session::new();
+            let mut s = crate::cmd::csd::units::px_session();
             s.execute("csd.import.cpsd", &json!({ "path": a.to_str().unwrap() })).unwrap();
             let _ = std::fs::remove_file(&a);
             s
@@ -395,7 +396,7 @@ mod tests {
         let (a, b) =
             (dir.join(format!("cadcraft-pair-in-{}.cpsd", std::process::id())), dir.join(format!("cadcraft-pair-out-{}.cpsd", std::process::id())));
         std::fs::write(&a, file.to_string()).unwrap();
-        let mut s = Session::new();
+        let mut s = crate::cmd::csd::units::px_session();
         s.execute("csd.import.cpsd", &json!({ "path": a.to_str().unwrap() })).unwrap();
         s.execute("csd.export.cpsd", &json!({ "path": b.to_str().unwrap() })).unwrap();
         let out: Value = serde_json::from_slice(&std::fs::read(&b).unwrap()).unwrap();
@@ -413,7 +414,7 @@ mod tests {
         let (a, b) =
             (dir.join(format!("cadcraft-clear-in-{}.cpsd", std::process::id())), dir.join(format!("cadcraft-clear-out-{}.cpsd", std::process::id())));
         std::fs::write(&a, file.to_string()).unwrap();
-        let mut s = Session::new();
+        let mut s = crate::cmd::csd::units::px_session();
         s.execute("csd.import.cpsd", &json!({ "path": a.to_str().unwrap() })).unwrap();
         s.execute("csd.export.cpsd", &json!({ "path": b.to_str().unwrap() })).unwrap();
         let out: Value = serde_json::from_slice(&std::fs::read(&b).unwrap()).unwrap();

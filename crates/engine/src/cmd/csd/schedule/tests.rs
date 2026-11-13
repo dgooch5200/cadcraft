@@ -18,7 +18,7 @@ fn unplaced(s: &mut Session) -> Vec<(String, u64)> {
 
 #[test]
 fn unplaced_items_add_merge_set_remove_and_undo() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     s.execute("csd.unplaced.add", &json!({ "product": NODE, "qty": 2 })).unwrap();
     s.execute("csd.unplaced.add", &json!({ "product": "b565fc" })).unwrap();
     assert_eq!(s.execute("csd.unplaced.add", &json!({ "product": NODE })).unwrap()["index"], 0);
@@ -39,7 +39,7 @@ fn unplaced_items_add_merge_set_remove_and_undo() {
 
 #[test]
 fn unplaced_items_survive_a_dxf_save_and_reopen() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     s.execute("csd.unplaced.add", &json!({ "product": NODE, "qty": 4 })).unwrap();
     s.execute("csd.unplaced.add", &json!({ "product": "b565fc", "qty": 2 })).unwrap();
     let text = cadcraft_io::write_dxf(s.doc().unwrap());
@@ -50,7 +50,7 @@ fn unplaced_items_survive_a_dxf_save_and_reopen() {
 
 #[test]
 fn placing_a_product_takes_one_off_its_unplaced_row_and_place_arms_it() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     s.execute("csd.unplaced.add", &json!({ "product": NODE, "qty": 2 })).unwrap();
     assert_eq!(s.execute("csd.unplaced.place", &json!({ "index": 0 })).unwrap()["product"], NODE);
     assert_eq!(s.csd_armed.as_deref(), Some(NODE));
@@ -64,7 +64,7 @@ fn placing_a_product_takes_one_off_its_unplaced_row_and_place_arms_it() {
 
 #[test]
 fn schedule_lists_control_gear_first_with_ports_connections_and_poe() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let missing = place(&mut s, "OVCYC1FCV2", [0.0, 200.0]);
     let sw = super::super::tests::poe_switch(&mut s);
     let poe = place(&mut s, sw, [0.0, 0.0]);
@@ -87,7 +87,7 @@ fn schedule_lists_control_gear_first_with_ports_connections_and_poe() {
 
 #[test]
 fn bom_totals_placed_and_unplaced_by_product_and_exports_csv() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     for (i, label) in ["N1", "N2"].iter().enumerate() {
         s.execute("csd.place", &json!({ "product": NODE, "at": [i as f64 * 300.0, 0.0], "label": label })).unwrap();
     }
@@ -113,7 +113,7 @@ fn bom_totals_placed_and_unplaced_by_product_and_exports_csv() {
 
 #[test]
 fn bom_html_export_groups_by_category_and_escapes() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     s.execute("csd.place", &json!({ "product": NODE, "at": [0, 0], "label": "<b>N&1</b>" })).unwrap();
     s.execute("csd.place", &json!({ "product": CONSOLE, "at": [0, 200] })).unwrap();
     let path = std::env::temp_dir().join(format!("csd-bom-{}.html", std::process::id()));
@@ -137,7 +137,7 @@ fn set(s: &mut Session, h: Handle, mut p: serde_json::Value) -> crate::Result<se
 
 #[test]
 fn mounting_accessories_and_supply_by_others_round_trip_through_a_dxf() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let rack = place(&mut s, CONSOLE, [0.0, 0.0]);
     let node = place(&mut s, NODE, [300.0, 0.0]);
     let before = info(&mut s, node);
@@ -160,7 +160,7 @@ fn mounting_accessories_and_supply_by_others_round_trip_through_a_dxf() {
 
 #[test]
 fn mounting_refuses_itself_cycles_and_bad_input() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let (a, b) = (place(&mut s, CONSOLE, [0.0, 0.0]), place(&mut s, NODE, [300.0, 0.0]));
     assert!(set(&mut s, a, json!({ "mount": a.hex() })).is_err());
     set(&mut s, b, json!({ "mount": a.hex() })).unwrap();
@@ -172,7 +172,7 @@ fn mounting_refuses_itself_cycles_and_bad_input() {
 
 #[test]
 fn bom_lists_accessories_and_leaves_out_supply_by_others() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let a = place(&mut s, NODE, [0.0, 0.0]);
     let b = place(&mut s, NODE, [300.0, 0.0]);
     set(&mut s, a, json!({ "accessories": [{ "product": "b565fc", "qty": 2 }] })).unwrap();
@@ -192,7 +192,7 @@ fn bom_lists_accessories_and_leaves_out_supply_by_others() {
 
 #[test]
 fn moving_a_rack_carries_what_is_mounted_in_it_once() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let rack = place(&mut s, CONSOLE, [0.0, 0.0]);
     let node = place(&mut s, NODE, [300.0, 0.0]);
     let inner = place(&mut s, NODE, [600.0, 0.0]);
@@ -210,7 +210,7 @@ fn moving_a_rack_carries_what_is_mounted_in_it_once() {
 
 #[test]
 fn moving_a_device_wholly_into_a_card_mounts_it_and_out_unmounts() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let rack = place(&mut s, CONSOLE, [0.0, 0.0]);
     let inner = place(&mut s, NODE, [600.0, 0.0]);
     s.execute("csd.size", &json!({ "handles": [rack.hex()], "w": 1000, "h": 1000 })).unwrap();
@@ -229,7 +229,7 @@ fn moving_a_device_wholly_into_a_card_mounts_it_and_out_unmounts() {
 
 #[test]
 fn a_mounted_device_is_painted_after_its_host() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let inner = place(&mut s, NODE, [600.0, 0.0]);
     let rack = place(&mut s, CONSOLE, [0.0, 0.0]);
     let order = |s: &Session| s.doc().unwrap().space(&s.space()).unwrap().handles();
@@ -241,7 +241,7 @@ fn a_mounted_device_is_painted_after_its_host() {
 
 #[test]
 fn a_cable_to_a_mounted_device_is_lifted_over_the_cards_and_dropped_on_unmount() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let rack = place(&mut s, CONSOLE, [0.0, 0.0]);
     let inner = place(&mut s, NODE, [600.0, 0.0]);
     let other = place(&mut s, NODE, [1200.0, 0.0]);
@@ -258,7 +258,7 @@ fn a_cable_to_a_mounted_device_is_lifted_over_the_cards_and_dropped_on_unmount()
 
 #[test]
 fn builtin_blocks_place_but_are_on_no_list() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let node = place(&mut s, NODE, [0.0, 0.0]);
     let by_others = place(&mut s, cadcraft_csd::BY_OTHERS_ID, [300.0, 0.0]);
     place(&mut s, cadcraft_csd::OFF_PAGE_ID, [600.0, 0.0]);
@@ -274,7 +274,7 @@ fn builtin_blocks_place_but_are_on_no_list() {
 
 #[test]
 fn builtins_stay_off_the_unplaced_list() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     for id in ["__by-others", "__off-page"] {
         assert!(s.execute("csd.unplaced.add", &json!({ "product": id })).is_err());
     }
@@ -283,7 +283,7 @@ fn builtins_stay_off_the_unplaced_list() {
 
 #[test]
 fn poe_over_the_port_budget_warns_on_connect_and_on_the_schedule() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let sw = super::super::tests::poe_switch(&mut s);
     let poe = place(&mut s, sw, [0.0, 0.0]);
     let a = place(&mut s, "logic-ar111m", [200.0, 0.0]);
@@ -300,7 +300,7 @@ fn poe_over_the_port_budget_warns_on_connect_and_on_the_schedule() {
 
 #[test]
 fn interactive_connect_echoes_the_poe_warning() {
-    let mut s = Session::new();
+    let mut s = crate::cmd::csd::units::px_session();
     let sw = super::super::tests::poe_switch(&mut s);
     let poe = place(&mut s, sw, [0.0, 0.0]);
     let a = place(&mut s, "logic-ar111m", [200.0, 0.0]);

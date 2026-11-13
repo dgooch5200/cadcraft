@@ -6,6 +6,7 @@ use super::{
 };
 use cadcraft_csd::{LEGEND, MARGIN, Paper, TITLE_FIELDS, TITLE_H, TITLEBLOCK, legend_block, legend_protocols, titleblock_block};
 
+use super::units::{pin_px, px};
 use crate::cmd::point_param;
 
 pub(super) fn find(s: &Session, name: &str) -> Option<(Handle, Insert)> {
@@ -33,12 +34,13 @@ fn ensure_titleblock(s: &mut Session, at: Vec2, paper: Paper) -> Result<Handle> 
         return Ok(h);
     }
     let d = s.doc_mut()?;
+    let k = pin_px(d);
     ensure_bold(d);
     if d.block(TITLEBLOCK).is_none() {
         let block = titleblock_block(paper, || d.new_handle());
         d.blocks.insert(TITLEBLOCK.into(), Arc::new(block));
     }
-    crate::cmd::blocks::insert(s, TITLEBLOCK, at, 1.0, 0.0, &Map::new())
+    crate::cmd::blocks::insert(s, TITLEBLOCK, at, k, 0.0, &Map::new())
 }
 
 pub(super) fn run_titleblock(s: &mut Session, p: &Value) -> Result<Value> {
@@ -93,6 +95,7 @@ pub(super) fn run_titleblock_fit(s: &mut Session, _: &Value) -> Result<Value> {
         .map(|e| cadcraft_doc::entity_bounds(d, e, 0))
         .filter(|b| !b.is_empty() && b.min.is_finite() && b.max.is_finite())
         .fold(cadcraft_geom::Bounds2::EMPTY, |a, b| a.union(&b));
+    let kp = px(d);
     let (w, h) = paper_of(d).size();
     let (aw, ah) = (w - 2.0 * MARGIN, h - 2.0 * MARGIN - TITLE_H);
     let origin = ins.insert.xy();
@@ -101,15 +104,16 @@ pub(super) fn run_titleblock_fit(s: &mut Session, _: &Value) -> Result<Value> {
         b.min.x >= lo.x && b.min.y >= lo.y && b.max.x <= lo.x + aw * k && b.max.y <= lo.y + ah * k
     };
     if b.is_empty() || inside(k0) {
-        return Ok(json!({ "handle": tb.hex(), "scale": k0, "changed": false }));
+        return Ok(json!({ "handle": tb.hex(), "scale": k0 / kp, "changed": false }));
     }
-    // A tenth of the frame left clear around the drawing.
-    let k = ((b.width() / aw).max(b.height() / ah) * 1.1).max(k0);
-    let k = (k * 100.0).ceil() / 100.0;
+    // A tenth of the frame left clear around the drawing; the sheet's scale reads 1 at its own size.
+    let r = ((b.width() / (aw * kp)).max(b.height() / (ah * kp)) * 1.1).max(k0 / kp);
+    let r = (r * 100.0).ceil() / 100.0;
+    let k = r * kp;
     let to = Vec2::new(b.min.x - (aw * k - b.width()) / 2.0 - MARGIN * k, b.min.y - (ah * k - b.height()) / 2.0 - (MARGIN + TITLE_H) * k);
     let m = cadcraft_geom::Mat3::scale_about(origin, k / k0).then(cadcraft_geom::Mat3::translate(to - origin));
     crate::cmd::modify::transform_entities(s, &sheet, &m, false)?;
-    Ok(json!({ "handle": tb.hex(), "scale": k, "changed": true }))
+    Ok(json!({ "handle": tb.hex(), "scale": r, "changed": true }))
 }
 
 pub(super) fn run_project(s: &mut Session, _: &Value) -> Result<Value> {
@@ -189,7 +193,8 @@ pub(super) fn run_legend(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({ "handle": h.hex() }));
     }
     let above = find(s, TITLEBLOCK).map_or(Vec2::ZERO, |(_, i)| Vec2::new(i.insert.x, i.insert.y));
-    let at = point_param(p, "at").unwrap_or(above + Vec2::new(MARGIN, MARGIN + TITLE_H));
-    let h = crate::cmd::blocks::insert(s, LEGEND, at, 1.0, 0.0, &Map::new())?;
+    let k = pin_px(s.doc_mut()?);
+    let at = point_param(p, "at").unwrap_or(above + Vec2::new(MARGIN, MARGIN + TITLE_H) * k);
+    let h = crate::cmd::blocks::insert(s, LEGEND, at, k, 0.0, &Map::new())?;
     Ok(json!({ "handle": h.hex() }))
 }

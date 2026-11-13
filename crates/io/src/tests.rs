@@ -3657,3 +3657,11 @@ fn solid_hatch_keeps_angle_scale_and_double_flag() {
     assert!(f("41").is_some_and(|s| (s - 2.0).abs() < 1e-12), "{h:?}");
     assert_eq!(group(h, "77"), Some("0"), "{h:?}");
 }
+
+#[test]
+fn the_lighting_pixel_factor_survives_a_dxf_round_trip() {
+    let mut d = Drawing::new_imperial();
+    d.header.set_f64("CSDPX", 1.0 / 96.0);
+    let back = read_dxf(write_dxf(&d).as_bytes()).unwrap();
+    assert!((back.header.f64("CSDPX", 0.0) - 1.0 / 96.0).abs() < 1e-12);
+}

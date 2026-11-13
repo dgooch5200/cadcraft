@@ -2,7 +2,6 @@
 
 use cadcraft_csd::WireLink;
 use cadcraft_doc::Handle;
-use cadcraft_engine::Session;
 use cadcraft_engine::geom::Vec2;
 use cadcraft_ui_egui::menus::Entry;
 use cadcraft_ui_egui::{CadApp, Services, context_menu};
@@ -16,7 +15,7 @@ fn handle(r: &serde_json::Value) -> Handle {
 
 /// A wired console and node with one waypoint at (100, 150).
 fn app_with_cable() -> (CadApp, Handle) {
-    let mut app = CadApp::new(Session::new(), Services::default());
+    let mut app = CadApp::new(crate::px_session(), Services::default());
     app.run("ortho", json!({ "on": true })).unwrap();
     let a = handle(&app.run("csd.place", json!({ "product": "CHAMMQ50", "at": [0, 0] })).unwrap());
     let b = handle(&app.run("csd.place", json!({ "product": "epix-flex-drive", "at": [200, 60] })).unwrap());
