@@ -52,6 +52,8 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("VIEWSIZE", 40),
     // The lighting designer's list of products not yet drawn (JSON text).
     ("CSDUNPLACED", 1),
+    // 1 when the lighting designer's cards show only the product code.
+    ("CSDCODESONLY", 70),
 ];
 
 /// The current dimension style's variables as header variables (`$DIMTXT`, `$DIMDEC`…), after

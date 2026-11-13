@@ -23,7 +23,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             .params("{wire: handle, at: [x,y]} → {index}; inserted on the nearest leg, on the snap grid if SNAPMODE is on"),
         CommandSpec::new("csd.wire.point.remove", "Remove Wire Point", run_remove)
             .params("{wire: handle, index? | at?: [x,y] (nearest waypoint within 9)} → {points: count}"),
-        CommandSpec::new("csd.wire.point.move", "Move Wire Point", run_move).params("{wire: handle, index, to: [x,y]} → {index}"),
+        CommandSpec::new("csd.wire.point.move", "Move Wire Point", run_move).params("{wire: handle, index, to: [x,y]} → {index}; dropped on the snap grid if SNAPMODE is on"),
         CommandSpec::new("csd.wire.straighten", "Straighten Wires", run_straighten)
             .params("{wires?: [handle]} (default every bent wire) → {count}; clears the waypoints"),
         CommandSpec::new("csd.wire.bent", "Bent Wires", run_bent).params("{} → {count}; wires that have waypoints").noundo(),
@@ -123,7 +123,7 @@ fn run_remove(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_move(s: &mut Session, p: &Value) -> Result<Value> {
     let (h, mut link) = wire_param(s, "csd.wire.point.move", p)?;
     let index = index_param("csd.wire.point.move", p, &link)?;
-    let to = point_req("csd.wire.point.move", p, "to")?;
+    let to = snapped(s, point_req("csd.wire.point.move", p, "to")?);
     if let Some(pt) = link.points.get_mut(index) {
         *pt = to;
     }

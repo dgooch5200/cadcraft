@@ -1143,3 +1143,86 @@ fn devices_info_summarises_products_and_common_size() {
     let r = s.execute("csd.devices.info", &json!({ "handles": hs })).unwrap();
     assert!(r["size"]["w"].is_null() && r["size"]["h"].is_number());
 }
+
+#[test]
+fn place_grid_lays_out_rows_down_and_columns_across_in_one_undo() {
+    let mut s = ortho_session();
+    let r = s.execute("csd.place.grid", &json!({ "product": NODE, "at": [0, 0], "rows": 2, "cols": 3, "dx": 100, "dy": 120 })).unwrap();
+    let at: Vec<(f64, f64)> = r["handles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| match &s.doc().unwrap().entity(Handle::parse_hex(h.as_str().unwrap()).unwrap()).unwrap().kind {
+            EntityKind::Insert(i) => (i.insert.x, i.insert.y),
+            _ => panic!("not an insert"),
+        })
+        .collect();
+    assert_eq!(at, [(0.0, 0.0), (100.0, 0.0), (200.0, 0.0), (0.0, -120.0), (100.0, -120.0), (200.0, -120.0)]);
+    s.undo().unwrap();
+    assert_eq!(device_count(&mut s), 0);
+}
+
+#[test]
+fn place_grid_refuses_hostile_sizes() {
+    let mut s = ortho_session();
+    for p in [
+        json!({ "rows": 0, "cols": 1 }),
+        json!({ "rows": 21, "cols": 20 }),
+        json!({ "rows": -1, "cols": 2 }),
+        json!({ "rows": u64::MAX, "cols": u64::MAX }),
+        json!({ "rows": 1, "cols": 1, "dx": "x" }),
+    ] {
+        let mut p = p;
+        p["product"] = json!(NODE);
+        p["at"] = json!([0, 0]);
+        assert!(s.execute("csd.place.grid", &p).is_err(), "{p}");
+    }
+    assert_eq!(device_count(&mut s), 0);
+}
+
+#[test]
+fn clear_removes_devices_wires_and_decorations_but_keeps_the_sheet_furniture() {
+    let (mut s, ..) = setup();
+    s.execute("csd.project.set", &json!({ "fields": { "project": "Demo" } })).unwrap();
+    s.execute("csd.unplaced.add", &json!({ "product": NODE, "qty": 2 })).unwrap();
+    let r = s.execute("csd.clear", &json!({})).unwrap();
+    assert_eq!((r["devices"].as_u64(), r["wires"].as_u64()), (Some(2), Some(1)));
+    assert_eq!(device_count(&mut s), 0);
+    assert!(s.doc().unwrap().model.iter().all(|e| !matches!(e.kind, EntityKind::LwPolyline(_)) && deco_from_xdata(&e.common.xdata).is_none()));
+    assert_eq!(s.execute("csd.project", &json!({})).unwrap()["fields"]["project"], "Demo");
+    assert_eq!(s.execute("csd.unplaced.list", &json!({})).unwrap()["items"].as_array().map(Vec::len), Some(1));
+    s.undo().unwrap();
+    assert_eq!(device_count(&mut s), 2);
+}
+
+fn label_hidden(s: &Session, h: Handle) -> bool {
+    let Some(EntityKind::Insert(i)) = s.doc().unwrap().entity(h).map(|e| e.kind.clone()) else { panic!("no insert") };
+    i.attribs.iter().find(|a| a.tag == "LABEL").unwrap().invisible
+}
+
+#[test]
+fn codes_only_hides_labels_on_every_card_old_and_new_and_survives_a_save() {
+    let mut s = ortho_session();
+    let a = handle(&s.execute("csd.place", &json!({ "product": NODE, "at": [0, 0] })).unwrap());
+    assert_eq!(s.execute("csd.display", &json!({})).unwrap()["codesOnly"], false);
+    assert_eq!(s.execute("csd.display", &json!({ "codesOnly": true })).unwrap()["codesOnly"], true);
+    let b = handle(&s.execute("csd.place", &json!({ "product": NODE, "at": [200, 0] })).unwrap());
+    assert!(label_hidden(&s, a) && label_hidden(&s, b));
+    let mut t = Session::empty();
+    t.open_drawing(cadcraft_io::read_dxf(cadcraft_io::write_dxf(s.doc().unwrap()).as_bytes()).unwrap(), "Imported", None);
+    assert_eq!(t.execute("csd.display", &json!({})).unwrap()["codesOnly"], true);
+    s.execute("csd.display", &json!({ "codesOnly": false })).unwrap();
+    assert!(!label_hidden(&s, a) && !label_hidden(&s, b));
+    s.undo().unwrap();
+    assert!(label_hidden(&s, a));
+}
+
+#[test]
+fn moving_a_waypoint_snaps_to_the_grid_when_snap_is_on() {
+    let (mut s, _, _, w) = setup();
+    wire_cmd(&mut s, "csd.wire.point.add", json!({ "wire": w.hex(), "at": [100, 150] }));
+    s.settings.snapmode = true;
+    s.settings.snapunit = Vec2::new(10.0, 10.0);
+    wire_cmd(&mut s, "csd.wire.point.move", json!({ "wire": w.hex(), "index": 0, "to": [93, 148] }));
+    assert_eq!(link_of(&s, w).points, [Vec2::new(90.0, 150.0)]);
+}

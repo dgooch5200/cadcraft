@@ -40,6 +40,12 @@ fn own_specs() -> Vec<CommandSpec> {
         CommandSpec::new("csd.place", "Place Device", run_place)
             .params("{product: id of a library product, at: [x,y], label? (default the product code)} → {handle}; interactive: places the armed product at each point")
             .interactive(place::PlaceM::start),
+        CommandSpec::new("csd.place.grid", "Place Device Grid", place::run_grid)
+            .params("{product: id of a library product, at: [x,y] (first card's centre), rows, cols: >= 1 (rows * cols <= 400), dx?, dy?: spacing (default card plus 24)} → {handles}; rows run downwards"),
+        CommandSpec::new("csd.clear", "Clear Drawing", run_clear)
+            .params("{} → {devices, wires}; removes every device, wire and wire decoration; the title block, line key and unplaced list stay"),
+        CommandSpec::new("csd.display", "Card Display", run_display)
+            .params("{codesOnly?: bool} → {codesOnly}; codes only hides the label strip text on every card, saved with the drawing"),
         CommandSpec::new("csd.size", "Size Devices", run_size)
             .params("{handles? (default the selection), w?, h?: card size in drawing units, 10..1000, null resets that axis} → {sized}"),
         CommandSpec::new("csd.replace", "Replace Devices", run_replace)
@@ -427,6 +433,7 @@ fn spaces(doc: &Drawing) -> Vec<Space> {
 /// does) when drawings get large.
 pub(crate) fn refresh(doc: &mut Arc<Drawing>, ortho: bool) {
     sheet::refresh_legend(doc);
+    sync_display(doc);
     for space in spaces(doc) {
         let p = doc.space(&space).map(|st| plan(st, ortho)).unwrap_or_default();
         apply(doc, &space, p);
@@ -887,6 +894,70 @@ fn run_device_delete(s: &mut Session, p: &Value) -> Result<Value> {
     });
     s.set_selection(Vec::new());
     Ok(json!({ "deleted": devs.len(), "wires": linked.len() }))
+}
+
+fn run_clear(s: &mut Session, _: &Value) -> Result<Value> {
+    let d = s.doc()?;
+    let (mut devices, mut wire_hs, mut decos) = (Vec::new(), Vec::new(), Vec::new());
+    for sp in spaces(d) {
+        for e in d.space(&sp).into_iter().flat_map(|st| st.iter()) {
+            match &e.kind {
+                EntityKind::Insert(i) if is_device_block(i) && product_attr(i).is_some() => devices.push(e.handle),
+                EntityKind::LwPolyline(_) if WireLink::from_xdata(&e.common.xdata).is_some() => wire_hs.push(e.handle),
+                _ if deco_from_xdata(&e.common.xdata).is_some() => decos.push(e.handle),
+                _ => {}
+            }
+        }
+    }
+    let d = s.doc_mut()?;
+    devices.iter().chain(&wire_hs).chain(&decos).for_each(|h| {
+        d.remove_entity(*h);
+    });
+    s.set_selection(Vec::new());
+    Ok(json!({ "devices": devices.len(), "wires": wire_hs.len() }))
+}
+
+/// Header variable: 1 when cards show only the product code.
+const CODES_ONLY: &str = "CSDCODESONLY";
+
+fn codes_only(d: &Drawing) -> bool {
+    d.header.i64(CODES_ONLY, 0) != 0
+}
+
+fn run_display(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(on) = p.get("codesOnly").and_then(Value::as_bool) {
+        let d = s.doc_mut()?;
+        if on {
+            d.header.set_i64(CODES_ONLY, 1);
+        } else {
+            d.header.vars.remove(CODES_ONLY);
+        }
+    }
+    Ok(json!({ "codesOnly": codes_only(s.doc()?) }))
+}
+
+/// Shows or hides every card's label text to match [`CODES_ONLY`].
+fn sync_display(doc: &mut Arc<Drawing>) {
+    let hide = codes_only(doc);
+    let stale = |i: &Insert| is_device_block(i) && i.attribs.iter().any(|a| a.tag == "LABEL" && a.invisible != hide);
+    let todo: Vec<Handle> = spaces(doc)
+        .iter()
+        .filter_map(|sp| doc.space(sp))
+        .flat_map(|st| st.iter())
+        .filter(|e| matches!(&e.kind, EntityKind::Insert(i) if stale(i)))
+        .map(|e| e.handle)
+        .collect();
+    if todo.is_empty() {
+        return;
+    }
+    let d = Arc::make_mut(doc);
+    for h in todo {
+        let _ = d.modify_entity(h, |e| {
+            if let EntityKind::Insert(i) = &mut e.kind {
+                i.attribs.iter_mut().filter(|a| a.tag == "LABEL").for_each(|a| a.invisible = hide);
+            }
+        });
+    }
 }
 
 fn run_connect(s: &mut Session, p: &Value) -> Result<Value> {

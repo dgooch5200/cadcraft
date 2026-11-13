@@ -6,7 +6,7 @@ use cadcraft_csd::{CARD_H, CARD_W};
 use cadcraft_geom::Vec2;
 use serde_json::{Value, json};
 
-use super::{bad, run_place, str_param};
+use super::{bad, point_req, run_place, str_param};
 use crate::cmd::helpers::{lwpoly, rect_vertices};
 use crate::{Accept, EntityKind, Input, Interactive, Prompt, Result, Session, Step};
 
@@ -18,6 +18,39 @@ pub(super) fn run_arm(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.csd_armed = Some(id.to_string());
     Ok(json!({ "product": id }))
+}
+
+/// The most devices one `csd.place.grid` puts down.
+const MAX_GRID: u64 = 400;
+/// The web app's default space between neighbouring cards.
+const GRID_GAP: f64 = 24.0;
+
+/// `csd.place.grid`: `at` is the first card's centre; rows run downwards, columns to the right.
+pub(super) fn run_grid(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "csd.place.grid";
+    let count = |key: &str| {
+        p.get(key).and_then(Value::as_u64).filter(|n| *n >= 1).ok_or_else(|| bad(cmd, format!("`{key}` must be a whole number, 1 or more")))
+    };
+    let (rows, cols) = (count("rows")?, count("cols")?);
+    if rows.saturating_mul(cols) > MAX_GRID {
+        return Err(bad(cmd, format!("a grid holds at most {MAX_GRID} devices")));
+    }
+    let step = |key: &str, default: f64| match p.get(key) {
+        None | Some(Value::Null) => Ok(default),
+        Some(v) => v.as_f64().filter(|v| v.is_finite()).ok_or_else(|| bad(cmd, format!("`{key}` must be a number"))),
+    };
+    let (dx, dy) = (step("dx", CARD_W + GRID_GAP)?, step("dy", CARD_H + GRID_GAP)?);
+    let at = point_req(cmd, p, "at")?;
+    let product = str_param(p, "product").ok_or_else(|| bad(cmd, "`product` is required"))?;
+    let mut handles = Vec::new();
+    for r in 0..rows {
+        for c in 0..cols {
+            let (x, y) = (at.x + c as f64 * dx, at.y - r as f64 * dy);
+            let placed = run_place(s, &json!({ "product": product, "at": [x, y] }))?;
+            handles.extend(placed.get("handle").cloned());
+        }
+    }
+    Ok(json!({ "handles": handles }))
 }
 
 pub(super) struct PlaceM {
