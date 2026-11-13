@@ -120,7 +120,7 @@ fn shape_chars(primary: Option<&Face>, chars: &[(char, bool, bool)], height: f64
                     let glyphs = shape_run(face, &cs, r.clone(), rtl);
                     // Right-to-left runs stay outlines only: their glyphs come in display order
                     // and include ligatures (lam-alef) that stand for several characters.
-                    let shows = if rtl { Vec::new() } else { glyph_chars(face, &cs, &glyphs, r.end) };
+                    let shows: Vec<String> = if rtl { Vec::new() } else { glyph_chars(face, &cs, &glyphs, r.end) };
                     for (n, g) in glyphs.iter().enumerate() {
                         let outline = ttf::glyph_by_id(face, g.gid);
                         let k = h / outline.cap * wf;
@@ -132,10 +132,8 @@ fn shape_chars(primary: Option<&Face>, chars: &[(char, bool, bool)], height: f64
                             let origin = Vec2::new(x + g.dx * k + dy * shear, dy);
                             let text = shows
                                 .get(n)
-                                .copied()
-                                .flatten()
-                                .filter(|c| !c.is_whitespace())
-                                .and_then(|c| ttf::text_glyph_at(&outline, c, origin, h / outline.cap, wf, shear));
+                                .filter(|s| !s.chars().all(char::is_whitespace))
+                                .and_then(|s| ttf::text_glyph_at(&outline, s.as_str(), origin, h / outline.cap, wf, shear));
                             out.push_glyph(contours, text);
                         }
                         let adv = g.advance * k;
@@ -253,9 +251,10 @@ const MAX_MATCHED_CLUSTER: usize = 32;
 /// (a letter with its marks), so within each cluster a glyph that is a character's own glyph
 /// takes that character first, then the other glyphs take the cluster's remaining characters in
 /// order. Each character is shown once: a glyph left over (the second half of a split Thai sara
-/// am) shows none and is drawn as an outline only.
-fn glyph_chars(face: &Face, cs: &[char], glyphs: &[Glyph], end: usize) -> Vec<Option<char>> {
-    let mut out: Vec<Option<char>> = vec![None; glyphs.len()];
+/// am) shows none and is drawn as an outline only. Characters left over because the shaper
+/// ligated the cluster into fewer glyphs (Thai on AAT-only fonts) go to the cluster's last glyph.
+fn glyph_chars(face: &Face, cs: &[char], glyphs: &[Glyph], end: usize) -> Vec<String> {
+    let mut out: Vec<String> = vec![String::new(); glyphs.len()];
     let mut i = 0;
     while let Some(cluster) = glyphs.get(i).map(|g| g.cluster) {
         let j = glyphs.iter().skip(i).position(|g| g.cluster != cluster).map_or(glyphs.len(), |n| i + n);
@@ -269,13 +268,16 @@ fn glyph_chars(face: &Face, cs: &[char], glyphs: &[Glyph], end: usize) -> Vec<Op
                 let gid = glyphs.get(n).map(|g| g.gid);
                 let own = ids.iter().zip(&free).position(|(id, f)| f.is_some() && *id == gid);
                 if let (Some(p), Some(o)) = (own, out.get_mut(n)) {
-                    *o = free.get_mut(p).and_then(Option::take);
+                    o.extend(free.get_mut(p).and_then(Option::take));
                 }
             }
         }
         let mut rest = free.into_iter().flatten();
-        for o in out.iter_mut().take(j).skip(i).filter(|o| o.is_none()) {
-            *o = rest.next();
+        for o in out.iter_mut().take(j).skip(i).filter(|o| o.is_empty()) {
+            o.extend(rest.next());
+        }
+        if let Some(o) = out.get_mut(j.saturating_sub(1)) {
+            o.extend(rest);
         }
         i = j;
     }
@@ -458,17 +460,29 @@ mod tests {
         // A run from index 1: cluster 1 has "ab" (two glyphs), cluster 3 has "cd" and a split
         // character's extra glyph, which shows nothing.
         let gs = Vec::from([1, 1, 3, 3, 3].map(glyph));
-        assert_eq!(glyph_chars(&face, &cs, &gs, 5), vec![Some('a'), Some('b'), Some('c'), Some('d'), None]);
-        // Clusters out of order, past the run or past the line show nothing and don't panic.
+        assert_eq!(glyph_chars(&face, &cs, &gs, 5), vec!["a", "b", "c", "d", ""]);
+        // Clusters out of order or past the line don't panic; a cluster ending past the line stops at it.
         let gs = Vec::from([3, 1, usize::MAX, 9].map(glyph));
-        assert_eq!(glyph_chars(&face, &cs, &gs, 5), vec![None, Some('a'), None, None]);
+        assert_eq!(glyph_chars(&face, &cs, &gs, 5), vec!["", "abcd", "", ""]);
         assert!(glyph_chars(&face, &cs, &[], 5).is_empty());
         // A cluster longer than the matching limit still shows each character once, in order.
         let long: Vec<char> = std::iter::once('ก').chain(std::iter::repeat_n('\u{0E48}', MAX_CHARS)).collect();
         let gs: Vec<Glyph> = (0..long.len()).map(|_| glyph(0)).collect();
         let shows = glyph_chars(&face, &long, &gs, long.len());
-        assert_eq!(shows.first(), Some(&Some('ก')));
-        assert!(shows.iter().all(Option::is_some));
+        assert_eq!(shows.first().map(String::as_str), Some("ก"));
+        assert!(shows.iter().all(|s| !s.is_empty()));
+    }
+
+    /// A glyph that stands for a whole cluster (a ligature) carries every character of it.
+    #[test]
+    fn a_ligature_glyph_keeps_all_its_cluster_characters() {
+        let face = empty_glyph_face();
+        let cs: Vec<char> = "xดิ์y".chars().collect();
+        let gs = Vec::from([1, 4].map(glyph));
+        assert_eq!(glyph_chars(&face, &cs, &gs, 5), vec!["ดิ์", "y"]);
+        // Two glyphs for three characters: the extra one goes to the last glyph.
+        let gs = Vec::from([1, 1, 4].map(glyph));
+        assert_eq!(glyph_chars(&face, &cs, &gs, 5), vec!["ด", "ิ์", "y"]);
     }
 
     /// An installed font with Thai, or `None` (the tests then skip).
@@ -478,7 +492,7 @@ mod tests {
 
     /// Lowest point of the glyph that shows `c`.
     fn bottom_of(sh: &Shaped, c: char) -> Option<f64> {
-        let t = sh.text.iter().find(|t| t.ch == c)?;
+        let t = sh.text.iter().find(|t| t.text.contains(c))?;
         sh.glyphs.get(t.outline)?.iter().flatten().map(|p| p.y).reduce(f64::min)
     }
 
@@ -488,17 +502,18 @@ mod tests {
         let shape = |s: &str| ttf::shape(&face, s, 1.0, 1.0, 0.0).expect("the face parses");
         // Thanthakhat over sara i (ดิ์) sits above the vowel, higher than over the bare consonant
         // (ด์): the font's mark-to-mark positioning. One glyph per character drew both marks at
-        // the same height, on top of each other.
-        let stacked = shape("ดิ์");
-        let alone = shape("ด์");
-        let (Some(over_vowel), Some(over_letter)) = (bottom_of(&stacked, '\u{0E4C}'), bottom_of(&alone, '\u{0E4C}')) else {
-            panic!("thanthakhat drawn as text: {:?}", stacked.text.iter().map(|t| t.ch).collect::<String>())
-        };
-        assert!(over_vowel > over_letter + 0.05, "stacked {over_vowel} vs alone {over_letter}");
+        // the same height, on top of each other. A face with only AAT `morx` ligates the cluster.
+        if face.font().is_some_and(|f| skrifa::raw::TableProvider::gpos(&f).is_ok()) {
+            let (stacked, alone) = (shape("ดิ์"), shape("ด์"));
+            let (Some(over_vowel), Some(over_letter)) = (bottom_of(&stacked, '\u{0E4C}'), bottom_of(&alone, '\u{0E4C}')) else {
+                panic!("thanthakhat drawn as text: {:?}", stacked.text.iter().map(|t| &t.text).collect::<Vec<_>>())
+            };
+            assert!(over_vowel > over_letter + 0.05, "stacked {over_vowel} vs alone {over_letter}");
+        }
         // Every character is written as text exactly once, however the shaper reorders, splits
         // (sara am) or substitutes (ฐ without its tail under sara u) the glyphs.
         for s in ["ดิ์", "น้ำ", "ฐุ", "ปั้น", "จีรศักดิ์"] {
-            let mut shown: Vec<char> = shape(s).text.iter().map(|t| t.ch).collect();
+            let mut shown: Vec<char> = shape(s).text.iter().flat_map(|t| t.text.chars()).collect();
             let mut typed: Vec<char> = s.chars().collect();
             shown.sort_unstable();
             typed.sort_unstable();
@@ -512,7 +527,7 @@ mod tests {
         // missing-glyph boxes, and the Latin stays in the stroke font.
         let sh = crate::shape_stroke("ระดับดินเดิม +0.00", 1.0, 1.0, 0.0);
         assert!(!sh.strokes.iter().any(|s| s.len() == 5 && s.first() == s.last()), "no missing-glyph boxes");
-        assert_eq!(sh.text.len(), "ระดับดินเดิม".chars().count());
+        assert_eq!(sh.text.iter().map(|t| t.text.chars().count()).sum::<usize>(), "ระดับดินเดิม".chars().count());
         assert!(!sh.strokes.is_empty(), "\"+0.00\" in the stroke font");
     }
 
