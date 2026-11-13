@@ -199,7 +199,6 @@ fn builtin_blocks_place_but_are_on_no_list() {
     let node = place(&mut s, NODE, [0.0, 0.0]);
     let by_others = place(&mut s, cadcraft_csd::BY_OTHERS_ID, [300.0, 0.0]);
     place(&mut s, cadcraft_csd::OFF_PAGE_ID, [600.0, 0.0]);
-    s.execute("csd.unplaced.add", &json!({ "product": cadcraft_csd::OFF_PAGE_ID })).unwrap();
     let rows = s.execute("csd.bom", &json!({})).unwrap()["rows"].as_array().unwrap().clone();
     assert_eq!(rows.iter().map(|r| r["product"].as_str().unwrap()).collect::<Vec<_>>(), [NODE]);
     let sched = s.execute("csd.schedule", &json!({})).unwrap();
@@ -208,6 +207,15 @@ fn builtin_blocks_place_but_are_on_no_list() {
     s.execute("csd.connect", &wire).unwrap();
     let patch = s.execute("csd.patch", &json!({})).unwrap();
     assert!(!patch.to_string().contains("__by-others"));
+}
+
+#[test]
+fn builtins_stay_off_the_unplaced_list() {
+    let mut s = Session::new();
+    for id in ["__by-others", "__off-page"] {
+        assert!(s.execute("csd.unplaced.add", &json!({ "product": id })).is_err());
+    }
+    assert!(unplaced(&mut s).is_empty());
 }
 
 #[test]

@@ -206,6 +206,9 @@ pub(super) fn run_unplaced_add(s: &mut Session, p: &Value) -> Result<Value> {
     let id = str_param(p, "product").ok_or_else(|| bad(cmd, "`product` is required"))?;
     let qty = qty_param(cmd, p, Some(1))?;
     let id = find_product(&s.csd_library, id).map(|p| p.id.clone()).ok_or_else(|| bad(cmd, format!("unknown product \"{id}\"")))?;
+    if is_builtin(&id) {
+        return Err(bad(cmd, "built-in blocks are drawing notes, not products to order"));
+    }
     let d = s.doc_mut()?;
     let mut rows = read(d);
     let index = match rows.iter().position(|(r, _)| *r == id) {
