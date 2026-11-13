@@ -403,4 +403,22 @@ mod tests {
         let got: Vec<_> = out["shapes"].as_array().unwrap().iter().map(|r| (r["color"].clone(), r["fill"].clone())).collect();
         assert_eq!(got, vec![(json!("#ff0000"), Value::Null), (json!("#0000ff"), json!("#00ff00"))]);
     }
+
+    #[test]
+    fn a_fill_with_zero_opacity_imports_as_no_fill() {
+        let file = json!({ "shapes": [
+            { "type": "rect", "x1": 30, "y1": 30, "x2": 130, "y2": 80, "color": "#ff0000", "fill": "#00ff00", "fillOpacity": 0 },
+        ] });
+        let dir = std::env::temp_dir();
+        let (a, b) =
+            (dir.join(format!("cadcraft-clear-in-{}.cpsd", std::process::id())), dir.join(format!("cadcraft-clear-out-{}.cpsd", std::process::id())));
+        std::fs::write(&a, file.to_string()).unwrap();
+        let mut s = Session::new();
+        s.execute("csd.import.cpsd", &json!({ "path": a.to_str().unwrap() })).unwrap();
+        s.execute("csd.export.cpsd", &json!({ "path": b.to_str().unwrap() })).unwrap();
+        let out: Value = serde_json::from_slice(&std::fs::read(&b).unwrap()).unwrap();
+        let _ = (std::fs::remove_file(&a), std::fs::remove_file(&b));
+        assert_eq!(out["shapes"][0]["fill"], Value::Null);
+        assert_eq!(out["shapes"][0]["fillOpacity"], Value::Null);
+    }
 }
