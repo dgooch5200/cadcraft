@@ -184,11 +184,14 @@ fn toolbar(app: &mut CadApp, ui: &mut egui::Ui, t: &Tokens) {
     grid_size(app, ui, &st);
 }
 
-/// The snap grid in drawing units, as the web app's grid-size select (greyed while Snap is off), with the
-/// sheet's title block (selected once placed, so its fields show in Properties) and line key beside it.
+/// The snap grid in ChamSys pixels (stored as drawing units), as the web app's grid-size select (greyed
+/// while Snap is off), with the sheet's title block (selected once placed, so its fields show in
+/// Properties) and line key beside it.
 fn grid_size(app: &mut CadApp, ui: &mut egui::Ui, st: &cadcraft_engine::Settings) {
     const CHOICES: [f64; 4] = [4.0, 8.0, 12.0, 24.0];
+    let k = app.session.doc().map(cadcraft_engine::csd_px).unwrap_or(1.0);
     let unit = app.session.drafting_settings().snapunit.x;
+    let px = (unit / k * 100.0).round() / 100.0;
     let mut pick = None;
     let mut sheet = None;
     ui.add_space(3.0);
@@ -196,11 +199,11 @@ fn grid_size(app: &mut CadApp, ui: &mut egui::Ui, st: &cadcraft_engine::Settings
         ui.add_space(8.0);
         ui.add_enabled_ui(st.snapmode, |ui| {
             craft_ui::ComboBox::from_id_salt(ui.scope_id().with("csd_grid"))
-                .selected_text(format!("{} px", unit))
+                .selected_text(format!("{px} px"))
                 .width(52.0)
                 .show_ui(ui, |ui| {
                     for c in CHOICES {
-                        if ui.selectable_label((unit - c).abs() < 1e-9, format!("{c} px")).clicked() {
+                        if ui.selectable_label((px - c).abs() < 1e-9, format!("{c} px")).clicked() {
                             pick = Some(c);
                         }
                     }
@@ -228,7 +231,7 @@ fn grid_size(app: &mut CadApp, ui: &mut egui::Ui, st: &cadcraft_engine::Settings
     }
     if let Some(c) = pick {
         for var in ["SNAPUNIT", "GRIDUNIT"] {
-            let _ = app.run("setvar", json!({ "name": var, "value": [c, c] }));
+            let _ = app.run("setvar", json!({ "name": var, "value": [c * k, c * k] }));
         }
     }
 }
