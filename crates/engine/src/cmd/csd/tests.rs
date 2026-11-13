@@ -4,6 +4,7 @@ use cadcraft_doc::{Drawing, EntityKind, Handle, LwPolyline, RawTag};
 use cadcraft_geom::Vec2;
 use serde_json::{Value, json};
 
+use crate::cmd::csd::find_product;
 use crate::{Input, Session};
 
 const CONSOLE: &str = "CHAMMQ50";
@@ -13,9 +14,16 @@ fn handle(r: &Value) -> Handle {
     Handle::parse_hex(r["handle"].as_str().unwrap()).unwrap()
 }
 
+/// A session routing wires at right angles (the tests below assume it; the default is smooth curves).
+fn ortho_session() -> Session {
+    let mut s = Session::new();
+    s.execute("ortho", &json!({ "on": true })).unwrap();
+    s
+}
+
 /// A console at the origin and a node at (200, 0), joined by a wire from the console's right to the node's left.
 fn setup() -> (Session, Handle, Handle, Handle) {
-    let mut s = Session::new();
+    let mut s = ortho_session();
     let a = handle(&s.execute("csd.place", &json!({ "product": CONSOLE, "at": [0, 0] })).unwrap());
     let b = handle(&s.execute("csd.place", &json!({ "product": NODE, "at": [200, 60] })).unwrap());
     let w = connect(&mut s, a, b).unwrap();
@@ -29,7 +37,32 @@ fn connect(s: &mut Session, a: Handle, b: Handle) -> crate::Result<Handle> {
 
 fn verts(s: &Session, h: Handle) -> Vec<Vec2> {
     let Some(EntityKind::LwPolyline(p)) = s.doc().unwrap().entity(h).map(|e| e.kind.clone()) else { panic!("no polyline") };
-    p.vertices.iter().map(|v| v.p).collect()
+    // Each rounded bend is reported as its sharp corner.
+    let mut out: Vec<Vec2> = Vec::new();
+    let mut skip = false;
+    for (i, v) in p.vertices.iter().enumerate() {
+        if std::mem::take(&mut skip) {
+            continue;
+        }
+        match (v.bulge != 0.0, out.last(), p.vertices.get(i + 1)) {
+            (true, Some(prev), Some(q)) => {
+                out.push(if prev.x == v.p.x { Vec2::new(v.p.x, q.p.y) } else { Vec2::new(q.p.x, v.p.y) });
+                skip = true;
+            }
+            _ => out.push(v.p),
+        }
+    }
+    out
+}
+
+#[test]
+fn wire_bends_are_rounded_arcs_on_the_route() {
+    let (s, a, _, w) = setup();
+    let Some(EntityKind::LwPolyline(p)) = s.doc().unwrap().entity(w).map(|e| e.kind.clone()) else { panic!("no polyline") };
+    let arcs: Vec<_> = p.vertices.iter().filter(|v| v.bulge != 0.0).collect();
+    assert!(!arcs.is_empty());
+    assert!(arcs.iter().all(|v| (v.bulge.abs() - std::f64::consts::FRAC_PI_8.tan()).abs() < 1e-9));
+    assert!(p.vertices.first().unwrap().p.near(port(&s, a, Side::Right), 1e-9));
 }
 
 fn port(s: &Session, dev: Handle, side: Side) -> Vec2 {
@@ -148,6 +181,7 @@ fn links_survive_a_dxf_round_trip() {
     let text = cadcraft_io::write_dxf(s.doc().unwrap());
     let imported = cadcraft_io::read_dxf(text.as_bytes()).unwrap();
     let mut t = Session::empty();
+    t.execute("ortho", &json!({ "on": true })).unwrap();
     t.open_drawing(imported, "Imported", None);
     assert_eq!(t.execute("csd.netlist", &json!({})).unwrap(), net);
     let kept = |s: &Session| match &s.doc().unwrap().entity(w).unwrap().kind {
@@ -165,7 +199,7 @@ fn links_survive_a_dxf_round_trip() {
 
 #[test]
 fn three_wires_off_one_side_fan_out_in_far_end_order() {
-    let mut s = Session::new();
+    let mut s = ortho_session();
     let src = handle(&s.execute("csd.place", &json!({ "product": "logic-poex", "at": [0, 0] })).unwrap());
     let mut wires = Vec::new();
     // Placed right, left, middle: the slots must still follow the far ends' x.
@@ -283,7 +317,7 @@ fn erasing_a_wire_removes_its_decorations_and_erasing_one_decoration_restores_it
 fn refreshing_twice_changes_nothing() {
     let (mut s, ..) = setup();
     let doc = s.state_mut().unwrap().doc.clone();
-    super::refresh(&mut s.state_mut().unwrap().doc);
+    super::refresh(&mut s.state_mut().unwrap().doc, true);
     assert!(std::sync::Arc::ptr_eq(&doc, &s.state_mut().unwrap().doc));
 }
 
@@ -445,7 +479,7 @@ fn placing_with_nothing_armed_asks_for_the_product() {
 
 /// A console at the origin and a node at (200, 60), both unwired, with `csd.connect` running.
 fn connecting() -> Session {
-    let mut s = Session::new();
+    let mut s = ortho_session();
     s.execute("csd.place", &json!({ "product": CONSOLE, "at": [0, 0] })).unwrap();
     s.execute("csd.place", &json!({ "product": NODE, "at": [200, 60] })).unwrap();
     s.start("csd.connect").unwrap();
@@ -551,6 +585,7 @@ fn wires_saved_with_an_old_route_are_rerouted_on_open() {
     });
     let imported = cadcraft_io::read_dxf(cadcraft_io::write_dxf(s.doc().unwrap()).as_bytes()).unwrap();
     let mut t = Session::empty();
+    t.execute("ortho", &json!({ "on": true })).unwrap();
     t.open_drawing(imported, "Old", None);
     assert_eq!(verts(&t, w).len(), want.len());
     assert!(verts(&t, w).last().unwrap().near(port(&t, b, Side::Left), 1e-9));
@@ -590,4 +625,57 @@ fn replace_swaps_the_product_on_the_selection_and_skips_the_same_one() {
     assert_eq!(i.block, cadcraft_csd::block_name(NODE));
     assert!(i.attribs.iter().any(|t| t.tag == "PRODUCT" && t.text.value == NODE));
     assert!(s.execute("csd.replace", &json!({ "product": "nope" })).is_err());
+}
+
+#[test]
+fn csd_protocol_sets_the_wire_type_and_rejects_unknown_ids() {
+    let mut s = Session::new();
+    assert_eq!(s.execute("csd.protocol", &json!({ "protocol": "dmx" })).unwrap()["protocol"], "dmx");
+    assert_eq!(s.csd_protocol, Protocol::Dmx);
+    assert!(s.execute("csd.protocol", &json!({ "protocol": "nope" })).is_err());
+    assert!(s.execute("csd.protocol", &json!({})).is_err());
+    assert_eq!(s.csd_protocol, Protocol::Dmx);
+}
+
+#[test]
+fn product_lookup_ignores_case_and_punctuation() {
+    let lib = cadcraft_csd::sample_products();
+    let id = |q: &str| find_product(&lib, q).map(|p| p.id.as_str());
+    assert_eq!(id("nothing-like-it"), None);
+    assert_eq!(id("LOGIC-AR111M"), Some("logic-ar111m"));
+    assert_eq!(id("logicar111m"), Some("logic-ar111m"));
+    assert_eq!(id("b565fc"), Some("b565fc"));
+}
+
+fn polyline(s: &Session, h: Handle) -> Vec<(Vec2, f64)> {
+    let Some(EntityKind::LwPolyline(p)) = s.doc().unwrap().entity(h).map(|e| e.kind.clone()) else { panic!("no polyline") };
+    p.vertices.iter().map(|v| (v.p, v.bulge)).collect()
+}
+
+#[test]
+fn smooth_wires_by_default_leave_the_ports_and_follow_the_ortho_toggle() {
+    let mut s = Session::new();
+    let a = handle(&s.execute("csd.place", &json!({ "product": CONSOLE, "at": [0, 0] })).unwrap());
+    let b = handle(&s.execute("csd.place", &json!({ "product": NODE, "at": [200, 60] })).unwrap());
+    let w = connect(&mut s, a, b).unwrap();
+    let smooth = polyline(&s, w);
+    let (p, q) = (port_point(Vec2::ZERO, 0.0, Vec2::new(1.0, 1.0), Side::Right, Slot::SOLO), smooth[smooth.len() - 1].0);
+    assert_eq!(smooth[0].0, p);
+    assert!(smooth.len() > 10 && smooth.iter().all(|v| v.1 == 0.0));
+    assert!(smooth.windows(2).any(|v| v[0].0.x != v[1].0.x && v[0].0.y != v[1].0.y));
+    // Leaves the right port along +x and arrives at the left port along +x.
+    let (u, v) = (smooth[1].0 - smooth[0].0, q - smooth[smooth.len() - 2].0);
+    assert!(u.x > 0.0 && u.y.abs() < 0.2 * u.x && v.x > 0.0 && v.y.abs() < 0.2 * v.x);
+    let pill = decos(&s).iter().filter(|d| d.2 == Deco::Pill).count();
+    assert_eq!(pill, 1);
+
+    s.execute("ortho", &json!({ "on": true })).unwrap();
+    let ortho = polyline(&s, w);
+    assert!(ortho.len() < smooth.len() && ortho.iter().any(|v| v.1 != 0.0));
+    let doc = s.state_mut().unwrap().doc.clone();
+    s.execute("ortho", &json!({ "on": true })).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&doc, &s.state_mut().unwrap().doc), "same style rewrites nothing");
+
+    s.execute("ortho", &json!({ "on": false })).unwrap();
+    assert_eq!(polyline(&s, w), smooth);
 }

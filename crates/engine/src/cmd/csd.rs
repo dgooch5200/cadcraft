@@ -32,6 +32,10 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("csd.replace", "Replace Devices", run_replace)
             .params("{product: id of a library product, handles? (default the selection)} → {replaced}; devices already that product are skipped"),
         CommandSpec::new("csd.arm", "Arm Product", place::run_arm).params("{product: id of a library product} → {product}").noundo(),
+        CommandSpec::new("csd.protocol", "Wire Protocol", run_protocol)
+            .params("{protocol: network|netdata|10scene|dmx|0-10v|contact|power|midi|epix3p|epix4p} → {protocol}; the wire type csd.connect draws next")
+            .noundo()
+            .enabled(always),
         CommandSpec::new("csd.connect", "Connect Devices", run_connect)
             .params("{from: handle, fromSide: top|bot|lft|rgt, to: handle, toSide, protocol: network|netdata|10scene|dmx|0-10v|contact|power|midi|epix3p|epix4p} → {handle}; interactive: click a port on each of two devices")
             .interactive(connect::ConnectM::start),
@@ -57,6 +61,12 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+fn run_protocol(s: &mut Session, p: &Value) -> Result<Value> {
+    let id = str_param(p, "protocol").ok_or_else(|| bad("csd.protocol", "`protocol` is required"))?;
+    s.csd_protocol = Protocol::from_id(id).ok_or_else(|| bad("csd.protocol", format!("unknown protocol \"{id}\"")))?;
+    Ok(json!({ "protocol": id }))
+}
+
 /// A device on the drawing: a `CSD_` block reference whose `PRODUCT` attribute names a known product.
 struct Device<'a> {
     handle: Handle,
@@ -68,6 +78,13 @@ fn is_device_block(i: &Insert) -> bool {
     i.block.starts_with("CSD_")
 }
 
+/// The product named `id`: exact, else ignoring case and punctuation, so a file saved with
+/// `logic-poex` finds `LOGICPOEX`.
+fn find_product<'a>(products: &'a [Product], id: &str) -> Option<&'a Product> {
+    let key = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect::<String>();
+    products.iter().find(|p| p.id == id).or_else(|| products.iter().find(|p| key(&p.id) == key(id)))
+}
+
 fn devices<'a>(store: &'a EntityStore, products: &'a [Product]) -> Vec<Device<'a>> {
     store
         .iter()
@@ -77,7 +94,7 @@ fn devices<'a>(store: &'a EntityStore, products: &'a [Product]) -> Vec<Device<'a
                 return None;
             }
             let id = insert.attribs.iter().find(|a| a.tag == "PRODUCT")?.text.value.as_str();
-            Some(Device { handle: e.handle, product: products.iter().find(|p| p.id == id)?, insert })
+            Some(Device { handle: e.handle, product: find_product(products, id)?, insert })
         })
         .collect()
 }
@@ -95,17 +112,43 @@ const DASH: &str = "DASHED2";
 const DASH_LEN: f64 = 7.0;
 const BORDER_DASH: f64 = 4.5;
 
-fn vertices(path: &[Vec2]) -> Vec<PolyVertex> {
-    path.iter().map(|p| PolyVertex { p: *p, bulge: 0.0, start_width: WIRE_W, end_width: WIRE_W }).collect()
+const CORNER_R: f64 = 6.0;
+
+/// The wire's polyline: its route, with each interior bend of an `ortho` route rounded by an arc
+/// (a bulge of tan(turn / 4)), kept short enough that neighbouring bends never overlap.
+fn vertices(path: &[Vec2], ortho: bool) -> Vec<PolyVertex> {
+    let v = |p: Vec2, bulge| PolyVertex { p, bulge, start_width: WIRE_W, end_width: WIRE_W };
+    if !ortho {
+        return path.iter().map(|&p| v(p, 0.0)).collect();
+    }
+    let mut out = Vec::with_capacity(path.len());
+    for (i, &p) in path.iter().enumerate() {
+        let (Some(&prev), Some(&next)) = (i.checked_sub(1).and_then(|j| path.get(j)), path.get(i + 1)) else {
+            out.push(v(p, 0.0));
+            continue;
+        };
+        let (a, b) = (p - prev, next - p);
+        let (la, lb) = (a.dist(Vec2::ZERO), b.dist(Vec2::ZERO));
+        let turn = (a.x * b.y - a.y * b.x).atan2(a.x * b.x + a.y * b.y);
+        if la < 1e-9 || lb < 1e-9 || turn.abs() < 1e-6 || turn.abs() > std::f64::consts::PI - 0.01 {
+            out.push(v(p, 0.0));
+            continue;
+        }
+        let t = (CORNER_R * (turn.abs() / 2.0).tan()).min(la / 2.0).min(lb / 2.0);
+        out.push(v(p - a * (t / la), (turn / 4.0).tan()));
+        out.push(v(p + b * (t / lb), 0.0));
+    }
+    out
 }
 
 fn same(a: &[PolyVertex], b: &[PolyVertex]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).all(|(p, q)| p.p.near(q.p, 1e-9) && p.start_width == q.start_width && p.end_width == q.end_width)
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(p, q)| p.p.near(q.p, 1e-9) && p.bulge == q.bulge && p.start_width == q.start_width && p.end_width == q.end_width)
 }
 
 /// The path of every linked wire in `store` whose two devices exist. Each device edge's wires
 /// are dealt slots in fan order, so a wire's route depends on its neighbours on both edges.
-fn layout(store: &EntityStore) -> Vec<(Handle, Protocol, Vec<Vec2>)> {
+fn layout(store: &EntityStore, ortho: bool) -> Vec<(Handle, Protocol, Vec<Vec2>)> {
     let device = |h| match store.get(h).map(|x| &x.kind) {
         Some(EntityKind::Insert(i)) if is_device_block(i) => Some(i),
         _ => None,
@@ -140,7 +183,7 @@ fn layout(store: &EntityStore) -> Vec<(Handle, Protocol, Vec<Vec2>)> {
         .map(|(w, l, a, b)| {
             let (sa, sb) = (slots.get(&(*w, true)).copied().unwrap_or(Slot::SOLO), slots.get(&(*w, false)).copied().unwrap_or(Slot::SOLO));
             let ((p, side_p), (q, side_q)) = (end(a, l.from_side, sa), end(b, l.to_side, sb));
-            (*w, l.protocol, route(p, side_p, sa, q, side_q, sb))
+            (*w, l.protocol, route(p, side_p, sa, q, side_q, sb, ortho))
         })
         .collect()
 }
@@ -186,7 +229,7 @@ impl Plan {
 /// route with exactly its decorations, no decoration of a wire that is not there, and the
 /// decorations on top of everything else. A wire with a missing device keeps its geometry and
 /// its decorations, so undoing the erase finds it linked again.
-fn plan(store: &EntityStore) -> Plan {
+fn plan(store: &EntityStore, ortho: bool) -> Plan {
     let mut plan = Plan::default();
     let wire_set: HashSet<Handle> = wires(store).into_iter().map(|(h, _)| h).collect();
     // A decoration of a wire that is not one (a stale or hostile handle) or a second one for the
@@ -204,13 +247,13 @@ fn plan(store: &EntityStore) -> Plan {
         }
     }
     plan.lift = decos.iter().filter(|(i, _)| last_other.is_some_and(|l| *i < l)).map(|(_, h)| *h).collect();
-    for (wire, protocol, path) in layout(store) {
-        let vs = vertices(&path);
+    for (wire, protocol, path) in layout(store, ortho) {
+        let vs = vertices(&path, ortho);
         if !matches!(store.get(wire).map(|e| &e.kind), Some(EntityKind::LwPolyline(pl)) if same(&pl.vertices, &vs)) {
             plan.routes.push((wire, vs));
         }
         let layer = store.get(wire).map(|e| e.common.layer.clone()).unwrap_or_default();
-        for (deco, at) in deco_points(&path).into_iter().flatten() {
+        for (deco, at) in deco_points(&path, ortho).into_iter().flatten() {
             let insert = Insert { block: deco_block_name(protocol, deco), insert: at.to3(0.0), ..Insert::default() };
             let want = Want { wire, deco, protocol, layer: layer.clone(), insert };
             match have.get(&(wire, deco)) {
@@ -264,10 +307,10 @@ fn apply(doc: &mut Arc<Drawing>, space: &Space, plan: Plan) {
 /// Brings every linked wire and its decorations in line with the devices.
 /// ponytail: every wire is re-routed after every command; index by changed handles (as assoc.rs
 /// does) when drawings get large.
-pub(crate) fn refresh(doc: &mut Arc<Drawing>) {
+pub(crate) fn refresh(doc: &mut Arc<Drawing>, ortho: bool) {
     let spaces: Vec<Space> = std::iter::once(Space::Model).chain(doc.layouts.iter().map(|l| Space::Paper(l.name.clone()))).collect();
     for space in spaces {
-        let p = doc.space(&space).map(plan).unwrap_or_default();
+        let p = doc.space(&space).map(|st| plan(st, ortho)).unwrap_or_default();
         apply(doc, &space, p);
     }
 }
@@ -488,7 +531,8 @@ fn run_connect(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(store) = s.doc_mut()?.space_mut(&space) {
         store.send_to_back(h);
     }
-    refresh(&mut s.state_mut()?.doc);
+    let ortho = s.settings.orthomode;
+    refresh(&mut s.state_mut()?.doc, ortho);
     Ok(json!({ "handle": h.hex() }))
 }
 
@@ -616,10 +660,13 @@ fn write_library(_: &str, _: &[u8]) -> std::io::Result<()> {
 }
 
 pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
+    // Ortho is a session setting, so a toggle must re-route although no drawing changed.
+    let ortho = s.settings.orthomode;
+    let restyled = std::mem::replace(&mut s.csd_ortho, ortho) != ortho;
     if let Ok(st) = s.state_mut()
-        && before.is_some_and(|b| !Arc::ptr_eq(b, &st.doc))
+        && (restyled || before.is_some_and(|b| !Arc::ptr_eq(b, &st.doc)))
     {
-        refresh(&mut st.doc);
+        refresh(&mut st.doc, ortho);
     }
 }
 

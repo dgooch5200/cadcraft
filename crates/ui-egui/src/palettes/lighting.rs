@@ -6,10 +6,11 @@ use egui::{Color32, Rect, Sense, Stroke, pos2, vec2};
 use serde_json::json;
 
 use crate::CadApp;
+use crate::icons::Icon;
 use crate::theme::Tokens;
 
 const ROW_H: f32 = 46.0;
-const LIST_H: f32 = 322.0;
+const LIST_H: f32 = 180.0;
 
 #[derive(Clone, Default)]
 struct Filter {
@@ -41,6 +42,87 @@ fn rgb(c: u32) -> Color32 {
     Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
 }
 
+fn section(ui: &mut egui::Ui, t: &Tokens, name: &str) {
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new(crate::i18n::t(name)).small().color(t.text_dim));
+    });
+}
+
+/// Signal protocols, the Connect command and the drafting toggles, after the web app's toolbar.
+fn toolbar(app: &mut CadApp, ui: &mut egui::Ui, t: &Tokens) {
+    let gap = 4.0;
+    section(ui, t, "Signal");
+    let active = app.session.csd_protocol;
+    let mut set = None;
+    for row in Protocol::ALL.chunks(2) {
+        ui.horizontal(|ui| {
+            ui.add_space(8.0);
+            ui.spacing_mut().item_spacing.x = gap;
+            let w = (ui.available_width() - 8.0 - gap) / 2.0;
+            for pr in row {
+                let c = rgb(pr.color());
+                let (mut fill, mut text) = (Color32::TRANSPARENT, c);
+                if *pr == active {
+                    (fill, text) = (c, if c.r() as u32 * 3 + c.g() as u32 * 6 + c.b() as u32 > 1280 { Color32::BLACK } else { Color32::WHITE });
+                }
+                let b = egui::Button::new(egui::RichText::new(crate::i18n::t(pr.label())).color(text))
+                    .fill(fill)
+                    .stroke(Stroke::new(1.5, c))
+                    .min_size(vec2(w, 20.0));
+                let resp = ui.add_sized(vec2(w, 20.0), b);
+                crate::icons::describe_control(ui, &resp, pr.label(), Some(*pr == active), false);
+                if resp.clicked() {
+                    set = Some(pr.id());
+                }
+            }
+        });
+    }
+    if let Some(id) = set {
+        let _ = app.run("csd.protocol", json!({ "protocol": id }));
+    }
+    let connecting = app.session.running.as_ref().is_some_and(|r| r.id == "csd.connect");
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        let w = ui.available_width() - 8.0;
+        let b = egui::Button::new(egui::RichText::new(crate::tl!("Connect")).strong().size(15.0)).selected(connecting).min_size(vec2(w, 30.0));
+        let resp = ui.add_sized(vec2(w, 30.0), b);
+        crate::icons::describe_control(ui, &resp, "Connect", Some(connecting), false);
+        if resp.clicked() {
+            app.cmd.buffer.clear();
+            app.start("csd.connect");
+        }
+    });
+    ui.add_space(4.0);
+    let st = app.session.settings.clone();
+    let mut toggle = None;
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        ui.spacing_mut().item_spacing.x = gap;
+        let w = (ui.available_width() - 8.0 - gap) / 2.0;
+        for (icon, on, cmd, label) in [(Icon::Ortho, st.orthomode, "ortho", "Ortho"), (Icon::Snap, st.snapmode, "snap", "Snap")] {
+            let (r, resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click());
+            let p = ui.painter();
+            if on {
+                p.rect_filled(r, 3.0, t.toggle_on.gamma_multiply(0.35));
+            } else if resp.hovered() {
+                p.rect_filled(r, 3.0, t.control_hover.gamma_multiply(0.5));
+            }
+            p.rect_stroke(r, 3.0, Stroke::new(1.0, if on { t.toggle_on } else { t.border }), egui::StrokeKind::Inside);
+            crate::icons::paint(p, Rect::from_center_size(pos2(r.left() + 14.0, r.center().y), vec2(16.0, 16.0)), icon, false);
+            p.text(pos2(r.left() + 28.0, r.center().y), egui::Align2::LEFT_CENTER, crate::i18n::t(label), egui::FontId::proportional(13.0), t.text);
+            crate::icons::describe_control(ui, &resp, label, Some(on), false);
+            if resp.clicked() {
+                toggle = Some(cmd);
+            }
+        }
+    });
+    if let Some(c) = toggle {
+        crate::menus::run_transparent(app, c);
+    }
+}
+
 /// The group's body. The header is the caller's.
 pub(super) fn body(app: &mut CadApp, ui: &mut egui::Ui) {
     let t = Tokens::get();
@@ -53,14 +135,7 @@ pub(super) fn body(app: &mut CadApp, ui: &mut egui::Ui) {
             cats.push(&p.cat);
         }
     }
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.add_space(8.0);
-        if ui.button(crate::tl!("Connect")).clicked() {
-            app.cmd.buffer.clear();
-            app.start("csd.connect");
-        }
-    });
+    toolbar(app, ui, &t);
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.add_space(8.0);

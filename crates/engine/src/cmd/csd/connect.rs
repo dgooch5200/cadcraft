@@ -38,6 +38,20 @@ fn pick(s: &Session, p: Vec2) -> Option<Port> {
         .map(|(hit, _)| hit)
 }
 
+/// A `CSD_` card under `p` whose product the library lacks.
+fn on_unknown_card(s: &Session, p: Vec2) -> bool {
+    let Some(store) = s.doc().ok().and_then(|d| d.space(&s.space())) else { return false };
+    store.iter().any(|e| match &e.kind {
+        EntityKind::Insert(i) => {
+            let local = (p - i.insert.xy()).rotate(-i.rotation);
+            super::is_device_block(i)
+                && local.x.abs() <= CARD_W / 2.0 * i.scale.x.abs() + MARGIN
+                && local.y.abs() <= CARD_H / 2.0 * i.scale.y.abs() + MARGIN
+        }
+        _ => false,
+    })
+}
+
 pub(super) struct ConnectM {
     first: Option<Port>,
 }
@@ -62,7 +76,7 @@ impl Interactive for ConnectM {
         match i {
             Input::Point(p) => {
                 let Some(hit) = pick(s, p) else {
-                    s.echo("No device there.");
+                    s.echo(if on_unknown_card(s, p) { "That card's product is not in the library." } else { "No device there." });
                     return Ok(Step::Continue);
                 };
                 let Some((from, from_side, _)) = self.first.take() else {

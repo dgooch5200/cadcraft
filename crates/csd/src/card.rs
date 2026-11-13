@@ -142,11 +142,31 @@ pub fn world_side(side: Side, rotation: f64, scale: Vec2) -> Side {
     CCW.get((start + quarters).rem_euclid(4) as usize).copied().unwrap_or(side)
 }
 
-/// Orthogonal route from one port to another: a stub out of each (longer for outer lanes), then
-/// a turn at the source's stub end across to the target's.
-/// ponytail: naive ortho route, no obstacle avoidance; port the real wireRoute when overlaps matter.
-pub fn route(from: Vec2, from_side: Side, from_slot: Slot, to: Vec2, to_side: Side, to_slot: Slot) -> Vec<Vec2> {
+/// Segments a smooth wire is flattened into.
+const CURVE_SEGMENTS: usize = 24;
+/// A smooth wire's end tangent is this share of the port distance long, at least `CURVE_MIN`.
+const CURVE_PULL: f64 = 0.4;
+const CURVE_MIN: f64 = 25.0;
+
+/// Route from one port to another. With `ortho`: a stub out of each (longer for outer lanes), then
+/// a turn at the source's stub end across to the target's. Without: a cubic Bezier leaving each
+/// port along its side's outward direction, flattened to `CURVE_SEGMENTS` segments.
+/// ponytail: naive route, no obstacle avoidance; port the real wireRoute when overlaps matter.
+pub fn route(from: Vec2, from_side: Side, from_slot: Slot, to: Vec2, to_side: Side, to_slot: Slot, ortho: bool) -> Vec<Vec2> {
     let (d1, d2) = (from_side.dir(), to_side.dir());
+    if !ortho {
+        let pull = (from.dist(to) * CURVE_PULL).max(CURVE_MIN);
+        let c1 = from + d1 * (pull + from_slot.lane as f64 * LANE);
+        let c2 = to + d2 * (pull + to_slot.lane as f64 * LANE);
+        let at = |i: usize| {
+            let t = i as f64 / CURVE_SEGMENTS as f64;
+            let u = 1.0 - t;
+            from * (u * u * u) + c1 * (3.0 * u * u * t) + c2 * (3.0 * u * t * t) + to * (t * t * t)
+        };
+        let mut pts: Vec<Vec2> = (0..CURVE_SEGMENTS).map(at).collect();
+        pts.push(to);
+        return pts;
+    }
     let a = from + d1 * from_slot.stub();
     let b = to + d2 * to_slot.stub();
     let corner = if d1.x == 0.0 { Vec2 { x: b.x, y: a.y } } else { Vec2 { x: a.x, y: b.y } };
@@ -355,12 +375,12 @@ pub fn device_block(product: &Product, mut new_handle: impl FnMut() -> Handle, d
         border.common.ltscale = dash_scale;
     }
     p.block.entities.push(border);
-    // The strip sits inside the card's border and has a border of its own: its top edge is the rule.
-    let (sx, strip_top) = (hw - BORDER, -hh + STRIP_H);
-    let r = RADIUS - BORDER - BORDER / 2.0 - 0.75;
-    p.add(outline(round_rect(-sx, -hh, sx, strip_top, [r, r, 0.0, 0.0]), BORDER), product.color);
+    // The strip shares the card's border and bottom corners: its top edge is the rule.
+    let strip_top = -hh + STRIP_H;
+    let r = RADIUS - BORDER / 2.0;
+    p.add(outline(round_rect(-hw, -hh, hw, strip_top, [r, r, 0.0, 0.0]), BORDER), product.color);
     // The outline's mitred top corners leave a notch against the card's border; the rule fills it.
-    let (rx, ry) = (sx + BORDER / 2.0, BORDER / 2.0);
+    let (rx, ry) = (hw + BORDER / 2.0, BORDER / 2.0);
     p.add(fill(round_rect(-rx, strip_top - ry, rx, strip_top + ry, [0.0; 4])), product.color);
 
     let lines = wrap_code(&product.code);
@@ -418,11 +438,15 @@ pub fn deco_block(protocol: Protocol, deco: Deco, mut new_handle: impl FnMut() -
 }
 
 /// Where a wire's decorations go: its end dots on the ports,
-/// and its pill on the middle of the longest segment (the first, when several tie).
+/// and its pill on the middle of the longest segment (the first, when several tie), or the middle
+/// of a smooth (not `ortho`) curve.
 /// ponytail: no user-set pill position (the TS labelT) and no pill on the router's free segment.
-pub fn deco_points(path: &[Vec2]) -> Option<[(Deco, Vec2); 3]> {
+pub fn deco_points(path: &[Vec2], ortho: bool) -> Option<[(Deco, Vec2); 3]> {
     let (a, b) = (*path.first()?, *path.get(1)?);
     let z = *path.last()?;
+    if !ortho {
+        return Some([(Deco::Start, a), (Deco::End, z), (Deco::Pill, *path.get(path.len() / 2)?)]);
+    }
     let mut longest = (a, b);
     for w in path.windows(2) {
         if let [p, q] = w
