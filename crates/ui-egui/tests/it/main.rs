@@ -17,6 +17,7 @@ mod gpu_viewport_stencil;
 mod hidden_command_line;
 mod instant_modals;
 mod lisp_files;
+mod lpro_review;
 mod measure_distance_snapping;
 mod menubar_hover;
 mod mspace_viewport_view;
