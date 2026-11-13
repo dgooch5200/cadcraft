@@ -7,9 +7,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use cadcraft_csd::{
-    BOLD_STYLE, CARD_H, CARD_W, Deco, Product, Protocol, Side, Slot, WIRE_W, WireLink, accessory_products, block_name, bold_style, can_connect,
-    deco_block, deco_block_name, deco_from_xdata, deco_points, deco_xdata, device_block, edge_frame, fan_order, is_builtin, library_json, lookup,
-    max_supply_watts, parse_library, parse_products, poe_verdict, port_point, product_record, route_via, truncate_label, used, world_side,
+    BOLD_STYLE, CARD_H, CARD_W, Deco, OFF_PAGE_ID, Product, Protocol, Side, Slot, WIRE_W, WireLink, accessory_products, block_name, bold_style,
+    can_connect, deco_block, deco_block_name, deco_from_xdata, deco_points, deco_xdata, device_block, edge_frame, fan_order, is_builtin,
+    library_json, lookup, max_supply_watts, parse_library, parse_products, poe_verdict, port_point, product_record, route_via, truncate_label, used,
+    world_side,
 };
 use cadcraft_doc::color::{Color, Rgb};
 use cadcraft_doc::{Common, Drawing, Entity, EntityKind, EntityStore, Handle, Insert, Layer, LwPolyline, Space};
@@ -60,11 +61,11 @@ fn own_specs() -> Vec<CommandSpec> {
         CommandSpec::new("csd.replace", "Replace Devices", run_replace)
             .params("{product: id of a library product, handles? (default the selection), allOfProduct?: bool (default false: also every other device on the drawing with the same product as a target)} → {replaced}; devices already that product are skipped"),
         CommandSpec::new("csd.device.info", "Device Info", run_device_info)
-            .params("{handle? (default the single selected device)} → {handle, product: {id, name, code, brand, cat, color: 0xRRGGBB number}, known, label, notes, mount: null | {handle, label} (the device this one is mounted in; layout only), accessories: [{product, name, code, category, qty}], supplyByOthers: bool, ports: [{protocol, label, used, capacity, pooled}], connections: [{wire, protocol, dir: out|in, other: {handle, label}}], sameProduct, at: [x,y], size: [w,h], libSize: [w,h]}")
+            .params("{handle? (default the single selected device)} → {handle, product: {id, name, code, brand, cat, color: 0xRRGGBB number}, known, label, notes, linkPage, mount: null | {handle, label} (the device this one is mounted in; layout only), accessories: [{product, name, code, category, qty}], supplyByOthers: bool, ports: [{protocol, label, used, capacity, pooled}], connections: [{wire, protocol, dir: out|in, other: {handle, label}}], sameProduct, at: [x,y], size: [w,h], libSize: [w,h]}")
             .noundo()
             .enabled(always),
         CommandSpec::new("csd.device.set", "Set Device Properties", run_device_set)
-            .params("{handle? (default the single selected device), label?: text (empty = the product code), notes?: text, mount?: handle of the device to mount in (\"\" = unmount; not itself or anything mounted in it), accessories?: [{product: id, qty}] (replaces the list; qty 0 drops a line), supplyByOthers?: bool (left off the bill of materials, accessories included)} → {handle}"),
+            .params("{handle? (default the single selected device), label?: text (empty = the product code), notes?: text, mount?: handle of the device to mount in (\"\" = unmount; not itself or anything mounted in it), accessories?: [{product: id, qty}] (replaces the list; qty 0 drops a line), supplyByOthers?: bool (left off the bill of materials, accessories included), linkPage?: text, the page an off-page connector continues on (shown as \"See <text>\"; off-page connectors only)} → {handle}"),
         CommandSpec::new("csd.devices.info", "Devices Info", group::run_info)
             .params("{handles? (default the selection)} → {count, products: [{id, name, code, count}], size: {w, h}: card size in drawing units, null where the devices differ}")
             .noundo()
@@ -680,6 +681,8 @@ fn accessories_of(i: &Insert) -> Vec<(String, u64)> {
     rows.into_iter().filter(|r| r.1 > 0).take(MAX_ACCESSORY_LINES).collect()
 }
 
+const MAX_LINK_PAGE_CHARS: usize = 120;
+
 fn supplied_by_others(i: &Insert) -> bool {
     attr(i, "SUPPLY") == "1"
 }
@@ -819,6 +822,7 @@ fn run_device_info(s: &mut Session, p: &Value) -> Result<Value> {
         "known": !product.missing,
         "label": attr(i, "NAME"),
         "notes": attr(i, "NOTES"),
+        "linkPage": attr(i, "LINKPAGE"),
         "mount": mount_of(store, i).map(|m| json!({ "handle": m.hex(), "label": name_of(m) })),
         "accessories": accessories_of(i).iter().map(|(id, qty)| {
             let a = resolve(&products, id);
@@ -861,6 +865,14 @@ fn run_device_set(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => Err(bad("csd.device.set", format!("`{key}` must be text"))),
     };
     let (label, notes) = (text("label")?, text("notes")?);
+    let link_page = text("linkPage")?.map(|t| t.trim().chars().take(MAX_LINK_PAGE_CHARS).collect::<String>());
+    if link_page.is_some() {
+        let d = s.doc()?;
+        let store = d.space(&s.space()).ok_or_else(|| EngineError::Other("no such space".into()))?;
+        if !matches!(store.get(h).map(|e| &e.kind), Some(EntityKind::Insert(i)) if product_attr(i) == Some(OFF_PAGE_ID)) {
+            return Err(bad("csd.device.set", "`linkPage` applies to off-page connectors only"));
+        }
+    }
     let mount = match text("mount")? {
         None => None,
         Some(t) if t.is_empty() => Some(String::new()),
@@ -892,6 +904,10 @@ fn run_device_set(s: &mut Session, p: &Value) -> Result<Value> {
         }
         if let Some(n) = notes {
             put_attr(i, "NOTES", n);
+        }
+        if let Some(l) = link_page {
+            put_attr(i, "LINKSEE", if l.is_empty() { String::new() } else { truncate_label(&format!("See {l}")) });
+            put_attr(i, "LINKPAGE", l);
         }
         if let Some(m) = mount {
             put_attr(i, "MOUNT", m);

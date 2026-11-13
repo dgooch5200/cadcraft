@@ -74,6 +74,8 @@ struct Info {
     product: Product,
     label: String,
     notes: String,
+    #[serde(rename = "linkPage")]
+    link_page: String,
     ports: Vec<Port>,
     connections: Vec<Connection>,
     #[serde(rename = "sameProduct")]
@@ -277,6 +279,13 @@ pub(super) fn show(app: &mut CadApp, ui: &mut egui::Ui, sel: &[Handle]) {
                 ui.label(egui::RichText::new(&p.code).small().color(t.text_faint));
             }
         });
+        if p.id == cadcraft_csd::OFF_PAGE_ID {
+            prop_row(ui, "Continues on", |ui| {
+                if let Some(v) = edit_field(ui, sid.with("linkpage"), i.link_page.clone()) {
+                    cmd = Some(("csd.device.set", json!({ "handle": hex, "linkPage": v })));
+                }
+            });
+        }
         prop_row(ui, "Notes", |ui| {
             if let Some(v) = notes_field(ui, sid.with("notes"), &i.notes) {
                 cmd = Some(("csd.device.set", json!({ "handle": hex, "notes": v })));

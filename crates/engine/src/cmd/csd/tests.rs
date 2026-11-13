@@ -745,6 +745,23 @@ fn device_info_reports_ports_connections_and_size() {
 }
 
 #[test]
+fn off_page_connector_shows_see_page_under_its_label() {
+    let (mut s, a, ..) = setup();
+    let off = handle(&s.execute("csd.place", &json!({ "product": cadcraft_csd::OFF_PAGE_ID, "at": [0, 300] })).unwrap());
+    s.execute("csd.device.set", &json!({ "handle": off.hex(), "label": "To riser", "linkPage": " Sheet 2 " })).unwrap();
+    assert_eq!(s.execute("csd.device.info", &json!({ "handle": off.hex() })).unwrap()["linkPage"], "Sheet 2");
+    let shown =
+        |s: &Session, t: &str| insert(s, off).attribs.iter().find(|x| x.tag == t).map(|x| (x.text.value.clone(), x.invisible, x.text.insert.y));
+    assert_eq!(shown(&s, "LINKSEE").map(|x| (x.0, x.1)), Some(("See Sheet 2".to_string(), false)));
+    let (label_y, see_y) = (shown(&s, "LABEL").unwrap().2, shown(&s, "LINKSEE").unwrap().2);
+    assert!(see_y < label_y, "the See line sits under the label");
+    s.execute("csd.device.set", &json!({ "handle": off.hex(), "linkPage": "" })).unwrap();
+    assert_eq!(shown(&s, "LINKSEE").map(|x| x.0), Some(String::new()));
+    // Only the off-page connector takes a page.
+    assert!(s.execute("csd.device.set", &json!({ "handle": a.hex(), "linkPage": "x" })).is_err());
+}
+
+#[test]
 fn device_set_writes_label_and_notes_in_one_undo_step_and_survives_a_library_refresh() {
     let (mut s, a, _, _) = setup();
     s.execute("csd.device.set", &json!({ "handle": a.hex(), "label": "Main desk", "notes": "FOH" })).unwrap();

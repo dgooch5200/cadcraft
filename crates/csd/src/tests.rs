@@ -394,7 +394,7 @@ fn builtin_card_is_a_dashed_box_without_a_strip() {
     let by_others = device_block(&builtin_products()[0], &mut h, 1.0).entities;
     let off_page = device_block(&builtin_products()[1], &mut h, 1.0).entities;
     assert!(by_others.len() < plain.len());
-    assert_eq!(off_page.len(), by_others.len() + 1, "the break arrow");
+    assert_eq!(off_page.len(), by_others.len() + 3, "the break arrow, the hidden page and the See line");
     assert!(by_others.iter().any(|e| e.common.linetype == "DASHED2"));
     assert!(plain.iter().all(|e| e.common.linetype != "DASHED2"));
 }

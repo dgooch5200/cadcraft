@@ -425,7 +425,8 @@ pub fn device_block(product: &Product, mut new_handle: impl FnMut() -> Handle, d
             let (x, h) = (hw - 3.0, 7.0);
             p.add(fill(vec![vertex(x - h, h, 0.0), vertex(x, 0.0, 0.0), vertex(x - h, -h, 0.0)]), product.color);
         }
-        0.0
+        // The label sits above the middle, leaving the "See <page>" line under it.
+        if product.id == OFF_PAGE_ID { LABEL_H } else { 0.0 }
     } else {
         // The strip shares the card's border and bottom corners: its top edge is the rule.
         let strip_top = -hh + STRIP_H;
@@ -459,6 +460,10 @@ pub fn device_block(product: &Product, mut new_handle: impl FnMut() -> Handle, d
     p.add(attdef("NAME", "Name", Vec2::ZERO, "", true), INK);
     p.add(attdef("NOTES", "Notes", Vec2::ZERO, "", true), INK);
     p.add(attdef("LABEL", "Label", Vec2 { x: 0.0, y: label_y }, "", false), legible(product.color));
+    if product.id == OFF_PAGE_ID {
+        p.add(attdef("LINKPAGE", "Page", Vec2::ZERO, "", true), INK);
+        p.add(attdef("LINKSEE", "See", Vec2 { x: 0.0, y: -LABEL_H }, "", false), legible(product.color));
+    }
     p.block
 }
 
