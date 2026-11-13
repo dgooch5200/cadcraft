@@ -26,6 +26,7 @@ mod cpsd_out;
 mod group;
 mod html;
 mod library_csv;
+mod lpro;
 mod mount;
 mod new;
 mod patch;
@@ -60,6 +61,8 @@ fn own_specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("csd.import.cpsd", "Import ChamSys Designer Project", cpsd::run_import)
             .params("{path: a .cpsd file, page?: 1-based number or id (default the first page)} → {devices, wires, unplaced, shapes, skipped: [reasons]}; builds the page's devices, wires (waypoints, label position, name), shapes and text (lines, rectangles, ellipses and text on layer CSD_SHAPES), off-page targets (as the page's name), the ortho setting, the unplaced list and the title block into the current drawing"),
+        CommandSpec::new("csd.import.lpro", "Import Luminary Project", lpro::run_import)
+            .params("{path: a Luminary Pro .lpro file, choices?: {typeKey: product id, \"\" skips}, preview?: true} → {types: [{key, name, manufacturer, luminaire, catalog, quantity, product, matched, suggestions}], fixtures, skipped}; adds each fixture type's count to the unplaced list as the library product it names (types the file does not name specifically are skipped unless `choices` picks one); `preview` only reports"),
         CommandSpec::new("csd.export.cpsd", "Export ChamSys Designer Project", cpsd_out::run_export)
             .params("{path} → {path, devices, wires, unplaced, shapes, skipped: [reasons]}; writes the drawing as a one-page .cpsd (devices, mounts, wires with waypoints and names, unplaced items, title block, the products they use, the ortho setting, off-page targets that name the exported page, and lines, rectangles, ellipses and text on layer CSD_SHAPES as shapes; what cannot be written is counted in skipped)")
             .noundo(),

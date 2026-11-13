@@ -250,7 +250,12 @@ pub(super) fn body(app: &mut CadApp, ui: &mut egui::Ui) {
         ui.add(egui::TextEdit::singleline(&mut f.query).hint_text(crate::tl!("Search products")).desired_width(ui.available_width() - 72.0))
             .accessible_name(crate::tl!("Search products"));
         ui.menu_button(crate::tl!("Project"), |ui| {
-            for (label, cmd) in [("Import .cpsd…", "csd.import.cpsd"), ("Export .cpsd…", "csd.export.cpsd"), ("Print sheet…", "csd.print")] {
+            for (label, cmd) in [
+                ("Import .cpsd…", "csd.import.cpsd"),
+                ("Import Luminary…", "csd.import.lpro"),
+                ("Export .cpsd…", "csd.export.cpsd"),
+                ("Print sheet…", "csd.print"),
+            ] {
                 if ui.button(crate::i18n::t(label)).clicked() {
                     file = Some(cmd);
                     ui.close();
