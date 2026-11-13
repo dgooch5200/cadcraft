@@ -1615,3 +1615,20 @@ menu	View	视图
 	{n} devices: {summary}	{n} 台设备：{summary}
 	Label Devices	设备标签
 	Devices Info	设备信息
+	Patch · {count}	补丁表 · {count}
+	Drawing order	图纸顺序
+	Position	位置
+	Patch order	补丁顺序
+	Nothing to patch.	没有可补丁的设备。
+	Universes: {used} of {budget}	宇宙数：{used} / {budget}
+	Universes: {used}	宇宙数：{used}
+	Universe	宇宙
+	Address	地址
+	Mode	模式
+	Channels	通道数
+	{mode} (assumed)	{mode}（默认）
+	Largest mode	最大模式
+	Export MagicQ	导出 MagicQ
+	Set Device DMX Mode	设置设备 DMX 模式
+	DMX Patch	DMX 补丁表
+	Export DMX Patch	导出 DMX 补丁表

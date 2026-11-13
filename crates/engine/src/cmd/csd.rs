@@ -21,6 +21,7 @@ use super::curves::handle_param;
 mod arrange;
 mod connect;
 mod group;
+mod patch;
 mod place;
 mod schedule;
 mod sheet;
@@ -86,6 +87,14 @@ fn own_specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("csd.bom.export", "Export Bill of Materials", schedule::run_bom_export)
             .params("{path, format: csv|pdf, footer?: [lines printed under the PDF table] (default the title block's project, venue, drawn by, date and rev)} → {path, rows}")
+            .noundo(),
+        CommandSpec::new("csd.device.mode", "Set Device DMX Mode", patch::run_device_mode)
+            .params("{handles? (default the selection), mode: a mode name the product offers (empty or null = the product's largest)} → {changed}"),
+        CommandSpec::new("csd.patch", "DMX Patch", patch::run_patch)
+            .params("{order?: drawing (default)|name|product|position} → {rows: [{handle, label, product, name, mode: chosen mode or null, assumedMode, modes: [names], channels, universe, address}], universes: {used, budget, over}}; devices that take channels packed into 512-channel universes in order, none straddling a universe; budget is the universes the placed controllers originate")
+            .noundo(),
+        CommandSpec::new("csd.patch.export", "Export DMX Patch", patch::run_patch_export)
+            .params("{path, format: csv|magicq, order?} → {path, rows}; magicq is MagicQ's Fixture Patch CSV (Head No, DMX, Position, Hang, Manufacturer, Model, Mode)")
             .noundo(),
         CommandSpec::new("csd.arm", "Arm Product", place::run_arm).params("{product: id of a library product} → {product}").noundo(),
         CommandSpec::new("csd.protocol", "Wire Protocol", run_protocol)

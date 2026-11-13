@@ -1,0 +1,160 @@
+use std::sync::Arc;
+
+use cadcraft_csd::Product;
+use cadcraft_doc::Handle;
+use serde_json::{Value, json};
+
+use super::*;
+
+fn prod(id: &str, name: &str, modes: &str, channels: u32, universes: u32) -> Product {
+    Product {
+        id: id.into(),
+        name: name.into(),
+        code: id.into(),
+        brand: "Acme".into(),
+        modes: modes.into(),
+        channels,
+        universes,
+        ..Product::default()
+    }
+}
+
+fn session() -> Session {
+    let mut s = Session::new();
+    s.csd_library = Arc::new(vec![
+        prod("FIX", "Spot", "Std:300, Ext:200, bad, :5, Zero:0", 0, 0),
+        prod("PIX", "Épix Strip", "Pixel:720", 0, 0),
+        prod("PLAIN", "Plain", "", 10, 0),
+        prod("DESK", "Desk", "", 0, 2),
+    ]);
+    s
+}
+
+fn place(s: &mut Session, product: &str, at: [f64; 2], label: &str) -> Handle {
+    let r = s.execute("csd.place", &json!({ "product": product, "at": at, "label": label })).unwrap();
+    Handle::parse_hex(r["handle"].as_str().unwrap()).unwrap()
+}
+
+fn rows(s: &mut Session) -> Vec<Value> {
+    s.execute("csd.patch", &json!({})).unwrap()["rows"].as_array().unwrap().clone()
+}
+
+fn addr(r: &Value) -> (u64, u64) {
+    (r["universe"].as_u64().unwrap(), r["address"].as_u64().unwrap())
+}
+
+fn export(s: &mut Session, format: &str, order: &str) -> String {
+    let path = std::env::temp_dir().join(format!("csd-patch-{}-{format}-{order}.csv", std::process::id()));
+    s.execute("csd.patch.export", &json!({ "path": path, "format": format, "order": order })).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    text
+}
+
+#[test]
+fn modes_parse_leniently_and_the_default_is_the_largest() {
+    let p = prod("X", "X", "Std:300, Ext:200, bad, :5, Zero:0, Pixel: 1:1:720", 0, 0);
+    let names: Vec<_> = parse_modes(&p).into_iter().collect();
+    assert_eq!(names, [("Std".to_string(), 300), ("Ext".to_string(), 200), ("Pixel: 1:1".to_string(), 720)]);
+    assert_eq!(widest(&names).map(|m| m.1), Some(720));
+}
+
+#[test]
+fn a_chosen_mode_sets_the_channels_and_is_one_undo_step() {
+    let mut s = session();
+    let h = place(&mut s, "FIX", [0.0, 0.0], "A");
+    assert_eq!(rows(&mut s)[0]["channels"], 300);
+    s.execute("csd.device.mode", &json!({ "handles": [h.hex()], "mode": "Ext" })).unwrap();
+    let r = &rows(&mut s)[0];
+    assert_eq!((r["channels"].clone(), r["mode"].clone()), (json!(200), json!("Ext")));
+    s.execute("undo", &json!({})).unwrap();
+    assert_eq!(rows(&mut s)[0]["mode"], Value::Null);
+    s.execute("csd.device.mode", &json!({ "handles": [h.hex()], "mode": "Ext" })).unwrap();
+    s.execute("csd.device.mode", &json!({ "handles": [h.hex()], "mode": "" })).unwrap();
+    assert_eq!(rows(&mut s)[0]["channels"], 300);
+}
+
+#[test]
+fn a_mode_the_product_does_not_offer_is_refused_and_changes_nothing() {
+    let mut s = session();
+    let a = place(&mut s, "FIX", [0.0, 0.0], "A");
+    let b = place(&mut s, "PLAIN", [300.0, 0.0], "B");
+    assert!(s.execute("csd.device.mode", &json!({ "handles": [a.hex(), b.hex()], "mode": "Ext" })).is_err());
+    assert!(s.execute("csd.device.mode", &json!({ "handles": [a.hex()], "mode": "Nope" })).is_err());
+    assert!(s.execute("csd.device.mode", &json!({ "handles": [a.hex()], "mode": 5 })).is_err());
+    assert_eq!(rows(&mut s)[0]["mode"], Value::Null);
+}
+
+#[test]
+fn fixtures_pack_into_universes_without_straddling() {
+    let mut s = session();
+    for (i, l) in ["A", "B", "C"].iter().enumerate() {
+        place(&mut s, "FIX", [i as f64 * 300.0, 0.0], l);
+    }
+    place(&mut s, "DESK", [0.0, 300.0], "Desk");
+    let r = rows(&mut s);
+    assert_eq!(r.len(), 3, "the desk takes no channels");
+    assert_eq!(r.iter().map(addr).collect::<Vec<_>>(), [(1, 1), (2, 1), (3, 1)]);
+    let u = s.execute("csd.patch", &json!({})).unwrap()["universes"].clone();
+    assert_eq!(u, json!({ "used": 3, "budget": 2, "over": true }));
+}
+
+#[test]
+fn a_fixture_wider_than_a_universe_takes_whole_universes() {
+    assert_eq!(assign(&[100, 720, 50, 0]), [(1, 1, 1), (2, 1, 2), (4, 1, 1), (4, 51, 1)]);
+}
+
+#[test]
+fn patch_order_name_product_and_position() {
+    let mut s = session();
+    place(&mut s, "PLAIN", [600.0, 0.0], "Bar 10");
+    place(&mut s, "FIX", [0.0, 0.0], "Bar 2");
+    place(&mut s, "PLAIN", [300.0, -500.0], "Bar 1");
+    let order = |s: &mut Session, o: &str| {
+        let v = s.execute("csd.patch", &json!({ "order": o })).unwrap();
+        v["rows"].as_array().unwrap().iter().map(|r| r["label"].as_str().unwrap().to_string()).collect::<Vec<_>>()
+    };
+    assert_eq!(order(&mut s, "drawing"), ["Bar 10", "Bar 2", "Bar 1"]);
+    assert_eq!(order(&mut s, "name"), ["Bar 1", "Bar 2", "Bar 10"]);
+    assert_eq!(order(&mut s, "product"), ["Bar 1", "Bar 10", "Bar 2"]);
+    assert_eq!(order(&mut s, "position"), ["Bar 2", "Bar 10", "Bar 1"]);
+    assert!(s.execute("csd.patch", &json!({ "order": "random" })).is_err());
+}
+
+#[test]
+fn magicq_csv_matches_the_consoles_own_shape() {
+    let mut s = session();
+    place(&mut s, "PIX", [0.0, 0.0], "Cove, \"N\"");
+    let h = place(&mut s, "PLAIN", [300.0, 0.0], "B");
+    place(&mut s, "FIX", [600.0, 0.0], "C");
+    s.execute("csd.device.mode", &json!({ "handles": [h.hex()], "mode": null })).unwrap();
+    let csv = export(&mut s, "magicq", "drawing");
+    assert_eq!(
+        csv,
+        "Head No ,DMX ,Position ,Hang ,Manufacturer ,Model ,Mode\n\
+         1 ,01-001 ,\"Cove, \"\"N\"\"\" , ,Acme ,Epix Strip ,Pixel\n\
+         2 ,03-001 ,B , ,Acme ,Plain ,10 ch\n\
+         3 ,03-011 ,C , ,Acme ,Spot ,Std\n"
+    );
+    let plain = export(&mut s, "csv", "drawing");
+    assert!(plain.starts_with("Head No,Universe,Address,Label,Manufacturer,Product,Mode,Channels\r\n1,1,1,"));
+    assert!(s.execute("csd.patch.export", &json!({ "path": "x", "format": "pdf" })).is_err());
+}
+
+#[test]
+fn ascii_folds_accents_and_drops_the_rest() {
+    assert_eq!(ascii("ÉPIX Ø – “Ünï” ×2 \u{4e2d}"), "EPIX O - \"Uni\" x2");
+}
+
+#[test]
+fn the_chosen_mode_survives_a_dxf_save_and_reopen() {
+    let mut s = session();
+    let h = place(&mut s, "FIX", [0.0, 0.0], "A");
+    s.execute("csd.device.mode", &json!({ "handles": [h.hex()], "mode": "Ext" })).unwrap();
+    let text = cadcraft_io::write_dxf(s.doc().unwrap());
+    let mut t = Session::empty();
+    t.csd_library = s.csd_library.clone();
+    t.open_drawing(cadcraft_io::read_dxf(text.as_bytes()).unwrap(), "Imported", None);
+    let r = rows(&mut t);
+    assert_eq!((r[0]["mode"].clone(), r[0]["channels"].clone()), (json!("Ext"), json!(200)));
+}

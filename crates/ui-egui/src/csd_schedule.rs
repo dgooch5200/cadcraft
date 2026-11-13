@@ -20,12 +20,18 @@ enum Tab {
     Placed,
     Unplaced,
     Bom,
+    Patch,
 }
+
+/// The patch orders `csd.patch` takes, with their labels.
+const ORDERS: [(&str, &str); 4] = [("drawing", "Drawing order"), ("name", "Name"), ("product", "Product"), ("position", "Position")];
 
 #[derive(Clone, Debug, Default)]
 pub struct State {
     pub open: bool,
     tab: Tab,
+    /// Index into [`ORDERS`].
+    order: usize,
     /// Placed devices: (column, ascending).
     sort: Option<(usize, bool)>,
     add_query: String,
@@ -74,14 +80,48 @@ struct Line {
     notes: String,
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct PatchRow {
+    handle: String,
+    label: String,
+    name: String,
+    mode: Option<String>,
+    #[serde(rename = "assumedMode")]
+    assumed: String,
+    modes: Vec<String>,
+    channels: u64,
+    universe: u64,
+    address: u64,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct Budget {
+    used: u64,
+    budget: u64,
+    over: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct Patch {
+    rows: Vec<PatchRow>,
+    universes: Budget,
+}
+
 #[derive(Debug, Default)]
 struct Lists {
     devices: Vec<Device>,
     items: Vec<Item>,
     lines: Vec<Line>,
+    patch: Patch,
 }
 
 enum Act {
+    SetMode(String, String),
+    SetOrder(usize),
+    ExportPatch(&'static str),
     Locate(String),
     DeleteDevice(String),
     Place(usize),
@@ -118,6 +158,11 @@ fn lists(app: &mut CadApp) -> Arc<Lists> {
         devices: load(app, "csd.schedule", "devices"),
         items: load(app, "csd.unplaced.list", "items"),
         lines: load(app, "csd.bom", "rows"),
+        patch: {
+            let order = ORDERS.get(app.ui.csd_sched.order).map_or("drawing", |o| o.0);
+            let v = app.session.execute("csd.patch", &json!({ "order": order })).unwrap_or(Value::Null);
+            serde_json::from_value(v).unwrap_or_default()
+        },
     });
     app.ui.csd_sched.cache = Some((key, l.clone()));
     l
@@ -329,6 +374,64 @@ fn bom_tab(ui: &mut egui::Ui, l: &Lists) {
         });
 }
 
+fn patch_tab(ui: &mut egui::Ui, st: &State, l: &Lists, act: &mut Option<Act>) {
+    let b = &l.patch.universes;
+    ui.horizontal(|ui| {
+        let line = if b.budget > 0 {
+            crate::tf!("Universes: {used} of {budget}", used = b.used, budget = b.budget)
+        } else {
+            crate::tf!("Universes: {used}", used = b.used)
+        };
+        let c = if b.over { ui.visuals().error_fg_color } else { ui.visuals().text_color() };
+        ui.label(RichText::new(line).color(c));
+        craft_ui::ComboBox::from_id_salt("csd_patch_order")
+            .selected_text(ORDERS.get(st.order).map_or("", |o| crate::i18n::t(o.1)))
+            .show_ui(ui, |ui| {
+                for (i, (_, label)) in ORDERS.iter().enumerate() {
+                    if ui.selectable_label(st.order == i, crate::i18n::t(label)).clicked() {
+                        *act = Some(Act::SetOrder(i));
+                    }
+                }
+            })
+            .response
+            .accessible_name(crate::tl!("Patch order"));
+    });
+    if l.patch.rows.is_empty() {
+        ui.label(RichText::new(crate::tl!("Nothing to patch.")).weak());
+        return;
+    }
+    let row_h = ui.text_style_height(&egui::TextStyle::Body) + 8.0;
+    builder(ui, &[40.0, 90.0, 70.0, 150.0, 200.0, 180.0, 70.0])
+        .header(row_h + 4.0, |mut h| head(&mut h, &["Item", "Universe", "Address", "Label", "Product name", "Mode", "Channels"]))
+        .body(|body| {
+            body.rows(row_h, l.patch.rows.len(), |mut r| {
+                let Some(p) = l.patch.rows.get(r.index()) else { return };
+                let n = r.index() + 1;
+                for t in [&n.to_string(), &p.universe.to_string(), &p.address.to_string(), &p.label, &p.name] {
+                    cell(&mut r, t);
+                }
+                r.col(|ui| {
+                    if p.modes.is_empty() {
+                        ui.label(RichText::new(&p.assumed).weak());
+                        return;
+                    }
+                    let shown = p.mode.clone().unwrap_or_else(|| crate::tf!("{mode} (assumed)", mode = p.assumed));
+                    craft_ui::ComboBox::from_id_salt(("csd_mode", &p.handle)).selected_text(shown).width(160.0).show_ui(ui, |ui| {
+                        if ui.selectable_label(p.mode.is_none(), crate::tl!("Largest mode")).clicked() {
+                            *act = Some(Act::SetMode(p.handle.clone(), String::new()));
+                        }
+                        for m in &p.modes {
+                            if ui.selectable_label(p.mode.as_ref() == Some(m), m).clicked() {
+                                *act = Some(Act::SetMode(p.handle.clone(), m.clone()));
+                            }
+                        }
+                    });
+                });
+                cell(&mut r, &p.channels.to_string());
+            });
+        });
+}
+
 pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
     if !app.ui.csd_sched.open {
         return;
@@ -345,6 +448,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                 (Tab::Placed, crate::tf!("Placed devices · {count}", count = l.devices.len())),
                 (Tab::Unplaced, crate::tf!("Unplaced · {count}", count = l.items.len())),
                 (Tab::Bom, crate::tf!("Bill of materials · {count}", count = l.lines.len())),
+                (Tab::Patch, crate::tf!("Patch · {count}", count = l.patch.rows.len())),
             ];
             for (tab, label) in tabs {
                 if ui.selectable_label(st.tab == tab, label).clicked() {
@@ -362,6 +466,13 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                         }
                     }
                 }
+                if st.tab == Tab::Patch {
+                    for (label, fmt) in [(crate::tl!("Export MagicQ"), "magicq"), (crate::tl!("Export CSV"), "csv")] {
+                        if ui.add_enabled(can_pick && !l.patch.rows.is_empty(), egui::Button::new(label)).clicked() {
+                            act = Some(Act::ExportPatch(fmt));
+                        }
+                    }
+                }
                 if let Some((ok, m)) = &st.msg {
                     let c = if *ok { ui.visuals().text_color() } else { ui.visuals().error_fg_color };
                     ui.label(RichText::new(m).color(c));
@@ -373,6 +484,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             Tab::Placed => placed_tab(ui, st, &l, &mut act),
             Tab::Unplaced => unplaced_tab(ui, st, &l, &library, &mut act),
             Tab::Bom => bom_tab(ui, &l),
+            Tab::Patch => patch_tab(ui, st, &l, &mut act),
         }
     });
     if let Some(a) = act {
@@ -387,6 +499,27 @@ fn say(app: &mut CadApp, r: Result<Value, String>) {
 fn apply(app: &mut CadApp, act: Act) {
     match act {
         Act::Close => app.ui.csd_sched.open = false,
+        Act::SetMode(h, mode) => {
+            let r = app.run("csd.device.mode", json!({ "handles": [h], "mode": mode }));
+            say(app, r);
+        }
+        Act::SetOrder(i) => {
+            app.ui.csd_sched.order = i;
+            app.ui.csd_sched.cache = None;
+        }
+        Act::ExportPatch(format) => {
+            let then = move |app: &mut CadApp, path: String| {
+                let order = ORDERS.get(app.ui.csd_sched.order).map_or("drawing", |o| o.0);
+                app.ui.csd_sched.msg = Some(match app.run("csd.patch.export", json!({ "path": path, "format": format, "order": order })) {
+                    Ok(v) => (true, crate::tf!("Exported {rows} rows: {path}", rows = v["rows"], path = path)),
+                    Err(e) => (false, e),
+                });
+                Ok(Value::Null)
+            };
+            if let Some(Err(e)) = app.pick_then(Pick::Save("dmx-patch.csv".into()), then) {
+                say(app, Err(e));
+            }
+        }
         Act::Locate(h) => {
             let r = app.run("select", json!({ "handles": [h] })).and_then(|_| app.run("zoom", json!({ "mode": "object", "handles": [h] })));
             say(app, r);
@@ -459,5 +592,22 @@ mod tests {
         assert_eq!(app.session.csd_armed.as_deref(), Some("b565fc"));
         apply(&mut app, Act::Close);
         assert!(!app.ui.csd_sched.open);
+    }
+
+    #[test]
+    fn the_patch_tab_lists_devices_and_a_mode_pick_repatches_them() {
+        let mut app = app();
+        app.session.csd_library = Arc::new(vec![cadcraft_csd::Product { id: "FIX".into(), modes: "Std:300, Ext:200".into(), ..Default::default() }]);
+        for x in [0, 300] {
+            app.run("csd.place", json!({ "product": "FIX", "at": [x, 0] })).unwrap();
+        }
+        let l = lists(&mut app);
+        assert_eq!(l.patch.rows.iter().map(|r| (r.universe, r.address)).collect::<Vec<_>>(), [(1, 1), (2, 1)]);
+        let h = l.patch.rows[0].handle.clone();
+        apply(&mut app, Act::SetMode(h, "Ext".into()));
+        let l = lists(&mut app);
+        assert_eq!(l.patch.rows.iter().map(|r| (r.universe, r.address, r.channels)).collect::<Vec<_>>(), [(1, 1, 200), (1, 201, 300)]);
+        apply(&mut app, Act::SetOrder(1));
+        assert!(app.ui.csd_sched.cache.is_none());
     }
 }
