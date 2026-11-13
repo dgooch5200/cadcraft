@@ -3,8 +3,8 @@
 //! origin is the page's lower-left corner.
 
 use super::{
-    Attrib, AttribModes, AttribProps, Block, Entity, EntityKind, HAlign, Handle, INK, LwPolyline, Painter, PolyVertex, Protocol, Text, Vec2, legible,
-    outline, text, vertex,
+    Attrib, AttribModes, AttribProps, Block, Color, Entity, EntityKind, HAlign, Handle, INK, LwPolyline, Painter, PolyVertex, Protocol, Text, Vec2,
+    legible, outline, text, vertex,
 };
 
 pub const TITLEBLOCK: &str = "CSD_TITLEBLOCK";
@@ -81,18 +81,25 @@ fn attdef(tag: &str, prompt: &str, mut t: Text, value: &str) -> EntityKind {
     })
 }
 
+/// Adds `kind` in ACI 7, which shows white on a dark model space and black on paper.
+fn ink<F: FnMut() -> Handle>(p: &mut Painter<'_, F>, kind: EntityKind) {
+    let mut e = p.entity(kind, INK);
+    e.common.color = Color::WHITE;
+    p.block.entities.push(e);
+}
+
 /// The page frame and the title block, with an attribute definition for each of [`TITLE_FIELDS`]
 /// (all empty but the brand).
 pub fn titleblock_block(mut new_handle: impl FnMut() -> Handle) -> Block {
     let mut p = Painter { block: Block::new(TITLEBLOCK), new_handle: &mut new_handle };
     let (x0, y0, x1, top) = (MARGIN, MARGIN, PAGE_W - MARGIN, MARGIN + TITLE_H);
     p.add(outline(rect(x0, y0, x1, PAGE_H - MARGIN), 0.75), 0xcccccc);
-    p.add(outline(rect(x0, y0, x1, top), 1.5), INK);
+    ink(&mut p, outline(rect(x0, y0, x1, top), 1.5));
     let (fx, row) = (x0 + BRAND_W, top - ROW1_H);
-    p.add(line(fx, y0, fx, top, 1.0), INK);
-    p.add(line(fx, row, x1, row, 1.0), INK);
+    ink(&mut p, line(fx, y0, fx, top, 1.0));
+    ink(&mut p, line(fx, row, x1, row, 1.0));
     let cx = x0 + BRAND_W / 2.0;
-    p.add(attdef("BRAND", "Brand", Text { halign: HAlign::Center, ..label(cx, top - 32.0, 6.5, "") }, "CHAUVET Professional"), INK);
+    ink(&mut p, attdef("BRAND", "Brand", Text { halign: HAlign::Center, ..label(cx, top - 32.0, 6.5, "") }, "CHAUVET Professional"));
     p.add(EntityKind::Text(Text { halign: HAlign::Center, ..label(cx, top - 52.0, 4.3, "SYSTEM SKETCH") }), FAINT);
 
     let total: f64 = COLUMNS.iter().map(|c| c.2).sum();
@@ -106,12 +113,12 @@ pub fn titleblock_block(mut new_handle: impl FnMut() -> Handle) -> Block {
             p.add(line(x, row, x, top, 1.0), 0xcccccc);
         }
         p.add(EntityKind::Text(label(x + 5.0, top - 10.0, 4.3, &caption.to_uppercase())), FAINT);
-        p.add(attdef(tag, caption, label(x + 5.0, top - 25.0, 6.5, ""), ""), INK);
+        ink(&mut p, attdef(tag, caption, label(x + 5.0, top - 25.0, 6.5, ""), ""));
         x += (x1 - fx) * weight / total;
     }
     p.add(line(split, y0, split, row, 1.0), 0xcccccc);
     p.add(EntityKind::Text(label(fx + 5.0, row - 8.0, 4.3, "SYSTEM / DRAWING TITLE")), FAINT);
-    p.add(attdef("TITLE", "Drawing title", label(fx + 5.0, row - 20.0, 6.5, ""), ""), INK);
+    ink(&mut p, attdef("TITLE", "Drawing title", label(fx + 5.0, row - 20.0, 6.5, ""), ""));
     p.add(attdef("META", "Meta", label(split + 5.0, row - 15.0, 5.0, ""), ""), FAINT);
     p.block
 }
