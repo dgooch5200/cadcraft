@@ -29,6 +29,7 @@ mod library_csv;
 mod lpro;
 mod mount;
 mod new;
+mod page;
 mod patch;
 mod place;
 mod print;
@@ -158,6 +159,16 @@ fn own_specs() -> Vec<CommandSpec> {
             .params("{fields: {brand?, project?, venue?, location?, drawnBy?, date?, sheet?, rev?, title?, meta?: text}} → {handle}; inserts the title block first when there is none"),
         CommandSpec::new("csd.legend", "Line Key", sheet::run_legend)
             .params("{at?: [x,y] (default above the title block)} → {handle}; inserts the LINE KEY legend of the protocols in use if there is none, else refreshes and returns it; it then follows the wires"),
+        CommandSpec::new("csd.pages", "List Pages", page::run_pages)
+            .params("{} → {pages: [{index (1-based), name, handle}]}; the title-block sheets left to right (a device is on the sheet that holds its insert point)")
+            .noundo()
+            .enabled(always),
+        CommandSpec::new("csd.page.add", "Add Page", page::run_add)
+            .params("{name?: text} → {handle, index, pages}; adds a sheet to the right of the last (the first sheet too, when there is none), with the project fields copied; SHEET reads \"N of M\" once there are two"),
+        CommandSpec::new("csd.page.rename", "Rename Page", page::run_rename)
+            .params("{page: number (1-based) | name, name: text} → {handle, name, links}; off-page connectors that named the old page follow"),
+        CommandSpec::new("csd.page.remove", "Remove Page", page::run_remove)
+            .params("{page: number (1-based) | name} → {pages}; refuses a page whose sheet holds devices and the last page"),
         CommandSpec::new("csd.library.load", "Load Product Library", run_library_load)
             .params("{path: JSON library file} → {count}")
             .noundo()
@@ -499,6 +510,7 @@ fn spaces(doc: &Drawing) -> Vec<Space> {
 /// does) when drawings get large.
 pub(crate) fn refresh(doc: &mut Arc<Drawing>, products: &[Product], ortho: bool) {
     sheet::refresh_legend(doc);
+    page::refresh_labels(doc);
     sync_display(doc);
     for space in spaces(doc) {
         let p = doc.space(&space).map(|st| plan(st, products, ortho)).unwrap_or_default();
@@ -1141,6 +1153,16 @@ fn run_connect(s: &mut Session, p: &Value) -> Result<Value> {
         let list: Vec<(Handle, &Product)> = devs.iter().map(|x| (x.handle, &*x.product)).collect();
         let existing: Vec<WireLink> = wires(store).into_iter().map(|(_, l)| l).collect();
         can_connect(&list, &existing, &link).map_err(|r| EngineError::Other(r.message))?;
+        let ps = page::pages_in(store);
+        let at = |h: Handle| devs.iter().find(|x| x.handle == h).and_then(|x| page::page_of(d, &ps, x.insert.insert.xy()));
+        if let (Some(a), Some(b)) = (at(link.from), at(link.to)) {
+            if a != b {
+                return Err(bad(
+                    "csd.connect",
+                    format!("devices on page {} and page {} can't be wired together; use an off-page connector", a + 1, b + 1),
+                ));
+            }
+        }
         (link.protocol == Protocol::Network)
             .then(|| poe_verdict(&list, &existing, link.from, link.to, max_supply_watts(&products)))
             .flatten()

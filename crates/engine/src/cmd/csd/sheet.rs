@@ -6,6 +6,7 @@ use super::{
 };
 use cadcraft_csd::{LEGEND, MARGIN, Paper, TITLE_FIELDS, TITLE_H, TITLEBLOCK, legend_block, legend_protocols, titleblock_block};
 
+use super::page;
 use crate::cmd::point_param;
 
 pub(super) fn find(s: &Session, name: &str) -> Option<(Handle, Insert)> {
@@ -104,14 +105,23 @@ pub(super) fn run_project_set(s: &mut Session, p: &Value) -> Result<Value> {
         edits.push((*tag, text.to_string()));
     }
     let h = ensure_titleblock(s, Vec2::ZERO, Paper::default())?;
-    s.doc_mut()?.modify_entity(h, |e| {
-        let EntityKind::Insert(i) = &mut e.kind else { return };
-        for (tag, text) in edits {
-            if let Some(a) = i.attribs.iter_mut().find(|a| a.tag == tag) {
-                a.text.value = text;
+    // The fields are the drawing's, so every sheet takes them; with several sheets SHEET is "N of M".
+    let sheets: Vec<Handle> = page::pages(s).iter().map(|g| g.handle).collect();
+    let several = sheets.len() > 1;
+    for sh in sheets {
+        let edits = edits.clone();
+        s.doc_mut()?.modify_entity(sh, |e| {
+            let EntityKind::Insert(i) = &mut e.kind else { return };
+            for (tag, text) in edits {
+                if several && tag == "SHEET" {
+                    continue;
+                }
+                if let Some(a) = i.attribs.iter_mut().find(|a| a.tag == tag) {
+                    a.text.value = text;
+                }
             }
-        }
-    })?;
+        })?;
+    }
     Ok(json!({ "handle": h.hex() }))
 }
 

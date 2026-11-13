@@ -255,6 +255,7 @@ pub(super) fn body(app: &mut CadApp, ui: &mut egui::Ui) {
                 ("Import Luminary…", "csd.import.lpro"),
                 ("Export .cpsd…", "csd.export.cpsd"),
                 ("Print sheet…", "csd.print"),
+                ("Add page", "csd.page.add"),
             ] {
                 if ui.button(crate::i18n::t(label)).clicked() {
                     file = Some(cmd);
