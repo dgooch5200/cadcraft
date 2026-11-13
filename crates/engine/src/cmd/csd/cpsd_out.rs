@@ -402,4 +402,43 @@ mod tests {
         }
         assert_eq!((&got[0]["color"], &got[3]["text"], &got[3]["textColor"]), (&json!("#ff0000"), &json!("Hello"), &json!("#0000ff")));
     }
+
+    #[test]
+    fn shape_style_survives_the_round_trip() {
+        let file = json!({ "shapes": [
+            { "type": "rect", "x1": 30, "y1": 30, "x2": 130, "y2": 80, "color": "#ff0000", "weight": 6, "strokeStyle": "dashed", "fill": "#00ff00", "fillOpacity": 0.5 },
+            { "type": "text", "x1": 30, "y1": 30, "x2": 130, "y2": 46, "text": "Hi", "textAlign": "right", "textColor": "#0000ff" },
+            { "type": "line", "x1": 0, "y1": 0, "x2": 50, "y2": 0, "strokeStyle": "dotted", "weight": 2 },
+        ] });
+        let dir = std::env::temp_dir();
+        let (a, b) =
+            (dir.join(format!("cadcraft-sty-in-{}.cpsd", std::process::id())), dir.join(format!("cadcraft-sty-out-{}.cpsd", std::process::id())));
+        std::fs::write(&a, file.to_string()).unwrap();
+        let mut s = Session::new();
+        s.execute("csd.import.cpsd", &json!({ "path": a.to_str().unwrap() })).unwrap();
+        let store = s.doc().unwrap().space(&s.space()).unwrap();
+        let on: Vec<_> = store.iter().filter(|e| e.common.layer == "CSD_SHAPES").collect();
+        let rect = on.iter().find(|e| matches!(e.kind, cadcraft_doc::EntityKind::LwPolyline(_))).unwrap();
+        assert_eq!((rect.common.lineweight, rect.common.linetype.as_str()), (cadcraft_doc::Lineweight::Mm100(60), "DASHED"));
+        let hatch = on.iter().find(|e| matches!(&e.kind, cadcraft_doc::EntityKind::Hatch(h) if h.solid)).unwrap();
+        assert_eq!(hatch.common.transparency, cadcraft_doc::Transparency::Percent(50));
+        let mt = on.iter().find_map(|e| if let cadcraft_doc::EntityKind::MText(m) = &e.kind { Some(m) } else { None }).unwrap();
+        assert_eq!(mt.attach, 3);
+        assert!(s.doc().unwrap().linetype("DASHED").is_some() && s.doc().unwrap().linetype("DOT").is_some());
+        let r = s.execute("csd.export.cpsd", &json!({ "path": b.to_str().unwrap() })).unwrap();
+        let out: Value = serde_json::from_slice(&std::fs::read(&b).unwrap()).unwrap();
+        let _ = (std::fs::remove_file(&a), std::fs::remove_file(&b));
+        assert_eq!(r["skipped"], json!([]), "{r}");
+        let got = out["shapes"].as_array().unwrap();
+        assert_eq!(got.len(), 3);
+        let by = |t: &str| got.iter().find(|g| g["type"] == t).unwrap();
+        let rc = by("rect");
+        assert_eq!(
+            (&rc["weight"], &rc["strokeStyle"], &rc["fill"], &rc["fillOpacity"]),
+            (&json!(6.0), &json!("dashed"), &json!("#00ff00"), &json!(0.5))
+        );
+        assert_eq!(by("text")["textAlign"], "right");
+        assert!((by("text")["x2"].as_f64().unwrap() - 130.0).abs() < 1e-6 && (by("text")["x1"].as_f64().unwrap() - 30.0).abs() < 1e-6);
+        assert_eq!(by("line")["strokeStyle"], "dotted");
+    }
 }

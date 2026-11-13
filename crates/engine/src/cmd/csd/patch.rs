@@ -395,37 +395,35 @@ fn universes_text(plan: &Plan) -> String {
     format!("Universes used: {}{}", plan.used, if plan.budget > 0 { format!(" of {} available", plan.budget) } else { String::new() })
 }
 
-/// The patch page: a header row per universe with its channels used. A fixture spanning several
-/// universes is listed under its first, and the others show as continued.
-fn html(s: &Session, p: &Value, plan: &Plan) -> String {
-    use super::html::{footer_lines, group_row, page, row};
+/// Rows grouped by universe, ascending: (universe, header title, header note, row indices).
+fn universe_groups(plan: &Plan) -> Vec<(u32, String, String, Vec<usize>)> {
     use std::collections::BTreeMap;
     let size = u64::from(UNIVERSE_SIZE);
-    let span = |e: &Entry, a: u32| (u64::from(a).saturating_sub(1) + u64::from(e.channels)).div_ceil(size).max(1);
     let mut by_uni: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
-    let mut continued: BTreeMap<u32, &str> = BTreeMap::new();
-    for (i, (e, u, a)) in plan.rows.iter().enumerate() {
+    for (i, (_, u, _)) in plan.rows.iter().enumerate() {
         by_uni.entry(*u).or_default().push(i);
-        for k in 1..span(e, *a).min(1024) {
-            continued.entry(u.saturating_add(k as u32)).or_insert(&e.label);
-        }
     }
-    let mut unis: Vec<u32> = by_uni.keys().chain(continued.keys()).copied().collect();
-    unis.sort_unstable();
-    unis.dedup();
+    by_uni
+        .into_iter()
+        .map(|(u, list)| {
+            let used: u64 = list.iter().filter_map(|&i| plan.rows.get(i)).map(|(e, _, _)| u64::from(e.channels).min(size)).sum();
+            (u, format!("Universe {u}"), format!("{used} of {size} channels used"), list)
+        })
+        .collect()
+}
+
+/// The patch page: a header row per universe with its channels used. A fixture spanning several
+/// universes is listed under its first, with one note naming the last universe it reaches.
+fn html(s: &Session, p: &Value, plan: &Plan) -> String {
+    use super::html::{footer_lines, group_row, page, row};
+    let size = u64::from(UNIVERSE_SIZE);
+    let span = |e: &Entry, a: u32| (u64::from(a).saturating_sub(1) + u64::from(e.channels)).div_ceil(size).max(1);
     let mut body = String::new();
     let paged = !plan.pages.is_empty();
     let cols = if paged { 7 } else { 6 };
-    for u in unis {
-        let list = by_uni.get(&u).map(Vec::as_slice).unwrap_or_default();
-        if list.is_empty() {
-            let from = continued.get(&u).copied().unwrap_or_default();
-            body.push_str(&group_row("group cont", cols, &format!("Universe {u}"), &format!("continued from {from}")));
-            continue;
-        }
-        let used: u64 = list.iter().filter_map(|&i| plan.rows.get(i)).map(|(e, _, _)| u64::from(e.channels).min(size)).sum();
-        body.push_str(&group_row("group", cols, &format!("Universe {u}"), &format!("{used} of {size} channels used")));
-        for &i in list {
+    for (u, title, note, list) in universe_groups(plan) {
+        body.push_str(&group_row("group", cols, &title, &note));
+        for i in list {
             let Some((e, _, a)) = plan.rows.get(i) else { continue };
             let last = (a + e.channels).saturating_sub(1).min(UNIVERSE_SIZE);
             let n = span(e, *a);
@@ -434,7 +432,11 @@ fn html(s: &Session, p: &Value, plan: &Plan) -> String {
                 item.push_str(&format!(" (accessory of {c})"));
             }
             let mode = if e.mode.is_some() { e.mode_text() } else { format!("{} (assumed)", e.mode_text()) };
-            let addr = if n > 1 { format!("{a}-{last} (spans {n} universes)") } else { format!("{a}-{last}") };
+            let addr = if n > 1 {
+                format!("{a}-{last} (spans {n} universes, continued through universe {})", u64::from(u) + n - 1)
+            } else {
+                format!("{a}-{last}")
+            };
             let mut cells = vec![format!("{u}-{a}"), (i + 1).to_string(), format!("{} / {item}", e.label), mode, e.channels.to_string(), addr];
             if paged {
                 cells.insert(3, plan.page_cell(e));
@@ -457,16 +459,16 @@ fn pdf(s: &Session, p: &Value, plan: &Plan) -> Result<Vec<u8>> {
     if paged {
         cols.insert(3, ("Page", 90.0));
     }
-    let rows: Vec<Vec<String>> = plan
-        .rows
-        .iter()
-        .enumerate()
-        .map(|(n, (e, u, a))| {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for (_, title, note, list) in universe_groups(plan) {
+        rows.push(vec![format!("{title}  {note}")]);
+        for i in list {
+            let Some((e, u, a)) = plan.rows.get(i) else { continue };
             let last = a.saturating_add(e.channels).saturating_sub(1).min(UNIVERSE_SIZE);
             let carried = e.carried_by.as_ref().map(|c| format!(" (accessory of {c})")).unwrap_or_default();
             let mut cells = vec![
                 format!("{u}-{a}"),
-                (n + 1).to_string(),
+                (i + 1).to_string(),
                 format!("{}{carried}", e.label),
                 format!("{} - {}", e.product.code, e.product.name),
                 e.mode_text(),
@@ -476,9 +478,9 @@ fn pdf(s: &Session, p: &Value, plan: &Plan) -> Result<Vec<u8>> {
             if paged {
                 cells.insert(3, plan.page_cell(e));
             }
-            cells
-        })
-        .collect();
+            rows.push(cells);
+        }
+    }
     let mut footer = super::html::footer_lines(s, p);
     footer.insert(0, universes_text(plan));
     schedule::table_pdf("csd.patch.export", "DMX Patch", &cols, &rows, &footer)

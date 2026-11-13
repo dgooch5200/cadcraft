@@ -1337,20 +1337,63 @@ fn label_hidden(s: &Session, h: Handle) -> bool {
 }
 
 #[test]
-fn codes_only_hides_labels_on_every_card_old_and_new_and_survives_a_save() {
+fn codes_only_is_stored_but_leaves_labels_alone_and_shows_labels_hidden_by_older_files() {
     let mut s = ortho_session();
     let a = handle(&s.execute("csd.place", &json!({ "product": NODE, "at": [0, 0] })).unwrap());
     assert_eq!(s.execute("csd.display", &json!({})).unwrap()["codesOnly"], false);
     assert_eq!(s.execute("csd.display", &json!({ "codesOnly": true })).unwrap()["codesOnly"], true);
-    let b = handle(&s.execute("csd.place", &json!({ "product": NODE, "at": [200, 0] })).unwrap());
-    assert!(label_hidden(&s, a) && label_hidden(&s, b));
+    assert!(!label_hidden(&s, a));
     let mut t = Session::empty();
     t.open_drawing(cadcraft_io::read_dxf(cadcraft_io::write_dxf(s.doc().unwrap()).as_bytes()).unwrap(), "Imported", None);
     assert_eq!(t.execute("csd.display", &json!({})).unwrap()["codesOnly"], true);
-    s.execute("csd.display", &json!({ "codesOnly": false })).unwrap();
-    assert!(!label_hidden(&s, a) && !label_hidden(&s, b));
-    s.undo().unwrap();
-    assert!(label_hidden(&s, a));
+    s.doc_mut()
+        .unwrap()
+        .modify_entity(a, |e| {
+            if let EntityKind::Insert(i) = &mut e.kind {
+                i.attribs.iter_mut().for_each(|x| x.invisible = true);
+            }
+        })
+        .unwrap();
+    let lib = s.csd_library.clone();
+    super::refresh(&mut s.state_mut().unwrap().doc, &lib, true);
+    assert!(!label_hidden(&s, a));
+}
+
+fn body_texts(s: &Session, block: &str) -> Vec<String> {
+    let b = s.doc().unwrap().block(block).unwrap();
+    b.entities.iter().filter_map(|e| if let EntityKind::Text(t) = &e.kind { Some(t.value.clone()) } else { None }).collect()
+}
+
+#[test]
+fn card_body_and_default_label_show_the_canvas_code_and_old_blocks_are_refreshed() {
+    let mut s = ortho_session();
+    let a = handle(&s.execute("csd.place", &json!({ "product": NODE, "at": [0, 0] })).unwrap());
+    assert_eq!(body_texts(&s, "CSD_epix-flex-drive"), ["EpixFLXDRV"]);
+    let Some(EntityKind::Insert(i)) = s.doc().unwrap().entity(a).map(|e| e.kind.clone()) else { panic!("no insert") };
+    assert_eq!(i.attribs.iter().find(|x| x.tag == "LABEL").unwrap().text.value, "EpixFLXD...");
+    let before = s.doc().unwrap().block("CSD_epix-flex-drive").unwrap().entities.iter().find_map(|e| match &e.kind {
+        EntityKind::AttDef(d) if d.tag == "LABEL" => Some(d.text.insert),
+        _ => None,
+    });
+    // A drawing saved with the earlier body: the full code, wrapped.
+    let d = s.doc_mut().unwrap();
+    let block = d.blocks.get_mut("CSD_epix-flex-drive").unwrap();
+    let store = &mut std::sync::Arc::make_mut(block).entities;
+    for h in store.handles() {
+        store.modify(h, |e| {
+            if let EntityKind::Text(t) = &mut e.kind {
+                t.value = "EPIX FLEX".into();
+            }
+        });
+    }
+    let lib = s.csd_library.clone();
+    assert!(super::refresh_blocks(&mut s.state_mut().unwrap().doc, &lib));
+    assert_eq!(body_texts(&s, "CSD_epix-flex-drive"), ["EpixFLXDRV"]);
+    let after = s.doc().unwrap().block("CSD_epix-flex-drive").unwrap().entities.iter().find_map(|e| match &e.kind {
+        EntityKind::AttDef(d) if d.tag == "LABEL" => Some(d.text.insert),
+        _ => None,
+    });
+    assert_eq!(before, after);
 }
 
 #[test]

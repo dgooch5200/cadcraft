@@ -75,11 +75,15 @@ fn read_file(file: &Value) -> Option<Vec<LuminaryType>> {
         return None;
     }
     let mut types: Vec<LuminaryType> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for (i, t) in array(file, "fixtureTypes").iter().take(MAX_TYPES).enumerate() {
         if let Some(ph) = has_photometry(t.get("photometry")) {
             let id = str_of(t, "id");
-            let key = if id.is_empty() { format!("t{}", i + 1) } else { id };
-            types.push(read_type(key, str_of(t, "name"), str_of(t, "fileName"), ph));
+            // "#n" is never a real id by accident, so a nameless type can't collide with one.
+            let key = if id.is_empty() { format!("#{}", i + 1) } else { id };
+            if seen.insert(key.clone()) {
+                types.push(read_type(key, str_of(t, "name"), str_of(t, "fileName"), ph));
+            }
         }
     }
     // Format 1: one photometry, and fixtures that name no type.
@@ -177,24 +181,40 @@ fn without_parens(s: &str) -> String {
     out
 }
 
+/// A library product's match tokens, computed once per import rather than once per type.
+struct ProductTokens {
+    brand: Vec<String>,
+    model: Vec<String>,
+    code: String,
+}
+
+fn product_tokens(products: &[Product]) -> Vec<ProductTokens> {
+    products
+        .iter()
+        .map(|p| {
+            let brand = tokens(&p.brand);
+            let model = tokens(&without_parens(&p.name)).into_iter().filter(|w| !brand.contains(w)).collect();
+            ProductTokens { brand, model, code: tokens(&p.code).concat() }
+        })
+        .collect()
+}
+
 /// The product a type is when the evidence is specific (`Some`), plus best guesses. A wrong model
 /// on a quote is worse than a blank one, so a tie or a partial overlap never chooses.
-fn match_type<'a>(t: &LuminaryType, products: &'a [Product]) -> (Option<&'a str>, Vec<&'a str>) {
+fn match_type<'a>(t: &LuminaryType, products: &'a [Product], toks: &[ProductTokens]) -> (Option<&'a str>, Vec<&'a str>) {
     let sources: Vec<Vec<String>> =
         [t.luminaire.as_str(), &t.catalog, &t.name, &strip_ies(&t.file_name)].into_iter().map(tokens).filter(|s| !s.is_empty()).collect();
     let haystack: std::collections::HashSet<&String> = sources.iter().flatten().collect();
     let maker = tokens(&t.manufacturer);
-    let brand_hit = |p: &Product| tokens(&p.brand).iter().any(|b| maker.contains(b));
-    let brand_known = !maker.is_empty() && products.iter().any(brand_hit);
+    let brand_hit = |k: &ProductTokens| k.brand.iter().any(|b| maker.contains(b));
+    let brand_known = !maker.is_empty() && toks.iter().any(brand_hit);
 
     let mut hits: Vec<(&str, Span)> = Vec::new();
     let mut scored: Vec<(&str, f64)> = Vec::new();
-    for p in products.iter().filter(|p| !is_builtin(&p.id) && p.brand != "Generic" && (!brand_known || brand_hit(p))) {
-        let brand = tokens(&p.brand);
-        let model: Vec<String> = tokens(&without_parens(&p.name)).into_iter().filter(|w| !brand.contains(w)).collect();
-        let code = tokens(&p.code).concat();
-        let by_name = find_run(&sources, &model);
-        let by_code = if distinctive(&code) { find_code(&sources, &code) } else { None };
+    for (p, k) in products.iter().zip(toks).filter(|(p, k)| !is_builtin(&p.id) && p.brand != "Generic" && (!brand_known || brand_hit(k))) {
+        let ProductTokens { model, code, .. } = k;
+        let by_name = find_run(&sources, model);
+        let by_code = if distinctive(code) { find_code(&sources, code) } else { None };
         if let Some(span) = by_name.or(by_code) {
             let best = match (by_name, by_code) {
                 (Some(n), Some(c)) if c.end - c.start > n.end - n.start => c,
@@ -234,8 +254,9 @@ pub(super) fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
     // Resolve every type before touching the drawing, so a bad choice changes nothing.
     let mut rows: Vec<Value> = Vec::new();
     let mut picked: Vec<(String, u64)> = Vec::new();
+    let toks = product_tokens(&library);
     for t in &types {
-        let (sure, suggestions) = match_type(t, &library);
+        let (sure, suggestions) = match_type(t, &library, &toks);
         let product = match choices.get(&t.key) {
             Some(Value::String(c)) if c.is_empty() => None,
             Some(Value::String(c)) => {
@@ -256,6 +277,13 @@ pub(super) fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
     let skipped = rows.len() - picked.len();
     if p.get("preview").and_then(Value::as_bool) == Some(true) {
         return Ok(json!({ "types": rows, "fixtures": 0, "skipped": skipped }));
+    }
+    // Refuse before adding anything: the schedule holds at most MAX_ROWS products.
+    let existing = schedule::read(s.doc()?);
+    let mut ids: std::collections::HashSet<&str> = existing.iter().map(|(id, _)| id.as_str()).collect();
+    ids.extend(picked.iter().map(|(id, _)| id.as_str()));
+    if ids.len() > schedule::MAX_ROWS {
+        return Err(bad(CMD, format!("the import would take the unplaced list past {} items; nothing was added", schedule::MAX_ROWS)));
     }
     let mut fixtures = 0;
     for (id, qty) in &picked {
@@ -346,14 +374,41 @@ mod tests {
             file_name: String::new(),
             quantity: 1,
         };
-        assert_eq!(match_type(&ty("Acme E-260WW IP", ""), &lib).0, Some("ip"));
-        assert_eq!(match_type(&ty("Acme E-260WW", ""), &lib).0, Some("ww"));
-        assert_eq!(match_type(&ty("Cove RGBW", ""), &lib).0, None);
-        assert_eq!(match_type(&ty("", "Patch lead included"), &lib).0, None);
+        assert_eq!(match_type(&ty("Acme E-260WW IP", ""), &lib, &product_tokens(&lib)).0, Some("ip"));
+        assert_eq!(match_type(&ty("Acme E-260WW", ""), &lib, &product_tokens(&lib)).0, Some("ww"));
+        assert_eq!(match_type(&ty("Cove RGBW", ""), &lib, &product_tokens(&lib)).0, None);
+        assert_eq!(match_type(&ty("", "Patch lead included"), &lib, &product_tokens(&lib)).0, None);
     }
 
     fn sample() -> Product {
         cadcraft_csd::sample_products().remove(0)
+    }
+
+    #[test]
+    fn duplicate_type_ids_are_skipped_and_nameless_types_get_their_own_key() {
+        let src = format!(
+            r##"{{"fixtureTypes":[{{"id":"a","photometry":{{{PH}}}}},{{"id":"a","photometry":{{{PH}}}}},{{"photometry":{{{PH}}}}},{{"id":"t3","photometry":{{{PH}}}}}],
+            "fixtures":[{{"typeId":"a","x":0,"y":0}},{{"typeId":"t3","x":0,"y":0}},{{"typeId":"#3","x":0,"y":0}}]}}"##
+        );
+        assert_eq!(counted(&src), [("a".to_string(), 1), ("#3".to_string(), 1), ("t3".to_string(), 1)]);
+    }
+
+    #[test]
+    fn an_import_past_the_row_cap_adds_nothing() {
+        let n = schedule::MAX_ROWS + 1;
+        let mut s = Session::new();
+        s.csd_library = std::sync::Arc::new(
+            (0..n).map(|i| Product { id: format!("P{i}"), name: format!("P{i}"), code: format!("P{i}"), ..Product::default() }).collect(),
+        );
+        let types: Vec<String> = (0..n).map(|i| format!(r#"{{"id":"k{i}","photometry":{{{PH}}}}}"#)).collect();
+        let fixtures: Vec<String> = (0..n).map(|i| format!(r#"{{"typeId":"k{i}","x":0,"y":0}}"#)).collect();
+        let path = std::env::temp_dir().join(format!("cadcraft-lpro-cap-{}.lpro", std::process::id()));
+        std::fs::write(&path, format!(r#"{{"fixtureTypes":[{}],"fixtures":[{}]}}"#, types.join(","), fixtures.join(","))).unwrap();
+        let choices: Map<String, Value> = (0..n).map(|i| (format!("k{i}"), json!(format!("P{i}")))).collect();
+        let r = s.execute("csd.import.lpro", &json!({ "path": path.to_str().unwrap(), "choices": choices }));
+        let _ = std::fs::remove_file(&path);
+        assert!(r.is_err());
+        assert!(schedule::read(s.doc().unwrap()).is_empty());
     }
 
     #[test]

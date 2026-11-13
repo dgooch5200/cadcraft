@@ -11,7 +11,9 @@ use cadcraft_geom::{PolyVertex, Vec2};
 use crate::wire::{point_at, smooth};
 use crate::{Deco, OFF_PAGE_ID, Product, Protocol, Side, is_builtin};
 
+mod canvas;
 mod sheet;
+pub use canvas::*;
 pub use sheet::*;
 
 /// Default card size in drawing units; the insertion point is the card centre. The body is the
@@ -33,11 +35,9 @@ const LANE: f64 = 6.0;
 pub const TERM_R: f64 = 4.5;
 pub const WIRE_W: f64 = 2.5;
 const PILL_H: f64 = 14.0;
-const CODE_H: f64 = 7.0;
+/// Text height of the body's code: [`CANVAS_CODE_MAX`] bold characters fit the 70 wide card.
+const CODE_H: f64 = 9.0;
 const LABEL_H: f64 = 6.0;
-/// Characters of the code on one line of the body, and lines kept.
-const CODE_CHARS: usize = 9;
-const CODE_LINES: usize = 3;
 /// Width the strip text may use, in the estimate of `truncate_label`.
 const LABEL_W: f64 = 60.0;
 /// Space kept clear inside a built-in box on each side of its wrapped label.
@@ -276,44 +276,33 @@ pub fn is_two_line_block(block: &str) -> bool {
     block.ends_with(TWO_LINE_SUFFIX)
 }
 
-/// The code as the body shows it: wrapped at words, or inside a long word, to `CODE_CHARS` a line.
-pub fn wrap_code(code: &str) -> Vec<String> {
-    let mut lines: Vec<String> = Vec::new();
-    for word in code.split_whitespace() {
-        for chunk in word.chars().collect::<Vec<_>>().chunks(CODE_CHARS) {
-            let chunk: String = chunk.iter().collect();
-            match lines.last_mut() {
-                Some(l) if l.chars().count() + 1 + chunk.chars().count() <= CODE_CHARS => {
-                    l.push(' ');
-                    l.push_str(&chunk);
-                }
-                _ => lines.push(chunk),
-            }
-        }
+/// Estimated width of `c` in the web app's 9px bold type.
+/// ponytail: per character class, not measured.
+fn char_w(c: char) -> f64 {
+    match c {
+        'W' => 8.5,
+        'M' => 7.5,
+        c if c.is_lowercase() => 5.2,
+        c if c.is_whitespace() => 3.0,
+        _ => 6.6,
     }
-    lines.truncate(CODE_LINES);
-    lines
+}
+
+/// `height`, or less where `value` would be wider than the strip of a card `card_w` wide.
+fn fit_height(value: &str, card_w: f64, height: f64) -> f64 {
+    let max = card_w - (CARD_W - LABEL_W);
+    height.min(max * 9.0 / value.chars().map(char_w).sum::<f64>().max(1.0))
 }
 
 /// `label` cut with "..." to fit the strip of a card `card_w` wide.
-/// ponytail: widths are per character class, in the web app's 9px bold type, not measured.
 pub fn truncate_label(label: &str, card_w: f64) -> String {
     let max = card_w - (CARD_W - LABEL_W);
-    let width = |c: char| {
-        if c.is_lowercase() {
-            5.2
-        } else if c.is_whitespace() {
-            3.0
-        } else {
-            6.6
-        }
-    };
-    if label.chars().map(width).sum::<f64>() <= max {
+    if label.chars().map(char_w).sum::<f64>() <= max {
         return label.into();
     }
     let (mut used, mut out) = (8.0, String::new());
     for c in label.chars() {
-        used += width(c);
+        used += char_w(c);
         if used > max {
             break;
         }
@@ -480,17 +469,14 @@ pub fn device_block(product: &Product, two_line: bool, mut new_handle: impl FnMu
         let (rx, ry) = (hw + BORDER / 2.0, BORDER / 2.0);
         p.add(fill(round_rect(-rx, strip_top - ry, rx, strip_top + ry, [0.0; 4])), product.color);
 
+        let code = canvas_code(product);
         if two_line {
             let rule = -hh + STRIP_H;
             p.add(fill(round_rect(-rx, rule - ry, rx, rule + ry, [0.0; 4])), product.color);
-            p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: rule + STRIP_H / 2.0 }, LABEL_H, &truncate_label(&product.code, size.x))), INK);
+            p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: rule + STRIP_H / 2.0 }, fit_height(&code, size.x, LABEL_H), &code)), INK);
         } else {
-            let lines = wrap_code(&product.code);
             let body_mid = (hh + strip_top) / 2.0;
-            let first = body_mid + (lines.len() as f64 - 1.0) / 2.0 * (CODE_H + 3.0);
-            for (i, line) in lines.iter().enumerate() {
-                p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: first - i as f64 * (CODE_H + 3.0) }, CODE_H, line)), INK);
-            }
+            p.add(EntityKind::Text(text(Vec2 { x: 0.0, y: body_mid }, fit_height(&code, size.x, CODE_H), &code)), INK);
         }
         -hh + STRIP_H / 2.0
     };
@@ -588,4 +574,22 @@ pub fn deco_points(path: &[Vec2], ortho: bool, label_t: Option<f64>) -> Option<[
         }
     }
     Some([(Deco::Start, a), (Deco::End, z), (Deco::Pill, (longest.0 + longest.1) * 0.5)])
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+
+    #[test]
+    fn a_ten_character_code_is_not_cut_off() {
+        for code in ["WWWWWWWWWW", "EpixFLXDRV", "MMMMMMMMMM"] {
+            for h in [CODE_H, LABEL_H] {
+                let fit = fit_height(code, CARD_W, h);
+                let w: f64 = code.chars().map(char_w).sum::<f64>() * fit / 9.0;
+                assert!(w <= LABEL_W + 1e-9, "{code} at {h}: {w}");
+            }
+        }
+        // The old strip cut this with an ellipsis though its 6 high text fits.
+        assert_eq!(fit_height("EpixFLXDRV", CARD_W, LABEL_H), LABEL_H);
+    }
 }

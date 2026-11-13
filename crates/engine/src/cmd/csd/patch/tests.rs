@@ -142,17 +142,32 @@ fn magicq_csv_matches_the_consoles_own_shape() {
 }
 
 #[test]
+fn html_export_of_a_huge_spanning_fixture_stays_small() {
+    let mut s = Session::new();
+    let mut big = prod("BIG", "Big", "", 524_288, 0);
+    big.modes = "Huge:524288".into();
+    s.csd_library = Arc::new(vec![big]);
+    for _ in 0..50 {
+        s.execute("csd.unplaced.add", &json!({ "product": "BIG", "qty": 100 })).unwrap();
+    }
+    let t = std::time::Instant::now();
+    let html = export(&mut s, "html", "drawing");
+    assert!(t.elapsed().as_secs() < 5);
+    assert!(html.len() < 5_000_000, "{}", html.len());
+    assert!(html.contains("continued through universe 1024"));
+}
+
+#[test]
 fn html_export_groups_by_universe_and_escapes_names() {
     let mut s = session();
     place(&mut s, "PIX", [0.0, 0.0], "<script>x</script> & Co");
     place(&mut s, "PLAIN", [300.0, 0.0], "B");
     let html = export(&mut s, "html", "drawing");
     assert!(html.contains("@page { size: letter landscape"));
-    for u in ["Universe 1", "Universe 2", "Universe 3"] {
+    for u in ["Universe 1", "Universe 3"] {
         assert!(html.contains(u), "{u}");
     }
-    assert!(html.contains("continued from &lt;script&gt;x&lt;/script&gt; &amp; Co"));
-    assert!(html.contains("spans 2 universes"));
+    assert!(html.contains("spans 2 universes, continued through universe 2"));
     assert!(!html.contains("<script>"));
     assert!(!html.contains("http"));
 }

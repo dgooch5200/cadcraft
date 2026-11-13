@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use cadcraft_csd::{
     BOLD_STYLE, CARD_H, CARD_W, Deco, OFF_PAGE_ID, Product, Protocol, Side, Slot, WIRE_W, WireLink, accessory_products, bold_style, can_connect,
-    card_block_name, card_size, deco_block, deco_block_name, deco_from_xdata, deco_points, deco_xdata, device_block, edge_frame, fan_order,
-    is_builtin, is_two_line_block, library_json, lookup, max_supply_watts, parse_library, parse_products, poe_verdict, port_point, product_record,
-    route_via, truncate_label, used, world_side,
+    canvas_code, card_block_name, card_size, deco_block, deco_block_name, deco_from_xdata, deco_points, deco_xdata, device_block, edge_frame,
+    fan_order, is_builtin, is_two_line_block, library_json, lookup, max_supply_watts, parse_library, parse_products, poe_verdict, port_point,
+    product_record, route_via, truncate_label, used, world_side,
 };
 use cadcraft_doc::color::{Color, Rgb};
 use cadcraft_doc::{Common, Drawing, Entity, EntityKind, EntityStore, Handle, Insert, Layer, LwPolyline, Space};
@@ -71,7 +71,7 @@ fn own_specs() -> Vec<CommandSpec> {
         CommandSpec::new("csd.clear", "Clear Drawing", run_clear)
             .params("{} → {devices, wires}; removes every device, wire and wire decoration; the title block, line key and unplaced list stay"),
         CommandSpec::new("csd.display", "Card Display", run_display)
-            .params("{codesOnly?: bool} → {codesOnly}; codes only hides the label strip text on every card, saved with the drawing"),
+            .params("{codesOnly?: bool} → {codesOnly}; codes only shows the code instead of the product picture, saved with the drawing (no pictures yet, so no visible change)"),
         CommandSpec::new("csd.size", "Size Devices", run_size)
             .params("{handles? (default the selection), w?, h?: card size in drawing units, 10..1000, null resets that axis} → {sized}"),
         CommandSpec::new("csd.replace", "Replace Devices", run_replace)
@@ -515,7 +515,7 @@ fn spaces(doc: &Drawing) -> Vec<Space> {
 pub(crate) fn refresh(doc: &mut Arc<Drawing>, products: &[Product], ortho: bool) {
     sheet::refresh_legend(doc);
     page::refresh_labels(doc);
-    sync_display(doc);
+    show_labels(doc);
     for space in spaces(doc) {
         let p = doc.space(&space).map(|st| plan(st, products, ortho)).unwrap_or_default();
         apply(doc, &space, p);
@@ -637,8 +637,8 @@ fn run_place(s: &mut Session, p: &Value) -> Result<Value> {
 /// (a built-in has no code on its card, so its name).
 fn place_card(s: &mut Session, product: &Product, label: &str, at: Vec2) -> Result<Handle> {
     let name = ensure_device_block(s, product, false)?;
-    let default = if is_builtin(&product.id) { &product.name } else { &product.code };
-    let label = if label.trim().is_empty() { default } else { label };
+    let default = if is_builtin(&product.id) { product.name.clone() } else { canvas_code(product) };
+    let label = if label.trim().is_empty() { &default } else { label };
     let mut values = Map::new();
     values.insert("PRODUCT".into(), json!(product.id));
     values.insert("NAME".into(), json!(label));
@@ -979,9 +979,9 @@ fn put_attr(i: &mut Insert, tag: &str, value: String) {
     }
 }
 
-/// A device's label; blank falls back to the product `code`.
+/// A device's label; blank falls back to the card's short code.
 fn apply_label(i: &mut Insert, label: String, product: &Product) {
-    let l = if label.trim().is_empty() { product.code.clone() } else { label };
+    let l = if label.trim().is_empty() { canvas_code(product) } else { label };
     put_attr(i, "LABEL", strip_text(product, two_line(i), &l));
     put_attr(i, "NAME", l);
 }
@@ -1097,7 +1097,9 @@ fn run_clear(s: &mut Session, _: &Value) -> Result<Value> {
     Ok(json!({ "devices": devices.len(), "wires": wire_hs.len() }))
 }
 
-/// Header variable: 1 when cards show only the product code.
+/// Header variable: 1 when cards show the product code in the body rather than its picture. As in
+/// the web app's "codes only", the label strip is unaffected; with no product pictures yet every
+/// card already shows its code, so the setting is stored for when they exist.
 const CODES_ONLY: &str = "CSDCODESONLY";
 
 fn codes_only(d: &Drawing) -> bool {
@@ -1116,10 +1118,9 @@ fn run_display(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "codesOnly": codes_only(s.doc()?) }))
 }
 
-/// Shows or hides every card's label text to match [`CODES_ONLY`].
-fn sync_display(doc: &mut Arc<Drawing>) {
-    let hide = codes_only(doc);
-    let stale = |i: &Insert| is_device_block(i) && i.attribs.iter().any(|a| a.tag == "LABEL" && a.invisible != hide);
+/// Shows every card's label again in drawings saved when "codes only" used to hide it.
+fn show_labels(doc: &mut Arc<Drawing>) {
+    let stale = |i: &Insert| is_device_block(i) && i.attribs.iter().any(|a| a.tag == "LABEL" && a.invisible);
     let todo: Vec<Handle> = spaces(doc)
         .iter()
         .filter_map(|sp| doc.space(sp))
@@ -1134,7 +1135,7 @@ fn sync_display(doc: &mut Arc<Drawing>) {
     for h in todo {
         let _ = d.modify_entity(h, |e| {
             if let EntityKind::Insert(i) = &mut e.kind {
-                i.attribs.iter_mut().filter(|a| a.tag == "LABEL").for_each(|a| a.invisible = hide);
+                i.attribs.iter_mut().filter(|a| a.tag == "LABEL").for_each(|a| a.invisible = false);
             }
         });
     }
@@ -1206,11 +1207,16 @@ fn add_wire(s: &mut Session, link: &WireLink) -> Result<Handle> {
 /// The entity linetype scale that makes the first dash of `DASH` `len` long, whatever units the
 /// library was loaded in; loads the linetype if the drawing lacks it.
 fn dashed_scale(d: &mut Drawing, len: f64) -> f64 {
-    if d.linetype(DASH).is_none() {
-        let lt = cadcraft_doc::library::standard_linetypes_for(d).into_iter().find(|l| l.name == DASH);
+    linetype_scale(d, DASH, len)
+}
+
+/// Like [`dashed_scale`] for the standard linetype `name`, sized by its first non-zero element.
+fn linetype_scale(d: &mut Drawing, name: &str, len: f64) -> f64 {
+    if d.linetype(name).is_none() {
+        let lt = cadcraft_doc::library::standard_linetypes_for(d).into_iter().find(|l| l.name == name);
         d.linetypes.extend(lt);
     }
-    d.linetype(DASH).and_then(|lt| lt.pattern.first()).map(|e| e.length.abs()).filter(|l| *l > 0.0).map_or(1.0, |l| len / l)
+    d.linetype(name).and_then(|lt| lt.pattern.iter().map(|e| e.length.abs()).find(|l| *l > 0.0)).map_or(1.0, |l| len / l)
 }
 
 /// The layer for `protocol`'s wires, created on first use in the protocol's colour (true

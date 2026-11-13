@@ -301,15 +301,47 @@ fn three_wires_on_a_side_are_spread_and_ordered_by_far_end() {
 }
 
 #[test]
-fn code_wraps_and_labels_truncate_like_the_web_app() {
-    assert_eq!(wrap_code("OVCYC1FCV2"), ["OVCYC1FCV", "2"]);
-    assert_eq!(wrap_code("EPIX FLEX DRIVE"), ["EPIX FLEX", "DRIVE"]);
-    for p in sample_products() {
-        assert!(wrap_code(&p.code).iter().all(|l| l.chars().count() <= 9), "{}", p.code);
-    }
+fn labels_truncate_like_the_web_app() {
     assert_eq!(truncate_label("RR2XWASHNI", CARD_W), "RR2XWAS...");
     assert_eq!(truncate_label("Cyc Lights", CARD_W), "Cyc Lights");
     assert_eq!(truncate_label("FOH console", CARD_W), "FOH console");
+}
+
+fn with_name(name: &str, code: &str) -> Product {
+    Product { id: code.into(), name: name.into(), code: code.into(), ..Product::default() }
+}
+
+#[test]
+fn canvas_code_of_a_huge_name_is_fast() {
+    let name = "Abcdefghij ".repeat(100_000);
+    let t = std::time::Instant::now();
+    let code = canvas_code(&with_name(&name, &"X".repeat(40)));
+    assert!(code.chars().count() <= CANVAS_CODE_MAX);
+    assert!(t.elapsed().as_secs() < 2);
+}
+
+#[test]
+fn canvas_code_matches_the_web_apps_contraction() {
+    for p in sample_products() {
+        assert!(canvas_code(&p).chars().count() <= CANVAS_CODE_MAX, "{}", p.code);
+    }
+    // A code that fits is untouched; an override wins; the rest is contracted from the name.
+    assert_eq!(canvas_code(&with_name("MagicQ", "MQ250M")), "MQ250M");
+    assert_eq!(canvas_code(&with_name("EPIX Flex Drive", "EPIX FLEX DRIVE")), "EpixFLXDRV");
+    for (name, code, short) in [
+        ("Rogue Outcast 3X Wash", "ROGUEOUTCAST3XWASH", "ROC3XW"),
+        ("Maverick Storm 2 BeamWash", "MAVERICKSTORM2BEAMWA", "MS2BW"),
+        ("Maverick Storm 2 Profile", "MAVERICKSTORM2PROFIL", "MS2P"),
+        ("Maverick Storm 4 Solo Wash", "MAVSTORM4SOLOWASH", "MS4SW"),
+        ("ÉPIX Flex Boost", "EPIXFLEXBOOSTXX", "EPIFLEBOOS"),
+    ] {
+        assert_eq!(canvas_code(&with_name(name, code)), short, "{code}");
+    }
+    // The variant marker M survives while words are cut.
+    let m = canvas_code(&with_name("Rogue Outcast 1 BeamWash M", "ROGUEOUTCAST1BEAMWAS2"));
+    assert!(m.ends_with('M') && m != canvas_code(&with_name("Rogue Outcast 1 BeamWash", "ROGUEOUTCAST1BEAMWAS")), "{m}");
+    // No name to contract: the code's first characters.
+    assert_eq!(canvas_code(&with_name("", "ABCDEFGHIJKLMN")), "ABCDEFGHIJ");
 }
 
 #[test]
