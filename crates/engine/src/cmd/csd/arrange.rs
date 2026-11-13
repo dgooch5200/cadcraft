@@ -4,7 +4,7 @@ use cadcraft_doc::{EntityKind, Handle, Insert};
 use cadcraft_geom::Vec2;
 use serde_json::{Value, json};
 
-use super::{card_of, device_handles, devices, handle_param, point_req, str_param, targets};
+use super::{MAX_MOUNT_DEPTH, card_of, device_handles, devices, handle_param, mount_of, point_req, str_param, targets};
 use crate::cmd::bad;
 use crate::{Result, Session};
 
@@ -26,10 +26,26 @@ fn card(handle: Handle, i: &Insert, size: Vec2) -> Card {
 fn cards(s: &Session, p: &Value) -> Result<Vec<Card>> {
     let hs = device_handles(s, &targets(s, p)?)?;
     let d = s.doc()?;
+    let store = d.space(&s.space());
+    // A device whose host is also selected rides along with it rather than being arranged itself.
+    let host_selected = |i: &Insert| {
+        let mut at = store.and_then(|st| mount_of(st, i));
+        for _ in 0..MAX_MOUNT_DEPTH {
+            let Some(h) = at else { return false };
+            if hs.contains(&h) {
+                return true;
+            }
+            at = match store.and_then(|st| st.get(h)).map(|e| &e.kind) {
+                Some(EntityKind::Insert(p)) => store.and_then(|st| mount_of(st, p)),
+                _ => None,
+            };
+        }
+        false
+    };
     Ok(hs
-        .into_iter()
-        .filter_map(|h| match &d.entity(h)?.kind {
-            EntityKind::Insert(i) => Some(card(h, i, card_of(i, &s.csd_library))),
+        .iter()
+        .filter_map(|&h| match &d.entity(h)?.kind {
+            EntityKind::Insert(i) if !host_selected(i) => Some(card(h, i, card_of(i, &s.csd_library))),
             _ => None,
         })
         .collect())
