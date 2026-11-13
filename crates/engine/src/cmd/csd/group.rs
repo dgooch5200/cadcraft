@@ -54,12 +54,12 @@ pub(super) fn run_info(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Top to bottom, left to right: cards whose centres are within half a card height share a row.
-fn reading_order(mut at: Vec<(Handle, f64, f64)>) -> Vec<Handle> {
+fn reading_order(mut at: Vec<(Handle, f64, f64)>, k: f64) -> Vec<Handle> {
     at.sort_by(|a, b| b.2.total_cmp(&a.2));
     let mut rows: Vec<Vec<(Handle, f64, f64)>> = Vec::new();
     for c in at {
         match rows.last_mut() {
-            Some(r) if r.first().is_some_and(|f| f.2 - c.2 <= CARD_H / 2.0) => r.push(c),
+            Some(r) if r.first().is_some_and(|f| f.2 - c.2 <= CARD_H * k / 2.0) => r.push(c),
             _ => rows.push(vec![c]),
         }
     }
@@ -91,7 +91,7 @@ pub(super) fn run_label(s: &mut Session, p: &Value) -> Result<Value> {
             })
             .collect()
     };
-    let order = if start.is_some() { reading_order(at) } else { at.into_iter().map(|c| c.0).collect() };
+    let order = if start.is_some() { reading_order(at, super::units::px(s.doc()?)) } else { at.into_iter().map(|c| c.0).collect() };
     // Work every label out first so a bad `start` changes nothing.
     let mut named = Vec::new();
     for (k, h) in order.into_iter().enumerate() {

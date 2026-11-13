@@ -142,13 +142,13 @@ fn natural(a: &str, b: &str) -> Ordering {
 
 /// Orders `v` for patching: `drawing` keeps the drawing's order; `position` reads rows top to
 /// bottom (a card height apart is another row) and each row left to right.
-fn order(v: &mut [Entry], by: &str, cmd: &str) -> Result<()> {
+fn order(v: &mut [Entry], by: &str, cmd: &str, k: f64) -> Result<()> {
     match by {
         "drawing" => {}
         "name" => v.sort_by(|a, b| natural(&a.label, &b.label)),
         "product" => v.sort_by(|a, b| a.product.name.to_lowercase().cmp(&b.product.name.to_lowercase()).then_with(|| natural(&a.label, &b.label))),
         "position" => {
-            let band = |e: &Entry| (-e.at[1] / CARD_H).floor();
+            let band = |e: &Entry| (-e.at[1] / (CARD_H * k)).floor();
             v.sort_by(|a, b| band(a).total_cmp(&band(b)).then_with(|| a.at[0].total_cmp(&b.at[0])));
         }
         _ => return Err(bad(cmd, "`order` must be drawing, name, product or position")),
@@ -206,7 +206,7 @@ fn plan(s: &Session, by: &str, cmd: &str) -> Result<Plan> {
     }
     // What the controllers on the drawing can originate.
     let budget = devs.iter().map(|e| e.product.universes).fold(0u32, u32::saturating_add);
-    order(&mut devs, by, cmd)?;
+    order(&mut devs, by, cmd, super::units::px(s.doc()?))?;
     // Accessories follow their device and products not yet drawn come last, a unit each: four
     // fixtures need four addresses.
     let mut all: Vec<Entry> =
