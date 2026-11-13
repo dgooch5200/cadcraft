@@ -202,9 +202,9 @@ pub(super) fn body(app: &mut CadApp, ui: &mut egui::Ui) {
     let mut file = None;
     ui.horizontal(|ui| {
         ui.add_space(8.0);
-        ui.add(egui::TextEdit::singleline(&mut f.query).hint_text(crate::tl!("Search products")).desired_width(ui.available_width() - 60.0))
+        ui.add(egui::TextEdit::singleline(&mut f.query).hint_text(crate::tl!("Search products")).desired_width(ui.available_width() - 72.0))
             .accessible_name(crate::tl!("Search products"));
-        ui.menu_button(crate::tl!("File"), |ui| {
+        ui.menu_button(crate::tl!("Project"), |ui| {
             for (label, cmd) in [("Import .cpsd…", "csd.import.cpsd"), ("Export .cpsd…", "csd.export.cpsd"), ("Print sheet…", "csd.print")] {
                 if ui.button(crate::i18n::t(label)).clicked() {
                     file = Some(cmd);
