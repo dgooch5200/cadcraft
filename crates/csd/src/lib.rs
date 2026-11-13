@@ -386,7 +386,7 @@ pub fn sample_products() -> Vec<Product> {
     };
     vec![
         p("CHAMMQ50", "MagicQ MagicQ50 Compact Console", "MQ50", &[(Protocol::Dmx, 0, 4), (Protocol::NetData, 0, 2)], 0.0, 0.0, 0x1565c0),
-        p("logic-poe-switch", "Logic PoE Switch", "POE-SW", &[(Protocol::Network, 0, 3)], 75.0, 0.0, 0x0277bd),
+        p("logic-poex", "Logic POE-X Converter", "POE-X", &[(Protocol::Network, 0, 3)], 75.0, 0.0, 0x0277bd),
         p("epix-flex-drive", "EPIX Flex Drive", "EPIX FLEX DRIVE", &[(Protocol::Dmx, 1, 1), (Protocol::NetData, 1, 1)], 0.0, 0.0, 0x65edfa),
         p("logic-ar111m", "Logic AR111 Downlight M RGBW (45W)", "AR111-DNM", &[(Protocol::Network, 0, 2)], 0.0, 45.0, 0x0277bd),
         p("b565fc", "Ovation B-565FC", "B-565FC", &[(Protocol::Dmx, 1, 0)], 0.0, 0.0, 0xf7ae41),

@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use cadcraft_csd::{CARD_H, CARD_W, MAX_WIRE_POINTS, PAGE_H, Protocol, Side, WireLink};
+use cadcraft_csd::{CARD_H, CARD_W, MAX_WIRE_POINTS, Paper, Protocol, Side, WireLink};
 use cadcraft_geom::Vec2;
 use serde_json::{Value, json};
 
@@ -50,7 +50,7 @@ fn list<'a>(v: &'a Value, key: &str, cap: usize) -> impl Iterator<Item = &'a Val
 
 /// ChamSys canvas (y down, page corner at 30,30) to the drawing (y up, page corner at the origin).
 fn to_drawing(x: f64, y: f64) -> Option<Vec2> {
-    let p = Vec2::new(x - PAGE_ORIGIN, PAGE_ORIGIN + PAGE_H - y);
+    let p = Vec2::new(x - PAGE_ORIGIN, PAGE_ORIGIN + Paper::Tabloid.size().1 - y);
     (p.x.abs() <= MAX_COORD && p.y.abs() <= MAX_COORD).then_some(p)
 }
 

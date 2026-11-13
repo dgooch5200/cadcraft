@@ -14,6 +14,15 @@ fn handle(r: &Value) -> Handle {
     Handle::parse_hex(r["handle"].as_str().unwrap()).unwrap()
 }
 
+/// Adds a generic PoE switch to `s`'s library: the sample POE-X feeds MR16s only.
+pub(super) fn poe_switch(s: &mut Session) -> &'static str {
+    let mut lib = (*s.csd_library).clone();
+    let poex = lib.iter().find(|p| p.id == "logic-poex").unwrap().clone();
+    lib.push(cadcraft_csd::Product { id: "poe-switch".into(), name: "PoE Switch".into(), code: "POE-SW".into(), ..poex });
+    s.csd_library = std::sync::Arc::new(lib);
+    "poe-switch"
+}
+
 /// A session routing wires at right angles (the tests below assume it; the default is smooth curves).
 fn ortho_session() -> Session {
     let mut s = Session::new();
@@ -200,7 +209,8 @@ fn links_survive_a_dxf_round_trip() {
 #[test]
 fn three_wires_off_one_side_fan_out_in_far_end_order() {
     let mut s = ortho_session();
-    let src = handle(&s.execute("csd.place", &json!({ "product": "logic-poe-switch", "at": [0, 0] })).unwrap());
+    let sw = poe_switch(&mut s);
+    let src = handle(&s.execute("csd.place", &json!({ "product": sw, "at": [0, 0] })).unwrap());
     let mut wires = Vec::new();
     // Placed right, left, middle: the slots must still follow the far ends' x.
     for x in [150, -150, 0] {
