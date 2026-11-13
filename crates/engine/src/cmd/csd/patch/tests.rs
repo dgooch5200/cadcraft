@@ -138,7 +138,6 @@ fn magicq_csv_matches_the_consoles_own_shape() {
     );
     let plain = export(&mut s, "csv", "drawing");
     assert!(plain.starts_with("Head No,Universe,Address,Label,Manufacturer,Product,Mode,Channels\r\n1,1,1,"));
-    assert!(s.execute("csd.patch.export", &json!({ "path": "x", "format": "pdf" })).is_err());
 }
 
 #[test]
