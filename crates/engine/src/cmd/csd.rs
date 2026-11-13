@@ -13,7 +13,7 @@ use cadcraft_csd::{
 };
 use cadcraft_doc::color::{Color, Rgb};
 use cadcraft_doc::{Common, Drawing, Entity, EntityKind, EntityStore, Handle, Insert, Layer, LwPolyline, Space};
-use cadcraft_geom::{PolyVertex, Vec2};
+use cadcraft_geom::{Mat3, PolyVertex, Vec2};
 use serde_json::{Map, Value, json};
 
 use super::curves::handle_param;
@@ -642,6 +642,39 @@ fn mount_of(store: &EntityStore, i: &Insert) -> Option<Handle> {
     matches!(store.get(h).map(|e| &e.kind), Some(EntityKind::Insert(p)) if product_attr(p).is_some()).then_some(h)
 }
 
+/// How deep racks may nest when a move carries what is mounted in them.
+const MAX_MOUNT_DEPTH: usize = 8;
+
+/// Devices mounted in a device that moved go with it, unless they moved too (in the same
+/// selection, or on their own). Each pass carries one more level of nesting.
+fn carry_mounted(before: &Drawing, doc: &mut Arc<Drawing>) {
+    let at = |d: &Drawing, h: Handle| match d.entity(h).map(|e| &e.kind) {
+        Some(EntityKind::Insert(i)) => Some(i.insert.xy()),
+        _ => None,
+    };
+    for _ in 0..MAX_MOUNT_DEPTH {
+        let moves: Vec<(Handle, Vec2)> = spaces(doc)
+            .iter()
+            .filter_map(|sp| doc.space(sp))
+            .flat_map(|store| {
+                store.iter().filter_map(|e| {
+                    let EntityKind::Insert(i) = &e.kind else { return None };
+                    let parent = mount_of(store, i)?;
+                    let (p0, p1, c0, c1) = (at(before, parent)?, at(doc, parent)?, at(before, e.handle)?, at(doc, e.handle)?);
+                    (!p0.near(p1, 1e-9) && c0.near(c1, 1e-9)).then_some((e.handle, p1 - p0))
+                })
+            })
+            .collect();
+        if moves.is_empty() {
+            return;
+        }
+        let d = Arc::make_mut(doc);
+        for (h, delta) in moves {
+            let _ = d.modify_entity(h, |e| e.kind.transform(&Mat3::translate(delta)));
+        }
+    }
+}
+
 /// Whether mounting `h` in `parent` would put a device inside itself; the walk is bounded so a
 /// hand-edited cycle cannot spin it.
 fn mount_cycles(store: &EntityStore, h: Handle, parent: Handle) -> bool {
@@ -1002,6 +1035,9 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
     if let Ok(st) = s.state_mut()
         && (restyled || before.is_some_and(|b| !Arc::ptr_eq(b, &st.doc)))
     {
+        if let Some(b) = before {
+            carry_mounted(b, &mut st.doc);
+        }
         refresh(&mut st.doc, ortho);
     }
 }

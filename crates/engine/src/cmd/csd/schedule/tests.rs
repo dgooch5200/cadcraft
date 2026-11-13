@@ -173,3 +173,21 @@ fn bom_lists_accessories_and_leaves_out_supply_by_others() {
     let sched = s.execute("csd.schedule", &json!({})).unwrap();
     assert!(sched["devices"].as_array().unwrap().iter().any(|d| d["supplyByOthers"] == json!(true)));
 }
+
+#[test]
+fn moving_a_rack_carries_what_is_mounted_in_it_once() {
+    let mut s = Session::new();
+    let rack = place(&mut s, CONSOLE, [0.0, 0.0]);
+    let node = place(&mut s, NODE, [300.0, 0.0]);
+    let inner = place(&mut s, NODE, [600.0, 0.0]);
+    set(&mut s, node, json!({ "mount": rack.hex() })).unwrap();
+    set(&mut s, inner, json!({ "mount": node.hex() })).unwrap();
+    let x = |s: &mut Session, h: Handle| info(s, h)["at"][0].as_f64().unwrap();
+    s.execute("move", &json!({ "handles": [rack.hex()], "from": [0, 0], "to": [10, 0] })).unwrap();
+    assert_eq!((x(&mut s, rack), x(&mut s, node), x(&mut s, inner)), (10.0, 310.0, 610.0));
+    // Moved together, the mounted device is not carried a second time.
+    s.execute("move", &json!({ "handles": [rack.hex(), node.hex()], "from": [0, 0], "to": [5, 0] })).unwrap();
+    assert_eq!((x(&mut s, rack), x(&mut s, node), x(&mut s, inner)), (15.0, 315.0, 615.0));
+    s.undo().unwrap();
+    assert_eq!(x(&mut s, node), 310.0);
+}
