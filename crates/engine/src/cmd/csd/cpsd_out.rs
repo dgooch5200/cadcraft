@@ -384,4 +384,23 @@ mod tests {
         let s = import(json!([{ "type": "text", "x1": 0, "y1": 0, "x2": 50, "y2": 10, "text": "Hi", "strokeStyle": "dashed" }]));
         assert!(s.doc().unwrap().linetype("DASHED").is_none());
     }
+
+    #[test]
+    fn a_fill_stays_on_its_own_rectangle_when_two_coincide() {
+        let file = json!({ "shapes": [
+            { "type": "rect", "x1": 30, "y1": 30, "x2": 130, "y2": 80, "color": "#ff0000" },
+            { "type": "rect", "x1": 30, "y1": 30, "x2": 130, "y2": 80, "color": "#0000ff", "fill": "#00ff00" },
+        ] });
+        let dir = std::env::temp_dir();
+        let (a, b) =
+            (dir.join(format!("cadcraft-pair-in-{}.cpsd", std::process::id())), dir.join(format!("cadcraft-pair-out-{}.cpsd", std::process::id())));
+        std::fs::write(&a, file.to_string()).unwrap();
+        let mut s = Session::new();
+        s.execute("csd.import.cpsd", &json!({ "path": a.to_str().unwrap() })).unwrap();
+        s.execute("csd.export.cpsd", &json!({ "path": b.to_str().unwrap() })).unwrap();
+        let out: Value = serde_json::from_slice(&std::fs::read(&b).unwrap()).unwrap();
+        let _ = (std::fs::remove_file(&a), std::fs::remove_file(&b));
+        let got: Vec<_> = out["shapes"].as_array().unwrap().iter().map(|r| (r["color"].clone(), r["fill"].clone())).collect();
+        assert_eq!(got, vec![(json!("#ff0000"), Value::Null), (json!("#0000ff"), json!("#00ff00"))]);
+    }
 }

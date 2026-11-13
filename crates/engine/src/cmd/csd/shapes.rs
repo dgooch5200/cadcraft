@@ -190,13 +190,25 @@ pub(super) fn export(store: &EntityStore) -> (Vec<Value>, usize) {
     // Solid rectangular hatches are the fills of the rectangles drawn over them.
     let fills: Vec<_> = ents
         .iter()
-        .filter_map(|e| match &e.kind {
-            EntityKind::Hatch(h) if h.solid && h.loops.len() == 1 => h.loops.first().and_then(|l| box_of(&l.vertices)).map(|b| (b, *e)),
+        .enumerate()
+        .filter_map(|(at, e)| match &e.kind {
+            EntityKind::Hatch(h) if h.solid && h.loops.len() == 1 => h.loops.first().and_then(|l| box_of(&l.vertices)).map(|b| (b, *e, at)),
             _ => None,
         })
         .collect();
-    let mut used = vec![false; fills.len()];
-    let fill_handles: std::collections::HashSet<_> = fills.iter().map(|(_, f)| f.handle).collect();
+    let fill_handles: std::collections::HashSet<_> = fills.iter().map(|(_, f, _)| f.handle).collect();
+    // Each fill goes to the first free rectangle of its size drawn after it (import's order), else the last before it.
+    let mut fill_of: std::collections::HashMap<cadcraft_doc::Handle, &std::sync::Arc<cadcraft_doc::Entity>> = std::collections::HashMap::new();
+    for (fb, f, at) in &fills {
+        let fits = |e: &&&std::sync::Arc<cadcraft_doc::Entity>| {
+            !fill_of.contains_key(&e.handle)
+                && matches!(&e.kind, EntityKind::LwPolyline(p) if rect_of(p).is_some_and(|b| fb.0.near(b.0, EPS) && fb.1.near(b.1, EPS)))
+        };
+        let after = ents.iter().skip(at + 1).find(fits);
+        if let Some(r) = after.or_else(|| ents.iter().take(*at).rev().find(fits)) {
+            fill_of.insert(r.handle, f);
+        }
+    }
     for (n, e) in ents.iter().enumerate() {
         if fill_handles.contains(&e.handle) {
             continue;
@@ -206,9 +218,7 @@ pub(super) fn export(store: &EntityStore) -> (Vec<Value>, usize) {
             EntityKind::Line(l) => Some(("line", corners(l.a.xy(), l.b.xy()))),
             EntityKind::LwPolyline(p) => rect_of(p).map(|b| {
                 let mut r = boxed(b);
-                let hit = fills.iter().enumerate().find(|(i, (fb, _))| !used[*i] && fb.0.near(b.0, EPS) && fb.1.near(b.1, EPS));
-                if let Some((i, (_, f))) = hit {
-                    used[i] = true;
+                if let Some(f) = fill_of.get(&e.handle) {
                     put_color(&mut r, "fill", f.common.color);
                     if let Transparency::Percent(p) = f.common.transparency {
                         r["fillOpacity"] = json!(1.0 - f64::from(p) / 100.0);
@@ -251,7 +261,7 @@ pub(super) fn export(store: &EntityStore) -> (Vec<Value>, usize) {
         }
         out.push(v);
     }
-    skipped += used.iter().filter(|u| !**u).count();
+    skipped += fills.len().saturating_sub(fill_of.len());
     (out, skipped)
 }
 
