@@ -20,6 +20,7 @@ use super::curves::handle_param;
 
 mod arrange;
 mod connect;
+mod group;
 mod place;
 mod schedule;
 mod sheet;
@@ -48,6 +49,12 @@ fn own_specs() -> Vec<CommandSpec> {
             .enabled(always),
         CommandSpec::new("csd.device.set", "Set Device Properties", run_device_set)
             .params("{handle? (default the single selected device), label?: text (empty = the product code), notes?: text, mount?: handle of the device to mount in (\"\" = unmount; not itself or anything mounted in it), accessories?: [{product: id, qty}] (replaces the list; qty 0 drops a line), supplyByOthers?: bool (left off the bill of materials, accessories included)} → {handle}"),
+        CommandSpec::new("csd.devices.info", "Devices Info", group::run_info)
+            .params("{handles? (default the selection)} → {count, products: [{id, name, code, count}], size: {w, h}: card size in drawing units, null where the devices differ}")
+            .noundo()
+            .enabled(always),
+        CommandSpec::new("csd.devices.label", "Label Devices", group::run_label)
+            .params("{handles? (default the selection), base: text (blank = each product code), start?: integer, pad?: digits to zero-pad the number to (default 0)} → {labels: [{handle, label}]}; without `start` every device gets `base`; with it, `base` plus a running number from `start` in reading order (top to bottom, left to right)"),
         CommandSpec::new("csd.device.delete", "Delete Devices", run_device_delete)
             .params("{handles? (default the selection)} → {deleted, wires}; also removes every wire linked to them and the wires' decorations"),
         CommandSpec::new("csd.select.product", "Select All of This Product", arrange::run_select_product)
@@ -786,6 +793,25 @@ fn run_device_info(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
+/// Sets attribute `tag` on a device card, adding it (hidden) if the card lacks it.
+fn put_attr(i: &mut Insert, tag: &str, value: String) {
+    if let Some(a) = i.attribs.iter_mut().find(|a| a.tag == tag) {
+        a.text.value = value;
+    } else if let Some(mut a) = i.attribs.iter().find(|a| a.tag == "NAME" || a.tag == "PRODUCT").cloned() {
+        a.tag = tag.into();
+        a.invisible = true;
+        a.text.value = value;
+        i.attribs.push(a);
+    }
+}
+
+/// A device's label; blank falls back to the product `code`.
+fn apply_label(i: &mut Insert, label: String, code: String) {
+    let l = if label.trim().is_empty() { code } else { label };
+    put_attr(i, "LABEL", truncate_label(&l));
+    put_attr(i, "NAME", l);
+}
+
 fn run_device_set(s: &mut Session, p: &Value) -> Result<Value> {
     let h = one_device(s, "csd.device.set", p)?;
     let text = |key: &str| match p.get(key) {
@@ -820,32 +846,20 @@ fn run_device_set(s: &mut Session, p: &Value) -> Result<Value> {
     s.doc_mut()?.modify_entity(h, |e| {
         let EntityKind::Insert(i) = &mut e.kind else { return };
         let code = product_attr(i).map(|id| resolve(&products, id).code.clone()).unwrap_or_default();
-        let mut put = |tag: &str, value: String| {
-            if let Some(a) = i.attribs.iter_mut().find(|a| a.tag == tag) {
-                a.text.value = value;
-            } else if let Some(mut a) = i.attribs.iter().find(|a| a.tag == "NAME" || a.tag == "PRODUCT").cloned() {
-                a.tag = tag.into();
-                a.invisible = true;
-                a.text.value = value;
-                i.attribs.push(a);
-            }
-        };
         if let Some(l) = label {
-            let l = if l.trim().is_empty() { code } else { l };
-            put("LABEL", truncate_label(&l));
-            put("NAME", l);
+            apply_label(i, l, code);
         }
         if let Some(n) = notes {
-            put("NOTES", n);
+            put_attr(i, "NOTES", n);
         }
         if let Some(m) = mount {
-            put("MOUNT", m);
+            put_attr(i, "MOUNT", m);
         }
         if let Some(a) = accessories {
-            put("ACCS", if a.is_empty() { String::new() } else { serde_json::to_string(&a).unwrap_or_default() });
+            put_attr(i, "ACCS", if a.is_empty() { String::new() } else { serde_json::to_string(&a).unwrap_or_default() });
         }
         if let Some(b) = supply {
-            put("SUPPLY", if b { "1".into() } else { String::new() });
+            put_attr(i, "SUPPLY", if b { "1".into() } else { String::new() });
         }
     })?;
     Ok(json!({ "handle": h.hex() }))

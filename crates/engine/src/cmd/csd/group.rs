@@ -1,0 +1,113 @@
+//! Commands over several devices at once: summary and batch labels.
+
+use cadcraft_csd::{CARD_H, CARD_W};
+use cadcraft_doc::{EntityKind, Handle};
+use serde_json::{Value, json};
+
+use super::{apply_label, device_handles, product_attr, resolve, str_param, targets};
+use crate::cmd::bad;
+use crate::{Result, Session};
+
+/// `Some(v)` when every value is the same.
+fn common(mut vals: impl Iterator<Item = f64>) -> Option<f64> {
+    let first = vals.next()?;
+    vals.all(|v| (v - first).abs() < 1e-9).then_some(first)
+}
+
+pub(super) fn run_info(s: &mut Session, p: &Value) -> Result<Value> {
+    let hs = device_handles(s, &targets(s, p)?)?;
+    let library = s.csd_library.clone();
+    let d = s.doc()?;
+    let inserts: Vec<_> = hs
+        .iter()
+        .filter_map(|h| match &d.entity(*h)?.kind {
+            EntityKind::Insert(i) => Some(i),
+            _ => None,
+        })
+        .collect();
+    let mut products: Vec<(String, String, String, usize)> = Vec::new();
+    for i in &inserts {
+        let id = product_attr(i).unwrap_or_default();
+        match products.iter_mut().find(|x| x.0 == id) {
+            Some(x) => x.3 += 1,
+            None => {
+                let pr = resolve(&library, id);
+                products.push((id.to_string(), pr.name.clone(), pr.code.clone(), 1));
+            }
+        }
+    }
+    let products: Vec<Value> =
+        products.into_iter().map(|(id, name, code, count)| json!({ "id": id, "name": name, "code": code, "count": count })).collect();
+    Ok(json!({
+        "count": inserts.len(),
+        "products": products,
+        "size": {
+            "w": common(inserts.iter().map(|i| CARD_W * i.scale.x.abs())),
+            "h": common(inserts.iter().map(|i| CARD_H * i.scale.y.abs())),
+        },
+    }))
+}
+
+/// Top to bottom, left to right: cards whose centres are within half a card height share a row.
+fn reading_order(mut at: Vec<(Handle, f64, f64)>) -> Vec<Handle> {
+    at.sort_by(|a, b| b.2.total_cmp(&a.2));
+    let mut rows: Vec<Vec<(Handle, f64, f64)>> = Vec::new();
+    for c in at {
+        match rows.last_mut() {
+            Some(r) if r.first().is_some_and(|f| f.2 - c.2 <= CARD_H / 2.0) => r.push(c),
+            _ => rows.push(vec![c]),
+        }
+    }
+    rows.into_iter()
+        .flat_map(|mut r| {
+            r.sort_by(|a, b| a.1.total_cmp(&b.1));
+            r.into_iter().map(|c| c.0)
+        })
+        .collect()
+}
+
+pub(super) fn run_label(s: &mut Session, p: &Value) -> Result<Value> {
+    let base = str_param(p, "base").ok_or_else(|| bad("csd.devices.label", "`base` (text) is required"))?;
+    let start = match p.get("start") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_i64().ok_or_else(|| bad("csd.devices.label", "`start` must be an integer"))?),
+    };
+    let pad = match p.get("pad") {
+        None | Some(Value::Null) => 0,
+        Some(v) => v.as_u64().filter(|n| *n <= 12).ok_or_else(|| bad("csd.devices.label", "`pad` must be an integer from 0 to 12"))? as usize,
+    };
+    let hs = device_handles(s, &targets(s, p)?)?;
+    let at: Vec<_> = {
+        let d = s.doc()?;
+        hs.iter()
+            .filter_map(|h| match &d.entity(*h)?.kind {
+                EntityKind::Insert(i) => Some((*h, i.insert.x, i.insert.y)),
+                _ => None,
+            })
+            .collect()
+    };
+    let order = if start.is_some() { reading_order(at) } else { at.into_iter().map(|c| c.0).collect() };
+    // Work every label out first so a bad `start` changes nothing.
+    let mut named = Vec::new();
+    for (k, h) in order.into_iter().enumerate() {
+        let label = match start {
+            Some(n) => {
+                let num = n.checked_add(k as i64).ok_or_else(|| bad("csd.devices.label", "`start` is too large"))?;
+                format!("{base}{num:0pad$}")
+            }
+            None => base.to_string(),
+        };
+        named.push((h, label));
+    }
+    let library = s.csd_library.clone();
+    let d = s.doc_mut()?;
+    for (h, label) in &named {
+        d.modify_entity(*h, |e| {
+            let EntityKind::Insert(i) = &mut e.kind else { return };
+            let code = product_attr(i).map(|id| resolve(&library, id).code.clone()).unwrap_or_default();
+            apply_label(i, label.clone(), code);
+        })?;
+    }
+    let labels: Vec<Value> = named.iter().map(|(h, l)| json!({ "handle": h.hex(), "label": l })).collect();
+    Ok(json!({ "labels": labels }))
+}

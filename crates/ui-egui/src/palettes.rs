@@ -15,6 +15,7 @@ mod layer_menu_tests;
 pub mod patterns;
 
 mod device;
+mod group;
 mod lighting;
 /// The QuickCalc palette.
 pub mod quickcalc;
@@ -828,6 +829,7 @@ pub(crate) fn properties_section(app: &mut CadApp, ui: &mut egui::Ui) {
     properties_header(app, ui);
     let sel = app.session.selection();
     device::show(app, ui, &sel);
+    group::show(app, ui, &sel);
     let Ok(d) = app.session.doc() else { return };
     ui.add_space(4.0);
     let h = &d.header;

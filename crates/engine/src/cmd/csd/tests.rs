@@ -1104,3 +1104,42 @@ fn bom_footer_defaults_to_the_title_block_project_fields() {
     s.execute("csd.project.set", &json!({ "fields": { "project": "Demo", "rev": "B" } })).unwrap();
     assert_eq!(super::sheet::project_footer(&s), vec!["Project: Demo   Rev: B".to_string()]);
 }
+
+#[test]
+fn devices_label_numbers_in_reading_order_and_is_one_undo() {
+    let mut s = Session::new();
+    let mut at = |x: i32, y: i32| handle(&s.execute("csd.place", &json!({ "product": NODE, "at": [x, y] })).unwrap());
+    let (c, a, b) = (at(0, -200), at(300, 0), at(0, 10));
+    let hs = json!([c.hex(), a.hex(), b.hex()]);
+    let r = s.execute("csd.devices.label", &json!({ "handles": hs, "base": "N", "start": 8, "pad": 2 })).unwrap();
+    let got: Vec<_> = r["labels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| (l["handle"].as_str().unwrap().to_string(), l["label"].as_str().unwrap().to_string()))
+        .collect();
+    assert_eq!(got, vec![(b.hex(), "N08".into()), (a.hex(), "N09".into()), (c.hex(), "N10".into())]);
+    let name = |s: &Session, h| insert(s, h).attribs.iter().find(|x| x.tag == "NAME").unwrap().text.value.clone();
+    assert_eq!(name(&s, a), "N09");
+    // Without `start` every device gets the base.
+    s.execute("csd.devices.label", &json!({ "handles": hs, "base": "Rack" })).unwrap();
+    assert_eq!((name(&s, a), name(&s, c)), ("Rack".into(), "Rack".into()));
+    assert!(s.execute("csd.devices.label", &json!({ "handles": hs, "base": "x", "start": "1" })).is_err());
+    assert!(s.execute("csd.devices.label", &json!({ "handles": hs, "base": "x", "start": i64::MAX })).is_err());
+    assert_eq!(name(&s, a), "Rack");
+    s.undo().unwrap();
+    assert_eq!(name(&s, a), "N09");
+}
+
+#[test]
+fn devices_info_summarises_products_and_common_size() {
+    let (mut s, a, b, _) = setup();
+    let hs = json!([a.hex(), b.hex()]);
+    let r = s.execute("csd.devices.info", &json!({ "handles": hs })).unwrap();
+    assert_eq!(r["count"], 2);
+    assert_eq!(r["products"].as_array().unwrap().len(), 2);
+    assert_eq!(r["size"]["w"], cadcraft_csd::CARD_W);
+    s.execute("csd.size", &json!({ "handles": [a.hex()], "w": 140 })).unwrap();
+    let r = s.execute("csd.devices.info", &json!({ "handles": hs })).unwrap();
+    assert!(r["size"]["w"].is_null() && r["size"]["h"].is_number());
+}

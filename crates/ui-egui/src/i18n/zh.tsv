@@ -1606,3 +1606,12 @@ menu	View	视图
 	Remove accessory	移除配件
 	Supplied by others	由他人提供
 	Mounting is layout only: ports, cables and the bill of materials do not change.	安装仅影响布局：端口、线缆和物料清单不变。
+	Align right	右对齐
+	Align bottom	底部对齐
+	H	H
+	Devices	设备
+	Number from	编号起始
+	Replace all with	全部替换为
+	{n} devices: {summary}	{n} 台设备：{summary}
+	Label Devices	设备标签
+	Devices Info	设备信息
