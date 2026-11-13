@@ -200,11 +200,14 @@ pub(super) fn body(app: &mut CadApp, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.add_space(8.0);
-        let w = (ui.available_width() - 12.0) / 2.0;
-        if ui.add_sized(vec2(w, 20.0), egui::Button::new(crate::tl!("Import .cpsd…"))).clicked() {
+        let w = (ui.available_width() - 16.0) / 3.0;
+        if ui.add_sized(vec2(w, 20.0), egui::Button::new(crate::tl!("Import .cpsd…")).truncate()).clicked() {
             let _ = app.run("csd.import.cpsd", serde_json::Value::Null);
         }
-        if ui.add_sized(vec2(w, 20.0), egui::Button::new(crate::tl!("Export .cpsd…"))).clicked() {
+        if ui.add_sized(vec2(w, 20.0), egui::Button::new(crate::tl!("Print sheet…")).truncate()).clicked() {
+            let _ = app.run("csd.print", serde_json::Value::Null);
+        }
+        if ui.add_sized(vec2(w, 20.0), egui::Button::new(crate::tl!("Export .cpsd…")).truncate()).clicked() {
             let save = |app: &mut CadApp, path: String| app.run("csd.export.cpsd", json!({ "path": path }));
             if let Some(Err(e)) = app.pick_then(Pick::Save("drawing.cpsd".into()), save) {
                 app.session.echo(e);

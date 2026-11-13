@@ -27,6 +27,7 @@ mod group;
 mod library_csv;
 mod patch;
 mod place;
+mod print;
 mod schedule;
 mod sheet;
 mod wire;
@@ -125,6 +126,9 @@ fn own_specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("csd.titleblock", "Title Block", sheet::run_titleblock)
             .params("{at?: [x,y] the page's lower-left corner (default 0,0), paper?: tabloid|letter (default tabloid; an existing title block is resized when given)} → {handle, paper}; inserts the CSD_TITLEBLOCK sheet frame and title block if the drawing has none, else returns the existing one"),
+        CommandSpec::new("csd.print", "Print Sheet", print::run_print)
+            .params("{path, format?: pdf|svg|png (default the path's extension)} -> the plot result; plots the title block's page (else the drawing's extents) fit to 11x17in or 8.5x11in landscape on white; from the UI with no path opens a save dialog")
+            .noundo(),
         CommandSpec::new("csd.paper", "Paper Size", sheet::run_paper)
             .params("{paper: tabloid|letter} → {handle, paper}; redraws the title block and line key for 11x17 or 8.5x11 landscape, keeping the field values; needs a title block"),
         CommandSpec::new("csd.project", "Project Info", sheet::run_project)

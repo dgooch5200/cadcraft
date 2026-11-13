@@ -8,7 +8,7 @@ use cadcraft_csd::{LEGEND, MARGIN, Paper, TITLE_FIELDS, TITLE_H, TITLEBLOCK, leg
 
 use crate::cmd::point_param;
 
-fn find(s: &Session, name: &str) -> Option<(Handle, Insert)> {
+pub(super) fn find(s: &Session, name: &str) -> Option<(Handle, Insert)> {
     let store = s.doc().ok()?.space(&s.space())?;
     store.iter().find_map(|e| match &e.kind {
         EntityKind::Insert(i) if i.block == name => Some((e.handle, i.clone())),
@@ -24,7 +24,7 @@ fn paper_param(cmd: &str, p: &Value) -> Result<Option<Paper>> {
 }
 
 /// The paper the drawing's title block was drawn for; tabloid without one.
-fn paper_of(doc: &Drawing) -> Paper {
+pub(super) fn paper_of(doc: &Drawing) -> Paper {
     doc.block(TITLEBLOCK).map_or(Paper::Tabloid, |b| Paper::of_block(b))
 }
 
