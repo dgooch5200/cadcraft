@@ -109,8 +109,9 @@ fn import_one(s: &mut Session, v: &Value, dx: f64, mut skip: impl FnMut(&'static
     if hex(v, "fill").is_some() && kind == "ellipse" {
         skip("fill of an ellipse (only rectangles take a fill)");
     }
-    if let Some(c) = fill {
-        let opacity = number(v, "fillOpacity").filter(|o| o.is_finite()).map_or(1.0, |o| o.clamp(0.0, 1.0));
+    let opacity = number(v, "fillOpacity").filter(|o| o.is_finite()).map_or(1.0, |o| o.clamp(0.0, 1.0));
+    // Transparency stops at 90%, so an invisible fill is no hatch at all.
+    if let Some(c) = fill.filter(|_| opacity > 0.0) {
         let percent = ((1.0 - opacity) * 100.0).round().min(90.0) as u8;
         let corners = [lo, Vec2::new(hi.x, lo.y), hi, Vec2::new(lo.x, hi.y)];
         let hatch = EntityKind::Hatch(Hatch {
