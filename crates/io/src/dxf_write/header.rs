@@ -52,6 +52,9 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("VIEWSIZE", 40),
     // The lighting designer's list of products not yet drawn (JSON text).
     ("CSDUNPLACED", 1),
+    // The lighting designer's saved patch order, and 0 when its DMX addressing is switched off.
+    ("CSDPATCHORDER", 1),
+    ("CSDADDRESSING", 70),
     // 1 when the lighting designer's cards show only the product code.
     ("CSDCODESONLY", 70),
 ];

@@ -30,8 +30,6 @@ const ORDERS: [(&str, &str); 4] = [("drawing", "Drawing order"), ("name", "Name"
 pub struct State {
     pub open: bool,
     tab: Tab,
-    /// Index into [`ORDERS`].
-    order: usize,
     /// Placed devices: (column, ascending).
     sort: Option<(usize, bool)>,
     add_query: String,
@@ -103,7 +101,10 @@ struct Line {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct PatchRow {
-    handle: String,
+    /// Null for a product not yet drawn.
+    handle: Option<String>,
+    #[serde(rename = "carriedBy")]
+    carried_by: Option<String>,
     label: String,
     name: String,
     mode: Option<String>,
@@ -126,6 +127,9 @@ struct Budget {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct Patch {
+    /// The drawing's saved order (an id from [`ORDERS`]).
+    order: String,
+    addressing: bool,
     rows: Vec<PatchRow>,
     universes: Budget,
 }
@@ -140,7 +144,8 @@ struct Lists {
 
 enum Act {
     SetMode(String, String),
-    SetOrder(usize),
+    SetOrder(&'static str),
+    SetAddressing(bool),
     ExportPatch(&'static str),
     Locate(String),
     DeleteDevice(String),
@@ -179,8 +184,7 @@ fn lists(app: &mut CadApp) -> Arc<Lists> {
         items: load(app, "csd.unplaced.list", "items"),
         lines: load(app, "csd.bom", "rows"),
         patch: {
-            let order = ORDERS.get(app.ui.csd_sched.order).map_or("drawing", |o| o.0);
-            let v = app.session.execute("csd.patch", &json!({ "order": order })).unwrap_or(Value::Null);
+            let v = app.session.execute("csd.patch", &json!({})).unwrap_or(Value::Null);
             serde_json::from_value(v).unwrap_or_default()
         },
     });
@@ -432,7 +436,7 @@ fn bom_tab(ui: &mut egui::Ui, l: &Lists) {
         });
 }
 
-fn patch_tab(ui: &mut egui::Ui, st: &State, l: &Lists, act: &mut Option<Act>) {
+fn patch_tab(ui: &mut egui::Ui, l: &Lists, act: &mut Option<Act>) {
     let b = &l.patch.universes;
     ui.horizontal(|ui| {
         let line = if b.budget > 0 {
@@ -443,17 +447,25 @@ fn patch_tab(ui: &mut egui::Ui, st: &State, l: &Lists, act: &mut Option<Act>) {
         let c = if b.over { ui.visuals().error_fg_color } else { ui.visuals().text_color() };
         ui.label(RichText::new(line).color(c));
         craft_ui::ComboBox::from_id_salt("csd_patch_order")
-            .selected_text(ORDERS.get(st.order).map_or("", |o| crate::i18n::t(o.1)))
+            .selected_text(ORDERS.iter().find(|o| o.0 == l.patch.order).map_or("", |o| crate::i18n::t(o.1)))
             .show_ui(ui, |ui| {
-                for (i, (_, label)) in ORDERS.iter().enumerate() {
-                    if ui.selectable_label(st.order == i, crate::i18n::t(label)).clicked() {
-                        *act = Some(Act::SetOrder(i));
+                for (id, label) in ORDERS {
+                    if ui.selectable_label(l.patch.order == id, crate::i18n::t(label)).clicked() {
+                        *act = Some(Act::SetOrder(id));
                     }
                 }
             })
             .response
             .accessible_name(crate::tl!("Patch order"));
+        let mut on = l.patch.addressing;
+        if ui.checkbox(&mut on, crate::tl!("DMX addressing")).changed() {
+            *act = Some(Act::SetAddressing(on));
+        }
     });
+    if !l.patch.addressing {
+        ui.label(RichText::new(crate::tl!("DMX addressing is off for this drawing.")).weak());
+        return;
+    }
     if l.patch.rows.is_empty() {
         ui.label(RichText::new(crate::tl!("Nothing to patch.")).weak());
         return;
@@ -465,22 +477,30 @@ fn patch_tab(ui: &mut egui::Ui, st: &State, l: &Lists, act: &mut Option<Act>) {
             body.rows(row_h, l.patch.rows.len(), |mut r| {
                 let Some(p) = l.patch.rows.get(r.index()) else { return };
                 let n = r.index() + 1;
-                for t in [&n.to_string(), &p.universe.to_string(), &p.address.to_string(), &p.label, &p.name] {
+                let label = match &p.carried_by {
+                    Some(d) => crate::tf!("{label} (on {device})", label = p.label, device = d),
+                    None => p.label.clone(),
+                };
+                for t in [&n.to_string(), &p.universe.to_string(), &p.address.to_string(), &label, &p.name] {
                     cell(&mut r, t);
                 }
                 r.col(|ui| {
+                    let Some(handle) = p.handle.as_ref().filter(|_| p.carried_by.is_none()) else {
+                        ui.label(RichText::new(&p.assumed).weak());
+                        return;
+                    };
                     if p.modes.is_empty() {
                         ui.label(RichText::new(&p.assumed).weak());
                         return;
                     }
                     let shown = p.mode.clone().unwrap_or_else(|| crate::tf!("{mode} (assumed)", mode = p.assumed));
-                    craft_ui::ComboBox::from_id_salt(("csd_mode", &p.handle)).selected_text(shown).width(160.0).show_ui(ui, |ui| {
+                    craft_ui::ComboBox::from_id_salt(("csd_mode", handle)).selected_text(shown).width(160.0).show_ui(ui, |ui| {
                         if ui.selectable_label(p.mode.is_none(), crate::tl!("Largest mode")).clicked() {
-                            *act = Some(Act::SetMode(p.handle.clone(), String::new()));
+                            *act = Some(Act::SetMode(handle.clone(), String::new()));
                         }
                         for m in &p.modes {
                             if ui.selectable_label(p.mode.as_ref() == Some(m), m).clicked() {
-                                *act = Some(Act::SetMode(p.handle.clone(), m.clone()));
+                                *act = Some(Act::SetMode(handle.clone(), m.clone()));
                             }
                         }
                     });
@@ -542,7 +562,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
             Tab::Placed => placed_tab(ui, st, &l, &mut act),
             Tab::Unplaced => unplaced_tab(ui, st, &l, &library, &mut act),
             Tab::Bom => bom_tab(ui, &l),
-            Tab::Patch => patch_tab(ui, st, &l, &mut act),
+            Tab::Patch => patch_tab(ui, &l, &mut act),
         }
     });
     if let Some(a) = act {
@@ -561,14 +581,17 @@ fn apply(app: &mut CadApp, act: Act) {
             let r = app.run("csd.device.mode", json!({ "handles": [h], "mode": mode }));
             say(app, r);
         }
-        Act::SetOrder(i) => {
-            app.ui.csd_sched.order = i;
-            app.ui.csd_sched.cache = None;
+        Act::SetOrder(order) => {
+            let r = app.run("csd.patch.setup", json!({ "order": order }));
+            say(app, r);
+        }
+        Act::SetAddressing(on) => {
+            let r = app.run("csd.patch.setup", json!({ "addressing": on }));
+            say(app, r);
         }
         Act::ExportPatch(format) => {
             let then = move |app: &mut CadApp, path: String| {
-                let order = ORDERS.get(app.ui.csd_sched.order).map_or("drawing", |o| o.0);
-                app.ui.csd_sched.msg = Some(match app.run("csd.patch.export", json!({ "path": path, "format": format, "order": order })) {
+                app.ui.csd_sched.msg = Some(match app.run("csd.patch.export", json!({ "path": path, "format": format })) {
                     Ok(v) => (true, crate::tf!("Exported {rows} rows: {path}", rows = v["rows"], path = path)),
                     Err(e) => (false, e),
                 });
@@ -677,11 +700,14 @@ mod tests {
         }
         let l = lists(&mut app);
         assert_eq!(l.patch.rows.iter().map(|r| (r.universe, r.address)).collect::<Vec<_>>(), [(1, 1), (2, 1)]);
-        let h = l.patch.rows[0].handle.clone();
+        let h = l.patch.rows[0].handle.clone().unwrap();
         apply(&mut app, Act::SetMode(h, "Ext".into()));
         let l = lists(&mut app);
         assert_eq!(l.patch.rows.iter().map(|r| (r.universe, r.address, r.channels)).collect::<Vec<_>>(), [(1, 1, 200), (1, 201, 300)]);
-        apply(&mut app, Act::SetOrder(1));
-        assert!(app.ui.csd_sched.cache.is_none());
+        apply(&mut app, Act::SetOrder("name"));
+        assert_eq!(lists(&mut app).patch.order, "name");
+        apply(&mut app, Act::SetAddressing(false));
+        let l = lists(&mut app);
+        assert!(!l.patch.addressing && l.patch.rows.is_empty());
     }
 }

@@ -158,3 +158,50 @@ fn the_chosen_mode_survives_a_dxf_save_and_reopen() {
     let r = rows(&mut t);
     assert_eq!((r[0]["mode"].clone(), r[0]["channels"].clone()), (json!("Ext"), json!(200)));
 }
+
+#[test]
+fn accessories_and_unplaced_products_take_addresses() {
+    let mut s = session();
+    let a = place(&mut s, "FIX", [0.0, 0.0], "A");
+    place(&mut s, "PLAIN", [300.0, 0.0], "B");
+    s.execute("csd.device.set", &json!({ "handles": [a.hex()], "accessories": [{ "product": "PLAIN", "qty": 2 }] })).unwrap();
+    s.execute("csd.unplaced.add", &json!({ "product": "PLAIN", "qty": 2 })).unwrap();
+    let r = rows(&mut s);
+    let labels: Vec<_> =
+        r.iter().map(|x| (x["label"].as_str().unwrap().to_string(), x["carriedBy"].as_str().map(String::from), x["handle"].is_null())).collect();
+    let (a, plain) = ("A".to_string(), "PLAIN".to_string());
+    assert_eq!(
+        labels,
+        [
+            (a.clone(), None, false),
+            (plain.clone(), Some(a.clone()), true),
+            (plain.clone(), Some(a), true),
+            ("B".into(), None, false),
+            (plain.clone(), None, true),
+            (plain, None, true),
+        ]
+    );
+    assert_eq!(addr(&r[1]), (1, 301));
+}
+
+#[test]
+fn the_patch_order_and_addressing_switch_are_saved_with_the_drawing() {
+    let mut s = session();
+    place(&mut s, "FIX", [300.0, 0.0], "B");
+    place(&mut s, "FIX", [0.0, 0.0], "A");
+    assert_eq!(rows(&mut s)[0]["label"], "B");
+    s.execute("csd.patch.setup", &json!({ "order": "name" })).unwrap();
+    assert_eq!(rows(&mut s)[0]["label"], "A", "the saved order is the default");
+    assert!(s.execute("csd.patch.setup", &json!({ "order": "sideways" })).is_err());
+    s.execute("csd.patch.setup", &json!({ "addressing": false })).unwrap();
+    let off = s.execute("csd.patch", &json!({})).unwrap();
+    assert!(off["rows"].as_array().unwrap().is_empty() && off["addressing"] == false);
+    let text = cadcraft_io::write_dxf(s.doc().unwrap());
+    let mut t = Session::empty();
+    t.csd_library = s.csd_library.clone();
+    t.open_drawing(cadcraft_io::read_dxf(text.as_bytes()).unwrap(), "Imported", None);
+    let r = t.execute("csd.patch", &json!({})).unwrap();
+    assert_eq!((r["order"].clone(), r["addressing"].clone()), (json!("name"), json!(false)));
+    s.execute("csd.patch.setup", &json!({ "order": "drawing", "addressing": true })).unwrap();
+    assert_eq!(s.doc().unwrap().header.get("CSDPATCHORDER"), None);
+}

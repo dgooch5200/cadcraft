@@ -1662,3 +1662,7 @@ menu	View	视图
 	Continues on	延续至
 	Print Sheet	打印图纸
 	Print sheet…	打印图纸…
+	DMX addressing	DMX 寻址
+	DMX addressing is off for this drawing.	此图纸已关闭 DMX 寻址。
+	{label} (on {device})	{label}（位于 {device}）
+	DMX Patch Setup	DMX 补丁设置
