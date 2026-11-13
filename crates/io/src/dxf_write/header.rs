@@ -57,6 +57,8 @@ const HEADER_VARS: &[(&str, i32)] = &[
     ("CSDADDRESSING", 70),
     // 1 when the lighting designer's cards show only the product code.
     ("CSDCODESONLY", 70),
+    // Drawing units per lighting-designer pixel, fixed once lighting content is drawn.
+    ("CSDPX", 40),
 ];
 
 /// The current dimension style's variables as header variables (`$DIMTXT`, `$DIMDEC`…), after
